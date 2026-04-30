@@ -1,11 +1,11 @@
 ---
 name: music-generation
-description: AI 音乐生成方法论。使用 Google Lyria 3 Pro 生成 BGM 和配乐，支持文生音乐和图生音乐。
+description: AI 音乐生成方法论。使用 MiniMax 海螺音乐生成 BGM 和配乐，支持文生音乐。
 ---
 
 # AI 音乐生成指南
 
-本模块说明如何在 assets 阶段使用 Google Lyria 3 Pro 生成 BGM 和配乐。生成的音乐在 assembly 阶段由 ffmpeg 混入最终视频。
+本模块说明如何在 assets 阶段使用 MiniMax 海螺音乐生成 BGM 和配乐。生成的音乐在 assembly 阶段由 ffmpeg 混入最终视频。
 
 ---
 
@@ -23,7 +23,7 @@ description: AI 音乐生成方法论。使用 Google Lyria 3 Pro 生成 BGM 和
 
 脚本路径：`~/.claude/skills/asset-generation/scripts/music_generate.py`
 
-需要环境变量 `OPENROUTER_API_KEY`。模型固定为 `google/lyria-3-pro-preview`（$0.08/首，生成约 2 分钟完整曲目）。
+需要环境变量 `MINIMAX_API_KEY`。模型固定为 `music-01`（MiniMax 海螺音乐）。
 
 ### 参数说明
 
@@ -31,44 +31,33 @@ description: AI 音乐生成方法论。使用 Google Lyria 3 Pro 生成 BGM 和
 |------|------|------|--------|
 | `--prompt` | str（必填） | 音乐描述 | — |
 | `--output` | str（必填） | 输出文件路径（`.mp3`） | — |
-| `--ref-image` | str（可多次） | 参考图路径或 URL（图生音乐） | 无 |
 | `--vocal` | flag | 启用人声（默认纯器乐） | False |
-| `--seed` | int | 随机种子，用于复现相同音乐 | 无 |
-| `--temperature` | float | 创意度，范围 0.0–2.0 | 无 |
+| `--duration` | int | 音频时长（秒），默认 30 | 30 |
 
 ### 示例一：纯器乐 BGM（默认）
 
 ```bash
 python3 ~/.claude/skills/asset-generation/scripts/music_generate.py \
-  --prompt "soft acoustic guitar, warm and cozy, lo-fi vibes, 85 BPM" \
+  --prompt "轻快的电子风格背景音乐，适合科技产品展示" \
   --output {workDir}/assets/music/bgm.mp3
 ```
 
-### 示例二：图生音乐（用封面图引导风格）
+### 示例二：带人声
 
 ```bash
 python3 ~/.claude/skills/asset-generation/scripts/music_generate.py \
-  --prompt "background music matching this image mood" \
-  --ref-image {workDir}/assets/images/cover.png \
-  --output {workDir}/assets/music/bgm.mp3
-```
-
-### 示例三：带人声
-
-```bash
-python3 ~/.claude/skills/asset-generation/scripts/music_generate.py \
-  --prompt "catchy pop song about spring fashion, female vocal, 110 BPM" \
+  --prompt "一首温柔的中文民谣，关于旅行" \
   --vocal \
   --output {workDir}/assets/music/bgm-vocal.mp3
 ```
 
-### 示例四：固定种子（保持一致性）
+### 示例三：生成 60 秒长 BGM
 
 ```bash
 python3 ~/.claude/skills/asset-generation/scripts/music_generate.py \
-  --prompt "upbeat energetic pop, claps and synth, motivational, 120 BPM" \
-  --seed 42 \
-  --output {workDir}/assets/music/bgm.mp3
+  --prompt "舒缓的钢琴曲，适合睡前阅读场景" \
+  --duration 60 \
+  --output {workDir}/assets/music/bgm-long.mp3
 ```
 
 ### 输出格式（stdout JSON）
@@ -77,11 +66,10 @@ python3 ~/.claude/skills/asset-generation/scripts/music_generate.py \
 {
   "success": true,
   "output": "/absolute/path/to/bgm.mp3",
-  "duration_sec": 120,
-  "model": "google/lyria-3-pro-preview",
-  "has_vocals": false,
   "size_kb": 2400.5,
-  "lyrics": null
+  "model": "music-01",
+  "has_vocals": false,
+  "task_id": "xxx"
 }
 ```
 
@@ -122,52 +110,16 @@ python3 ~/.claude/skills/asset-generation/scripts/music_generate.py \
 - 史诗大气：`full orchestra, soaring strings, powerful brass, cinematic`
 - 流行节奏：`pop production, electronic drums, synth bass, bright lead`
 
-**段落结构标签**（引导动态变化）
-
-```
-[Intro] soft piano, sparse, quiet →
-[Verse] add acoustic guitar, gentle rhythm →
-[Chorus] full band, energetic, uplifting →
-[Bridge] stripped back, emotional →
-[Outro] fade out, return to piano only
-```
-
 ### Prompt 构建模板
 
 ```
-{风格形容词}, {主乐器}, {情绪关键词}, {BPM}, {调性}, {结构标签（可选）}
+{风格形容词}, {主乐器}, {情绪关键词}, {BPM}, {调性}
 ```
 
 示例：
 ```
 Warm and nostalgic, acoustic guitar and soft piano, gentle and cozy,
-tempo 85 BPM, in G major.
-[Intro] solo guitar → [Main] add piano and light drums → [Outro] fade to silence
-```
-
----
-
-## 图生音乐
-
-`--ref-image` 参数允许传入图片，让 Lyria 分析视觉氛围并生成匹配的音乐。
-
-**适用场景：**
-- 不确定该用什么音乐风格时，让封面图或关键帧来决定
-- 视觉色调和音乐情绪需要高度匹配时
-- 快速生成与内容视觉自然融合的 BGM
-
-**用法说明：**
-- 传入封面图（`cover.png`）：Lyria 读取整体色调和氛围
-- 传入关键帧（高潮画面）：更精准地匹配内容情绪
-- 可同时添加文字 prompt 作为补充约束，图片优先
-
-**示例：**
-```bash
-# 只用图片决定风格
---ref-image cover.png --prompt "background music for this scene"
-
-# 图片 + 文字约束（限定 BPM 和乐器）
---ref-image keyframe.jpg --prompt "acoustic guitar style, tempo 90 BPM"
+tempo 85 BPM, in G major
 ```
 
 ---
@@ -190,12 +142,6 @@ upbeat 120 BPM, bright and punchy, in C major
 Soft lo-fi acoustic guitar, cozy and relaxed, gentle percussion,
 slow tempo 80 BPM, warm pads, in G major, unobtrusive background feel
 ```
-
----
-
-## 图生音乐
-
-（已在上方"图生音乐"章节详细说明）
 
 ---
 
@@ -231,5 +177,4 @@ ffmpeg -i {workDir}/output/video-no-bgm.mp4 \
 
 - 不要在 prompt 中要求模仿特定歌手或艺人的声音风格
 - 不要包含受版权保护的歌词原文
-- 所有 Lyria 生成的音乐自动嵌入 **SynthID** 水印（不可见，不影响音质）
 - 生成内容版权归生成方所有，可用于商业发布
