@@ -387,7 +387,7 @@ const translations: Record<Language, Record<string, string>> = {
   },
 };
 
-let currentLanguage: Language = "en";
+let currentLanguage: Language = "zh";
 let listeners: Set<() => void> = new Set();
 
 export function getLanguage(): Language {
