@@ -875,7 +875,17 @@ ${memoryContext}
       if (code === 1 && turnText.length === 0 && session.cliSessionId) {
         logBridge("cli_stale_session_cleared", session.workId, { cliSessionId: session.cliSessionId });
         session.cliSessionId = undefined;
-        updateWork(session.workId, { cliSessionId: undefined }).catch(() => {});
+        // yaml.dump ignores undefined values, so we must delete the field directly from work.yaml
+        const workPath = join(dataDir, "works", session.workId, "work.yaml");
+        readFile(workPath, "utf-8")
+          .then((raw) => {
+            const workData = yaml.load(raw) as Record<string, unknown> | null;
+            if (workData && "cliSessionId" in workData) {
+              delete workData.cliSessionId;
+              return writeFile(workPath, yaml.dump(workData, { lineWidth: -1, sortKeys: false }), "utf-8");
+            }
+          })
+          .catch(() => {});
       }
 
       session.cliProcess = undefined;
