@@ -48,7 +48,7 @@ AutoViral 是一个本地运行的 AI 内容工作台，你描述一个选题，
 │          │    │          │    │          │    │          │
 │ AI 搜索   │    │ 分镜脚本  │    │ AI 生图   │    │ 视频拼接  │
 │ 趋势分析  │    │ 文案策划  │    │ AI 生视频  │    │ 字幕配乐  │
-│ 竞品参考  │    │ 配乐规划  │    │ AI 配乐   │    │ 转场特效  │
+│ 竞品参考  │    │ 配乐规划  │    │ AI 配音   │    │ 转场特效  │
 └─────────┘    └─────────┘    └─────────┘    └─────────┘
 ```
 
@@ -58,7 +58,7 @@ AutoViral 是一个本地运行的 AI 内容工作台，你描述一个选题，
 
 | 类型 | 目标平台 | 产出 |
 |------|---------|------|
-| **短视频** | 抖音 | 带字幕、配乐的完整视频 |
+| **短视频** | 抖音 | 带字幕、配乐、配音的完整视频 |
 | **图文** | 小红书 | 专业排版的多图 + 发布文案 |
 
 ### 核心能力
@@ -67,9 +67,10 @@ AutoViral 是一个本地运行的 AI 内容工作台，你描述一个选题，
 |------|---------|------|
 | AI 图片生成 | Gemini 3.1 Flash (OpenRouter) | 支持 4K、自定义宽高比、图生图 |
 | AI 视频生成 | Dreamina CLI (Seedance 2.0) | 文生视频、图生视频、首尾帧、多帧 |
-| AI 音乐生成 | Google Lyria 3 Pro | 文生音乐、图生音乐 |
+| AI 音乐生成 | MiniMax 海螺音乐 music-2.6 | 文生 BGM，纯器乐/带人声 |
+| AI 语音合成 | MiniMax TTS | 多音色语音配音 |
 | 图文排版 | HTML/CSS + Playwright | 5 套小红书模板、专业字体 |
-| 视频合成 | FFmpeg | 拼接、字幕、配乐、转场 |
+| 视频合成 | FFmpeg | 拼接、字幕、配乐、配音、转场 |
 | 趋势调研 | AI Web Search | 抖音/小红书实时热点 |
 | 数据分析 | 定时采集 | 粉丝/播放/互动数据追踪 |
 | 质量评审 | LLM-as-Judge | 每步可选质量门控 |
@@ -110,13 +111,22 @@ AutoViral 不只是一个工具——它会**记住你**，并**用数据优化*
 
 - **Node.js** >= 18
 - **[Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)** — 已安装并登录
-- **FFmpeg** — `brew install ffmpeg`
+- **FFmpeg** — [下载安装](https://ffmpeg.org/download.html) 并加入 PATH
+- **Python 3** — 用于音乐生成脚本（`requests` 库：`pip install requests`）
+
+### 平台支持
+
+| 平台 | 状态 | 说明 |
+|------|------|------|
+| **macOS** | ✅ 完全支持 | 原生体验 |
+| **Windows** | ✅ 完全支持 | 已修复 Node.js spawn 兼容性问题 |
+| **Linux** | ✅ 理论支持 | 未充分测试 |
 
 ### 安装
 
 ```bash
-git clone https://github.com/nanxingw/AutoViral.git
-cd AutoViral
+git clone https://github.com/guqingchong/-AutoViral.git
+cd -AutoViral
 npm install && npm run build
 ```
 
@@ -129,26 +139,40 @@ cp .env.example .env
 编辑 `.env`：
 
 ```env
-# 图片生成（Gemini，推荐）
-OPENROUTER_API_KEY=sk-or-v1-xxxxxxxx
-
-# 视频生成备用（即梦 API，可选）
+# ── 即梦 AI（必填，用于生成图片和视频）──────────────────────
+# 申请地址：https://console.volcengine.com/iam/keymanage/
 JIMENG_ACCESS_KEY=AKLTxxxxxxxx
 JIMENG_SECRET_KEY=xxxxxxxx
+
+# ── MiniMax（必填，用于 BGM 生成和语音合成）─────────────────
+# 申请地址：https://platform.minimaxi.com/
+MINIMAX_API_KEY=sk-api-xxxxxxxx
+
+# ── OpenRouter（可选，备用 LLM 提供商）─────────────────────
+# 注意：中国大陆地区可能无法直接访问
+# 申请地址：https://openrouter.ai/keys
+OPENROUTER_API_KEY=
+
+# ── EverMemOS（可选，长期记忆系统）─────────────────────────
+EVERMEMOS_API_KEY=
 ```
 
 **视频生成首选方案**：安装 [Dreamina CLI](https://jimeng.jianying.com/cli)（免费，浏览器登录即可）：
 
 ```bash
+# macOS / Linux
 curl -fsSL https://jimeng.jianying.com/cli | bash
 dreamina login    # 浏览器弹窗登录
+
+# Windows
+# 访问 https://jimeng.jianying.com/cli 下载安装包
 ```
 
 ### 启动
 
 ```bash
-autoviral start                # 后台启动
-autoviral start --foreground   # 前台启动（看日志）
+npx autoviral start                # 后台启动
+npx autoviral start --foreground   # 前台启动（看日志）
 ```
 
 打开 **http://localhost:3271** 开始创作。
@@ -168,9 +192,9 @@ autoviral start --foreground   # 前台启动（看日志）
 | 步骤 | 短视频 | 图文 |
 |------|--------|------|
 | **调研** | 搜索热点趋势、分析竞品 | 搜索话题热度、参考爆款 |
-| **规划** | 分镜脚本、画面描述、台词 | 每张图的内容规划、文案 |
-| **素材** | 生首帧 → 生视频片段 → 生配乐 | 生配图 → HTML 排版渲染 |
-| **合成** | FFmpeg 拼接 + 字幕 + 配乐 | 图片排序 + 发布文案 |
+| **规划** | 分镜脚本、画面描述、台词、配音稿 | 每张图的内容规划、文案 |
+| **素材** | 生首帧 → 生视频片段 → 生配乐 → 生配音 | 生配图 → HTML 排版渲染 |
+| **合成** | FFmpeg 拼接 + 字幕 + 配乐 + 配音 | 图片排序 + 发布文案 |
 
 ### 3. 预览与导出
 
@@ -190,8 +214,8 @@ AutoViral 支持多个 AI 生成服务，按优先级自动选择：
 
 | 优先级 | 服务 | 密钥 | 说明 |
 |--------|------|------|------|
-| 1 | **OpenRouter (Gemini 3.1 Flash)** | `OPENROUTER_API_KEY` | 推荐，画质最好，支持 4K |
-| 2 | 即梦 API | `JIMENG_ACCESS_KEY` + `SECRET_KEY` | 备用 |
+| 1 | **OpenRouter (Gemini 3.1 Flash)** | `OPENROUTER_API_KEY` | 画质最好，支持 4K（中国大陆需代理） |
+| 2 | 即梦 API | `JIMENG_ACCESS_KEY` + `SECRET_KEY` | 国内稳定 |
 
 ### 视频生成
 
@@ -200,11 +224,17 @@ AutoViral 支持多个 AI 生成服务，按优先级自动选择：
 | 1 | **Dreamina CLI (Seedance 2.0)** | `dreamina login` | 推荐，支持图生视频、多帧 |
 | 2 | 即梦 API | `JIMENG_ACCESS_KEY` + `SECRET_KEY` | 备用 |
 
-### 音乐生成
+### 音乐生成（BGM）
 
 | 服务 | 密钥 | 说明 |
 |------|------|------|
-| **Google Lyria 3 Pro** | `OPENROUTER_API_KEY`（复用） | 文生音乐、图生音乐 |
+| **MiniMax 海螺音乐 music-2.6** | `MINIMAX_API_KEY` | 文生音乐，默认纯器乐，适合短视频 BGM |
+
+### 语音合成（配音）
+
+| 服务 | 密钥 | 说明 |
+|------|------|------|
+| **MiniMax TTS** | `MINIMAX_API_KEY` | 多音色中文语音合成 |
 
 检查当前环境可用服务：
 
@@ -219,10 +249,10 @@ python3 skills/asset-generation/scripts/check_providers.py --format table
 ```
 浏览器 (Svelte 5)  ──WebSocket──  Node.js (Hono)  ──stdin/stdout──  Claude Code CLI
                                        │
-                              ┌────────┼────────┐
-                              ▼        ▼        ▼
-                          Dreamina   Gemini   Lyria
-                          (视频)    (图片)   (音乐)
+                              ┌────────┼────────┬────────┐
+                              ▼        ▼        ▼        ▼
+                          Dreamina   Gemini   MiniMax  MiniMax
+                          (视频)    (图片)   (BGM)    (TTS)
 ```
 
 ### 目录结构
@@ -235,6 +265,10 @@ src/                          # 后端 TypeScript
   ws-bridge.ts                #   WebSocket 桥接（浏览器 ↔ Claude CLI）
   research-scheduler.ts       #   定时调研
   analytics-collector.ts      #   数据采集
+  providers/                  #   AI 服务提供商
+    minimax-tts.ts            #     MiniMax TTS 语音合成
+    registry.ts               #     提供商注册与路由
+    base.ts                   #     提供商抽象接口
   server/
     api.ts                    #   REST + WebSocket API
     index.ts                  #   Hono 服务启动
@@ -249,8 +283,8 @@ web/src/                      # 前端 Svelte 5
 skills/                       # AI Agent 技能定义
   trend-research/             #   话题调研（热搜脚本 + 方法论）
   content-planning/           #   内容规划（分镜/图文策划）
-  asset-generation/           #   素材生成（Dreamina/Gemini/Lyria）
-  content-assembly/           #   合成输出（FFmpeg/字幕/配乐）
+  asset-generation/           #   素材生成（Dreamina/Gemini/MiniMax）
+  content-assembly/           #   合成输出（FFmpeg/字幕/配乐/配音）
   content-evaluator/          #   质量评审（LLM-as-Judge 评分）
 
 ~/.autoviral/                 # 运行时数据
@@ -266,10 +300,11 @@ skills/                       # AI Agent 技能定义
 |----|------|
 | 前端 | Svelte 5 (runes), Vite, Glass Noir 深色主题 |
 | 后端 | Node.js, Hono, TypeScript, WebSocket |
-| AI Agent | Claude Code CLI (stream-json 子进程) |
-| 图片生成 | OpenRouter → Gemini 3.1 Flash |
+| AI Agent | Claude Code CLI (NDJSON stream 子进程通信) |
+| 图片生成 | OpenRouter → Gemini 3.1 Flash / 即梦 API |
 | 视频生成 | Dreamina CLI (Seedance 2.0) / 即梦 API |
-| 音乐生成 | Google Lyria 3 Pro |
+| 音乐生成 | MiniMax 海螺音乐 music-2.6 |
+| 语音合成 | MiniMax TTS |
 | 图文排版 | HTML/CSS + Playwright + Jinja2 模板 |
 | 视频编辑 | FFmpeg |
 
@@ -290,12 +325,32 @@ skills/                       # AI Agent 技能定义
 ### CLI 命令
 
 ```bash
-autoviral start [--foreground]     # 启动服务
-autoviral stop                     # 停止服务
-autoviral dashboard                # 打开浏览器
-autoviral config get [key]         # 查看配置
-autoviral config set <key> <value> # 修改配置
+npx autoviral start [--foreground]     # 启动服务
+npx autoviral stop                     # 停止服务
+npx autoviral dashboard                # 打开浏览器
+npx autoviral config get [key]         # 查看配置
+npx autoviral config set <key> <value> # 修改配置
 ```
+
+---
+
+## 常见问题
+
+### Windows 上启动后卡在"思考中..."
+
+此问题已在最新版本中修复。如果仍遇到，请确保：
+
+1. 使用 **Node.js >= 20**（Windows spawn API 有变动）
+2. Claude Code CLI 是通过 `npm install -g @anthropic-ai/claude-code` 全局安装的
+3. 重启 AutoViral 服务：`npx autoviral stop && npx autoviral start`
+
+### MiniMax API 返回"insufficient balance"
+
+你的 MiniMax 账户余额不足。前往 [MiniMax 平台](https://platform.minimaxi.com/) 充值即可。
+
+### OpenRouter 无法连接
+
+OpenRouter 及其下游服务（Google Gemini、Google Lyria）在中国大陆地区可能无法直接访问。本项目已将 BGM 生成和语音合成迁移至 **MiniMax**，无需 OpenRouter 即可正常使用音乐和合成功能。
 
 ---
 
