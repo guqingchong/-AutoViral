@@ -13,7 +13,7 @@ const API_VERSION = '2022-08-31'
 const SUBMIT_ACTION = 'CVSync2AsyncSubmitTask'
 const QUERY_ACTION = 'CVSync2AsyncGetResult'
 
-const IMAGE_REQ_KEY = 'jimeng_t2i_v40'
+const IMAGE_REQ_KEY = 'jimeng_t2i_v30'
 // Video 3.0 Pro uses a unified req_key for both T2V and I2V
 const VIDEO_T2V_REQ_KEY = 'jimeng_ti2v_v30_pro'
 const VIDEO_I2V_REQ_KEY = 'jimeng_ti2v_v30_pro'
@@ -319,6 +319,13 @@ export class JimengProvider implements GenerateProvider {
       }
       if (err.message?.includes('Download failed')) {
         return { success: false, error: err.message, code: 'DOWNLOAD_FAILED' }
+      }
+      if (err.message?.includes('Access Denied')) {
+        return {
+          success: false,
+          error: '即梦视频生成权限未开通。请前往火山引擎控制台 (console.volcengine.com) 开通「CV/即梦视频生成」权限后重试。',
+          code: 'ACCESS_DENIED',
+        }
       }
       return { success: false, error: err.message, code: 'API_ERROR' }
     }
