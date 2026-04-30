@@ -615,6 +615,7 @@ ${memoryContext}
       cwd: process.cwd(),
       stdio: ["ignore", "pipe", "pipe"],
       shell: false,
+      windowsHide: true,
       env: {
         ...process.env,
         CLAUDE_CODE_ENTRYPOINT: "cli",
@@ -867,6 +868,16 @@ ${memoryContext}
 
     proc.on("exit", (code, signal) => {
       logBridge("cli_exit", session.workId, { code, signal, turnTextLen: turnText.length });
+
+      // If CLI exits with code 1 and produced no output, the resume session is likely stale
+      // (e.g. computer restarted while session file still marks it as "busy"). Clear it so
+      // next spawn creates a fresh session.
+      if (code === 1 && turnText.length === 0 && session.cliSessionId) {
+        logBridge("cli_stale_session_cleared", session.workId, { cliSessionId: session.cliSessionId });
+        session.cliSessionId = undefined;
+        updateWork(session.workId, { cliSessionId: undefined }).catch(() => {});
+      }
+
       session.cliProcess = undefined;
       session.idle = true;
       if (session.workId.startsWith("trends_")) {
@@ -935,6 +946,7 @@ ${memoryContext}
         cwd: homedir(),
         stdio: ["ignore", "pipe", "pipe"],
         shell: false,
+        windowsHide: true,
         env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: "cli", AUTOVIRAL_PROJECT_DIR: process.cwd() },
       });
 
