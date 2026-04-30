@@ -93,6 +93,7 @@ apiRoutes.get("/api/config", async (c) => {
     jimengAccessKey: config.jimeng?.accessKey ?? "",
     jimengSecretKey: config.jimeng?.secretKey ?? "",
     openrouterKey: config.openrouter?.apiKey ?? "",
+    minimaxKey: config.minimax?.apiKey ?? "",
     researchEnabled: config.research?.enabled ?? false,
     researchCron: config.research?.schedule ?? "0 9 * * *",
     douyinUrl: config.analytics?.douyinUrl ?? "",
@@ -116,6 +117,9 @@ apiRoutes.put("/api/config", async (c) => {
   }
   if (body.openrouterKey !== undefined) {
     config.openrouter = { apiKey: body.openrouterKey as string };
+  }
+  if (body.minimaxKey !== undefined) {
+    config.minimax = { apiKey: body.minimaxKey as string };
   }
   if (body.researchEnabled !== undefined) {
     if (!config.research) config.research = { enabled: false, schedule: "0 9 * * *", platforms: ["douyin", "xiaohongshu"] };
@@ -414,6 +418,25 @@ apiRoutes.post("/api/generate/video", async (c) => {
   }
   try {
     const result = await provider.generateVideo({ prompt, firstFrame, lastFrame, resolution, workId, filename });
+    return c.json(result);
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message, code: "API_ERROR" }, 500);
+  }
+});
+
+// POST /api/generate/audio
+apiRoutes.post("/api/generate/audio", async (c) => {
+  const body = await c.req.json();
+  const { workId, text, voice, speed, filename, provider: providerName } = body;
+  if (!workId || !text || !filename) {
+    return c.json({ success: false, error: "Missing required fields: workId, text, filename", code: "INVALID_PARAMS" }, 400);
+  }
+  const provider = providerName ? getProvider(providerName) : getDefaultProvider("audio");
+  if (!provider || !provider.supportsAudio || !provider.generateAudio) {
+    return c.json({ success: false, error: "No audio provider available", code: "INVALID_PARAMS" }, 400);
+  }
+  try {
+    const result = await provider.generateAudio({ text, voice, speed, workId, filename });
     return c.json(result);
   } catch (err: any) {
     return c.json({ success: false, error: err.message, code: "API_ERROR" }, 500);

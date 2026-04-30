@@ -2,13 +2,14 @@ import type { GenerateProvider } from './base.js'
 import { DreaminaProvider, isDreaminaAvailable } from './dreamina.js'
 import { JimengProvider } from './jimeng.js'
 import { NanoBananaProvider } from './nanobanana.js'
+import { MiniMaxTTSProvider } from './minimax-tts.js'
 
 const providers = new Map<string, GenerateProvider>()
 
 export function registerProvider(p: GenerateProvider) { providers.set(p.name, p) }
 export function getProvider(name: string) { return providers.get(name) }
 
-export function getDefaultProvider(type: 'image' | 'video') {
+export function getDefaultProvider(type: 'image' | 'video' | 'audio') {
   if (type === 'video') {
     // Video: prefer Dreamina CLI, then fall back to others
     const dreamina = providers.get('dreamina')
@@ -20,14 +21,20 @@ export function getDefaultProvider(type: 'image' | 'video') {
       if (p.supportsImage && p.name !== 'dreamina') return p
     }
   }
+  if (type === 'audio') {
+    for (const p of providers.values()) {
+      if (p.supportsAudio) return p
+    }
+  }
   for (const p of providers.values()) {
     if (type === 'image' && p.supportsImage) return p
     if (type === 'video' && p.supportsVideo) return p
+    if (type === 'audio' && p.supportsAudio) return p
   }
 }
 
 export function listProviders() {
-  return [...providers.values()].map(p => ({ name: p.name, image: p.supportsImage, video: p.supportsVideo }))
+  return [...providers.values()].map(p => ({ name: p.name, image: p.supportsImage, video: p.supportsVideo, audio: p.supportsAudio }))
 }
 
 export async function initProviders(config: any) {
@@ -37,4 +44,5 @@ export async function initProviders(config: any) {
   }
   if (config.jimeng?.accessKey) registerProvider(new JimengProvider(config.jimeng))
   if (config.openrouter?.apiKey) registerProvider(new NanoBananaProvider(config.openrouter.apiKey))
+  if (config.minimax?.apiKey) registerProvider(new MiniMaxTTSProvider(config.minimax))
 }

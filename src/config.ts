@@ -11,6 +11,7 @@ export interface Config {
   model: string;
   jimeng: { accessKey: string; secretKey: string };
   openrouter?: { apiKey: string };
+  minimax?: { apiKey: string };
   research: { enabled: boolean; schedule: string; platforms: string[] };
   interests?: string[];
   memory?: { apiKey: string; userId: string; syncEnabled: boolean };
@@ -59,6 +60,9 @@ export async function loadConfig(): Promise<Config> {
     }
     if (process.env.OPENROUTER_API_KEY) {
       config.openrouter = { apiKey: process.env.OPENROUTER_API_KEY };
+    }
+    if (process.env.MINIMAX_API_KEY) {
+      config.minimax = { apiKey: process.env.MINIMAX_API_KEY };
     }
     if (process.env.EVERMEMOS_API_KEY) {
       if (!config.memory) {

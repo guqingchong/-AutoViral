@@ -24,6 +24,14 @@ export interface VideoOpts {
   filename: string
 }
 
+export interface AudioOpts {
+  text: string
+  voice?: string
+  speed?: number
+  workId: string
+  filename: string
+}
+
 export interface GenerateResult {
   success: boolean
   assetPath?: string
@@ -36,6 +44,8 @@ export interface GenerateProvider {
   name: string
   supportsImage: boolean
   supportsVideo: boolean
+  supportsAudio?: boolean
   generateImage(opts: ImageOpts): Promise<GenerateResult>
   generateVideo(opts: VideoOpts): Promise<GenerateResult>
+  generateAudio?(opts: AudioOpts): Promise<GenerateResult>
 }
