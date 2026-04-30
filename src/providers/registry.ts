@@ -16,9 +16,9 @@ export function getDefaultProvider(type: 'image' | 'video' | 'audio') {
     if (dreamina) return dreamina
   }
   if (type === 'image') {
-    // Image: prefer OpenRouter/Gemini, skip Dreamina
+    // Image: prefer Dreamina CLI, then fall back to API providers
     for (const p of providers.values()) {
-      if (p.supportsImage && p.name !== 'dreamina') return p
+      if (p.supportsImage) return p
     }
   }
   if (type === 'audio') {
