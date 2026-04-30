@@ -9,7 +9,8 @@
  * Browser clients connect to /ws/browser/:workId for live streaming.
  */
 
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, execSync, type ChildProcess } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -60,6 +61,35 @@ interface NdjsonMessage {
     [key: string]: unknown;
   };
   [key: string]: unknown;
+}
+
+// ── Cross-platform CLI resolution ──────────────────────────────────────────
+
+/** Resolve the actual Claude CLI executable path.
+ *  On Windows, npm installs a .cmd wrapper that cannot be spawn'd directly
+ *  (Node.js v20+ throws EINVAL). We find the real .exe under the global
+ *  node_modules tree so arguments are passed verbatim without shell parsing.
+ */
+export function resolveClaudeCommand(): string {
+  if (process.platform !== "win32") return "claude";
+
+  try {
+    const npmPrefix = execSync("npm prefix -g", {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    const exePath = join(
+      npmPrefix,
+      "node_modules",
+      "@anthropic-ai",
+      "claude-code",
+      "bin",
+      "claude.exe"
+    );
+    if (existsSync(exePath)) return exePath;
+  } catch { /* ignore */ }
+
+  return "claude";
 }
 
 // ── WsBridge ─────────────────────────────────────────────────────────────────
@@ -564,6 +594,7 @@ ${memoryContext}
   // ── CLI spawn ────────────────────────────────────────────────────────────
 
   private spawnCli(session: WsSession, prompt: string, resumeSessionId?: string): void {
+    logBridge("spawn_cli", session.workId, { model: session.model, resume: resumeSessionId });
     const args = [
       "-p", prompt,
       "--output-format", "stream-json",
@@ -579,9 +610,11 @@ ${memoryContext}
       args.push("--model", session.model);
     }
 
-    const proc = spawn("claude", args, {
+    const cliCmd = resolveClaudeCommand();
+    const proc = spawn(cliCmd, args, {
       cwd: process.cwd(),
       stdio: ["ignore", "pipe", "pipe"],
+      shell: false,
       env: {
         ...process.env,
         CLAUDE_CODE_ENTRYPOINT: "cli",
@@ -864,6 +897,7 @@ ${memoryContext}
     });
 
     proc.on("error", (err) => {
+      logBridge("cli_error", session.workId, { error: err.message });
       this.broadcastToBrowsers(session.workId, {
         event: "cli_error",
         data: { workId: session.workId, error: err.message },
@@ -896,9 +930,11 @@ ${memoryContext}
         args.push("--model", session.model);
       }
 
-      const proc = spawn("claude", args, {
+      const cliCmd = resolveClaudeCommand();
+      const proc = spawn(cliCmd, args, {
         cwd: homedir(),
         stdio: ["ignore", "pipe", "pipe"],
+        shell: false,
         env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: "cli", AUTOVIRAL_PROJECT_DIR: process.cwd() },
       });
 

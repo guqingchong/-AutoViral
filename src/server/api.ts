@@ -15,6 +15,7 @@ import {
 } from "../work-store.js";
 import { MemoryClient } from "../memory.js";
 import type { WsBridge } from "../ws-bridge.js";
+import { resolveClaudeCommand } from "../ws-bridge.js";
 import { getProvider, getDefaultProvider, listProviders } from "../providers/registry.js";
 import { listSharedAssetsWithMeta, getSharedAssetPath, validateCategory, sanitizeFilename, saveSharedAsset, deleteSharedAsset, moveSharedAsset } from "../shared-assets.js";
 import { getLatestCreatorData, getCreatorHistory } from "../analytics-collector.js";
@@ -540,9 +541,11 @@ function runCliBrief(prompt: string, timeoutMs = 60000): Promise<string> {
       "--model", "haiku",
     ];
 
-    const proc = spawn("claude", args, {
+    const cliCmd = resolveClaudeCommand();
+    const proc = spawn(cliCmd, args, {
       cwd: homedir(),
       stdio: ["ignore", "pipe", "pipe"],
+      shell: false,
       env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: "cli" },
     });
 
