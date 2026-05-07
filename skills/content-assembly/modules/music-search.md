@@ -7,9 +7,64 @@
 ## 音乐来源优先级
 
 1. **用户共享素材库** — 先检查 `curl http://localhost:3271/api/shared-assets`，用户可能已上传音乐
-2. **抖音热门 BGM** — 平台流量加成，优先使用
-3. **YouTube/B站搜索** — 曲库最大，用 yt-dlp 下载
-4. **免版权音乐库** — Freesound 等 CC 授权音源
+2. **抖音热门 BGM** — 平台流量加成，搞笑/卡点/梗类内容首选
+3. **MiniMax AI 原创** — 教育/科普/剧情类原创 BGM 与歌曲，无版权风险，可精确控制时长与情绪
+4. **YouTube/B站搜索** — 曲库最大，找具体歌名或风格词时用，yt-dlp 下载
+5. **免版权音乐库** — Freesound 等 CC 授权音源，fallback
+
+---
+
+## 方法零：MiniMax AI 原创生成（首选 - 原创剧情/教育类）
+
+> ⚠️ 接入条件：`~/.autoviral/config.yaml` 或 `.env` 已配置 `MINIMAX_API_KEY`
+
+走 autoviral 自带 HTTP 端点，无需 yt-dlp / ffmpeg：
+
+```bash
+# BGM 模式（无人声，纯器乐配乐）
+curl -s -X POST http://localhost:3271/api/generate/music \
+  -H "Content-Type: application/json" \
+  -d '{
+    "workId": "WORK_ID",
+    "prompt": "lo-fi 雨夜钢琴 BGM，70bpm，慵懒治愈氛围",
+    "filename": "bgm-main"
+  }'
+
+# 带歌词歌曲模式（有主唱+伴奏）
+curl -s -X POST http://localhost:3271/api/generate/music \
+  -H "Content-Type: application/json" \
+  -d '{
+    "workId": "WORK_ID",
+    "prompt": "欢快流行电子，节奏感强",
+    "lyrics": "[verse]\n清晨第一缕阳光\n[chorus]\n今天充满希望",
+    "filename": "song-intro"
+  }'
+```
+
+成功响应：`{"success":true,"assetPath":"...","previewUrl":"..."}` — 文件直接落盘到 work 的 audio 目录。
+
+### 何时用 MiniMax，何时用 yt-dlp（决策表）
+
+| 场景 | 推荐方式 | 原因 |
+|---|---|---|
+| 教育/科普/AI/数字孪生类 | ✅ MiniMax | 无现成"梗音乐"加成可言，原创更贴合 |
+| 情感/剧情/旁白叙事 | ✅ MiniMax | 需要 BGM 跟着情绪走，可精确控制风格 |
+| 短视频 < 60s 且需精确时长 | ✅ MiniMax | 不用 ffmpeg 裁切 |
+| 客户特别要求无版权风险 | ✅ MiniMax | AI 生成无版权问题 |
+| 搞笑/反转/抽象/梗类 | ❌ → yt-dlp | 强依赖现成抖音热门 BGM 的流量加成 |
+| 用户指定了具体歌名 | ❌ → yt-dlp | 直接搜官方 MV 提取 |
+| 卡点视频（特定鼓点 hook） | ❌ → yt-dlp | 现成热门 BGM 的鼓点已被用户耳朵记住 |
+| 抽象类内容（反差错位） | ❌ → yt-dlp | 需要"真的很 XX"的现成歌曲，AI 生成偏中庸 |
+
+### Prompt 写作建议（提高生成质量）
+
+中英混写 prompt 最稳，建议同时给出：
+- **风格**：`lo-fi`、`epic orchestral`、`synthwave`、`ambient piano`
+- **情绪**：`uplifting`、`tense`、`melancholic`、`playful`
+- **乐器**：`piano lead`、`808 drums`、`acoustic guitar`、`strings pad`
+- **节奏**：`70bpm slow`、`128bpm dance`、`free tempo`
+
+> ⚠️ `lyrics` 字段留空时，autoviral provider 会自动填 `[instrumental]` 触发纯 BGM 模式。如果填了内容会生成带主唱的歌曲。
 
 ---
 
