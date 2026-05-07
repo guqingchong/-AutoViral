@@ -31,6 +31,8 @@ export function listProviders() {
     video: p.supportsVideo,
     audio: p.supportsAudio,
     music: p.supportsMusic,
+    imageEdit: p.supportsImageEdit,
+    imageUpscale: p.supportsImageUpscale,
   }))
 }
 
