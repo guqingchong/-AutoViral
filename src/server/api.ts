@@ -408,7 +408,8 @@ apiRoutes.post("/api/generate/image", async (c) => {
 // POST /api/generate/video
 apiRoutes.post("/api/generate/video", async (c) => {
   const body = await c.req.json();
-  const { workId, prompt, firstFrame, lastFrame, resolution, filename, provider: providerName } = body;
+  const { workId, prompt, firstFrame, lastFrame, resolution, filename, provider: providerName,
+    referenceImages, referenceVideos, ratio, durationHint, language, duration, modelVersion } = body;
   if (!workId || !prompt || !filename) {
     return c.json({ success: false, error: "Missing required fields", code: "INVALID_PARAMS" }, 400);
   }
@@ -417,7 +418,10 @@ apiRoutes.post("/api/generate/video", async (c) => {
     return c.json({ success: false, error: "No video provider available", code: "INVALID_PARAMS" }, 400);
   }
   try {
-    const result = await provider.generateVideo({ prompt, firstFrame, lastFrame, resolution, workId, filename });
+    const result = await provider.generateVideo({
+      prompt, firstFrame, lastFrame, resolution, workId, filename,
+      referenceImages, referenceVideos, ratio, durationHint, language, duration, modelVersion,
+    });
     return c.json(result);
   } catch (err: any) {
     return c.json({ success: false, error: err.message, code: "API_ERROR" }, 500);
@@ -437,6 +441,25 @@ apiRoutes.post("/api/generate/audio", async (c) => {
   }
   try {
     const result = await provider.generateAudio({ text, voice, speed, workId, filename });
+    return c.json(result);
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message, code: "API_ERROR" }, 500);
+  }
+});
+
+// POST /api/generate/music — BGM 配乐 / 带歌词歌曲（MiniMax music_generation）
+apiRoutes.post("/api/generate/music", async (c) => {
+  const body = await c.req.json();
+  const { workId, prompt, lyrics, duration, filename, provider: providerName } = body;
+  if (!workId || !prompt || !filename) {
+    return c.json({ success: false, error: "Missing required fields: workId, prompt, filename", code: "INVALID_PARAMS" }, 400);
+  }
+  const provider = providerName ? getProvider(providerName) : getDefaultProvider("music");
+  if (!provider || !provider.supportsMusic || !provider.generateMusic) {
+    return c.json({ success: false, error: "No music provider available — check MINIMAX_API_KEY", code: "INVALID_PARAMS" }, 400);
+  }
+  try {
+    const result = await provider.generateMusic({ prompt, lyrics, duration, workId, filename });
     return c.json(result);
   } catch (err: any) {
     return c.json({ success: false, error: err.message, code: "API_ERROR" }, 500);

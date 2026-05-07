@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { mkdir, readdir, rename } from 'node:fs/promises'
-import { join, extname } from 'node:path'
+import { join, extname, dirname } from 'node:path'
 import { promisify } from 'node:util'
 import { dataDir } from '../config.js'
 import type { GenerateProvider, ImageOpts, VideoOpts, GenerateResult } from './base.js'
@@ -31,8 +31,7 @@ async function moveDownloadedFile(downloadDir: string, destPath: string, extensi
   const files = await readdir(downloadDir)
   const match = files.find(f => extensions.includes(extname(f).toLowerCase()))
   if (!match) throw new Error(`No file with extensions ${extensions.join(',')} found in ${downloadDir}`)
-  const dir = destPath.substring(0, destPath.lastIndexOf('/'))
-  await mkdir(dir, { recursive: true })
+  await mkdir(dirname(destPath), { recursive: true })
   await rename(join(downloadDir, match), destPath)
 }
 

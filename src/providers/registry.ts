@@ -1,40 +1,37 @@
 import type { GenerateProvider } from './base.js'
 import { DreaminaProvider, isDreaminaAvailable } from './dreamina.js'
 import { JimengProvider } from './jimeng.js'
+import { SeedanceProvider } from './seedance.js'
 import { NanoBananaProvider } from './nanobanana.js'
 import { MiniMaxTTSProvider } from './minimax-tts.js'
+import { MiniMaxMusicProvider } from './minimax-music.js'
 
 const providers = new Map<string, GenerateProvider>()
 
 export function registerProvider(p: GenerateProvider) { providers.set(p.name, p) }
 export function getProvider(name: string) { return providers.get(name) }
 
-export function getDefaultProvider(type: 'image' | 'video' | 'audio') {
+export function getDefaultProvider(type: 'image' | 'video' | 'audio' | 'music') {
   if (type === 'video') {
-    // Video: prefer Dreamina CLI, then fall back to others
     const dreamina = providers.get('dreamina')
     if (dreamina) return dreamina
-  }
-  if (type === 'image') {
-    // Image: prefer Dreamina CLI, then fall back to API providers
-    for (const p of providers.values()) {
-      if (p.supportsImage) return p
-    }
-  }
-  if (type === 'audio') {
-    for (const p of providers.values()) {
-      if (p.supportsAudio) return p
-    }
   }
   for (const p of providers.values()) {
     if (type === 'image' && p.supportsImage) return p
     if (type === 'video' && p.supportsVideo) return p
     if (type === 'audio' && p.supportsAudio) return p
+    if (type === 'music' && p.supportsMusic) return p
   }
 }
 
 export function listProviders() {
-  return [...providers.values()].map(p => ({ name: p.name, image: p.supportsImage, video: p.supportsVideo, audio: p.supportsAudio }))
+  return [...providers.values()].map(p => ({
+    name: p.name,
+    image: p.supportsImage,
+    video: p.supportsVideo,
+    audio: p.supportsAudio,
+    music: p.supportsMusic,
+  }))
 }
 
 export async function initProviders(config: any) {
@@ -42,7 +39,14 @@ export async function initProviders(config: any) {
   if (await isDreaminaAvailable()) {
     registerProvider(new DreaminaProvider())
   }
-  if (config.jimeng?.accessKey) registerProvider(new JimengProvider(config.jimeng))
+  if (config.jimeng?.accessKey) {
+    registerProvider(new JimengProvider(config.jimeng))
+    // Seedance 复用 jimeng 的 AK/SK(同一对火山智能视觉凭证)
+    registerProvider(new SeedanceProvider(config.jimeng))
+  }
   if (config.openrouter?.apiKey) registerProvider(new NanoBananaProvider(config.openrouter.apiKey))
-  if (config.minimax?.apiKey) registerProvider(new MiniMaxTTSProvider(config.minimax))
+  if (config.minimax?.apiKey) {
+    registerProvider(new MiniMaxTTSProvider(config.minimax))
+    registerProvider(new MiniMaxMusicProvider(config.minimax))
+  }
 }
