@@ -431,7 +431,7 @@ apiRoutes.post("/api/generate/video", async (c) => {
 // POST /api/generate/audio
 apiRoutes.post("/api/generate/audio", async (c) => {
   const body = await c.req.json();
-  const { workId, text, voice, speed, filename, provider: providerName } = body;
+  const { workId, text, voice, speed, languageBoost, filename, provider: providerName } = body;
   if (!workId || !text || !filename) {
     return c.json({ success: false, error: "Missing required fields: workId, text, filename", code: "INVALID_PARAMS" }, 400);
   }
@@ -440,7 +440,7 @@ apiRoutes.post("/api/generate/audio", async (c) => {
     return c.json({ success: false, error: "No audio provider available", code: "INVALID_PARAMS" }, 400);
   }
   try {
-    const result = await provider.generateAudio({ text, voice, speed, workId, filename });
+    const result = await provider.generateAudio({ text, voice, speed, languageBoost, workId, filename });
     return c.json(result);
   } catch (err: any) {
     return c.json({ success: false, error: err.message, code: "API_ERROR" }, 500);

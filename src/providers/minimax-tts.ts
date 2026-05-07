@@ -5,6 +5,11 @@ import type { GenerateProvider, ImageOpts, VideoOpts, AudioOpts, GenerateResult 
 
 const MINIMAX_TTS_URL = 'https://api.minimax.chat/v1/t2a_v2'
 
+// speech-01-turbo:听感最自然(02-turbo 默认 tempo 偏慢,在中文播报场景反而失真)
+const DEFAULT_MODEL = 'speech-01-turbo'
+// 项目用户为中文创作者(见 CLAUDE.md Design Context),默认走中文 boost
+const DEFAULT_LANGUAGE_BOOST = 'Chinese'
+
 export interface MiniMaxTTSConfig {
   apiKey: string
 }
@@ -22,16 +27,24 @@ export class MiniMaxTTSProvider implements GenerateProvider {
   }
 
   async generateAudio(opts: AudioOpts): Promise<GenerateResult> {
-    const { text, voice = 'male-qn-qingse', speed = 1, workId, filename } = opts
+    const {
+      text,
+      voice = 'male-qn-qingse',
+      speed = 1,
+      languageBoost = DEFAULT_LANGUAGE_BOOST,
+      workId,
+      filename,
+    } = opts
 
     try {
       const outFilename = filename.endsWith('.mp3') ? filename : `${filename}.mp3`
       const assetPath = join(dataDir, 'works', workId, 'assets', 'audio', outFilename)
 
       const payload = {
-        model: 'speech-01-turbo',
+        model: DEFAULT_MODEL,
         text,
         stream: false,
+        language_boost: languageBoost,
         voice_setting: {
           voice_id: voice,
           speed,
