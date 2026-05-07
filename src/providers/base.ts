@@ -35,6 +35,9 @@ export interface AudioOpts {
   text: string
   voice?: string
   speed?: number
+  // MiniMax 多语种 TTS 模型默认不识别语种,缺省会按音素自由猜,长文本极易猜偏
+  // 传入显式语种(如 'Chinese' / 'English' / 'auto')可强制走对应语种音素映射
+  languageBoost?: string
   workId: string
   filename: string
 }
