@@ -2,7 +2,8 @@ export interface ImageOpts {
   prompt: string
   width?: number
   height?: number
-  referenceImage?: string
+  referenceImage?: string                   // 单张参考(base64 或 URL),向后兼容老调用
+  referenceImages?: string[]                // 多张参考图 URL(0-14 张),即梦 4.6 / 4.6 类多图模型用
   workId: string
   filename: string
   // OpenRouter image_config
@@ -46,6 +47,25 @@ export interface MusicOpts {
   filename: string
 }
 
+// 局部重绘 / 消除笔(inpainting)
+export interface ImageEditOpts {
+  prompt: string                   // <= 120 字符；"删除" 二字触发消除模式；其它字符触发涂抹编辑
+  originalImage: string            // 原图 URL(公网可访问) 或 base64
+  maskImage: string                // mask 图 URL/base64,单通道灰度,0=保留 / 255=重绘,与原图同尺寸
+  seed?: number                    // 默认 101,-1 表示随机
+  workId: string
+  filename: string
+}
+
+// 智能超清(图像 4K/8K 升清)
+export interface ImageUpscaleOpts {
+  originalImage: string            // 原图 URL 或 base64,JPEG/PNG,<=4.7MB,<=4096*4096
+  resolution?: '4k' | '8k'         // 默认 '4k'
+  scale?: number                   // 0-100,细节生成程度,默认 50
+  workId: string
+  filename: string
+}
+
 export interface GenerateResult {
   success: boolean
   assetPath?: string
@@ -60,8 +80,12 @@ export interface GenerateProvider {
   supportsVideo: boolean
   supportsAudio?: boolean
   supportsMusic?: boolean
+  supportsImageEdit?: boolean             // 局部重绘 / 消除笔(inpainting)
+  supportsImageUpscale?: boolean          // 智能超清(4K/8K 升清)
   generateImage(opts: ImageOpts): Promise<GenerateResult>
   generateVideo(opts: VideoOpts): Promise<GenerateResult>
   generateAudio?(opts: AudioOpts): Promise<GenerateResult>
   generateMusic?(opts: MusicOpts): Promise<GenerateResult>
+  editImage?(opts: ImageEditOpts): Promise<GenerateResult>
+  upscaleImage?(opts: ImageUpscaleOpts): Promise<GenerateResult>
 }

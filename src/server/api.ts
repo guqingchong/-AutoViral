@@ -466,6 +466,44 @@ apiRoutes.post("/api/generate/music", async (c) => {
   }
 });
 
+// POST /api/edit/inpaint — 局部重绘 / 消除笔(原图 + mask 双图输入)
+apiRoutes.post("/api/edit/inpaint", async (c) => {
+  const body = await c.req.json();
+  const { workId, prompt, originalImage, maskImage, seed, filename, provider: providerName } = body;
+  if (!workId || !prompt || !originalImage || !maskImage || !filename) {
+    return c.json({ success: false, error: "Missing required fields: workId, prompt, originalImage, maskImage, filename", code: "INVALID_PARAMS" }, 400);
+  }
+  const provider = providerName ? getProvider(providerName) : getDefaultProvider("image");
+  if (!provider || !provider.supportsImageEdit || !provider.editImage) {
+    return c.json({ success: false, error: "No image-edit provider available", code: "INVALID_PARAMS" }, 400);
+  }
+  try {
+    const result = await provider.editImage({ prompt, originalImage, maskImage, seed, workId, filename });
+    return c.json(result);
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message, code: "API_ERROR" }, 500);
+  }
+});
+
+// POST /api/edit/upscale — 智能超清(单图 4K/8K 升清)
+apiRoutes.post("/api/edit/upscale", async (c) => {
+  const body = await c.req.json();
+  const { workId, originalImage, resolution, scale, filename, provider: providerName } = body;
+  if (!workId || !originalImage || !filename) {
+    return c.json({ success: false, error: "Missing required fields: workId, originalImage, filename", code: "INVALID_PARAMS" }, 400);
+  }
+  const provider = providerName ? getProvider(providerName) : getDefaultProvider("image");
+  if (!provider || !provider.supportsImageUpscale || !provider.upscaleImage) {
+    return c.json({ success: false, error: "No image-upscale provider available", code: "INVALID_PARAMS" }, 400);
+  }
+  try {
+    const result = await provider.upscaleImage({ originalImage, resolution, scale, workId, filename });
+    return c.json(result);
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message, code: "API_ERROR" }, 500);
+  }
+});
+
 // GET /api/generate/providers
 apiRoutes.get("/api/generate/providers", (c) => c.json(listProviders()));
 
