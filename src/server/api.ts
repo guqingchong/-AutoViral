@@ -30,6 +30,20 @@ export const apiRoutes = new Hono();
 
 const execFileAsync = promisify(execFile);
 
+// 检测 GBK→UTF-8 mojibake:Windows shell + curl 传中文字面量时,中文 GBK 字节被 daemon
+// 按 UTF-8 解析,codepoint 大量落到 Latin Extended 区段。命中即拒,避免静默生成噪音 mp3。
+function looksLikeMojibake(text: string): boolean {
+  if (!text || text.length < 3) return false;
+  let suspicious = 0;
+  for (const ch of text) {
+    const cp = ch.codePointAt(0)!;
+    if ((cp >= 0x0080 && cp <= 0x024F) || (cp >= 0x1E00 && cp <= 0x1EFF)) {
+      suspicious++;
+    }
+  }
+  return suspicious / text.length > 0.3;
+}
+
 async function runTrendScript(platform: string): Promise<string> {
   const scriptsDir = join(process.cwd(), 'skills', 'trend-research', 'scripts');
 
@@ -434,6 +448,13 @@ apiRoutes.post("/api/generate/audio", async (c) => {
   const { workId, text, voice, speed, languageBoost, filename, provider: providerName } = body;
   if (!workId || !text || !filename) {
     return c.json({ success: false, error: "Missing required fields: workId, text, filename", code: "INVALID_PARAMS" }, 400);
+  }
+  if (looksLikeMojibake(text)) {
+    return c.json({
+      success: false,
+      error: "text 字符序列疑似 GBK→UTF-8 mojibake(常见于 Windows shell + curl 传中文字面量)。请用 narration_generate.py 脚本或在请求 header 加 'Content-Type: application/json; charset=utf-8' 并用 fetch/requests。",
+      code: "INVALID_PARAMS",
+    }, 400);
   }
   const provider = providerName ? getProvider(providerName) : getDefaultProvider("audio");
   if (!provider || !provider.supportsAudio || !provider.generateAudio) {
