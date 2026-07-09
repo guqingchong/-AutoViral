@@ -5,7 +5,14 @@ export function applyVariables(template: Record<string, unknown>, values: Record
   let result = json;
   for (const [key, value] of Object.entries(values)) {
     const placeholder = `{{${key}}}`;
-    const replacement = String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    const replacement = String(value)
+      .replace(/\\/g, "\\\\")
+      .replace(/"/g, '\\"')
+      .replace(/\n/g, "\\n")
+      .replace(/\r/g, "\\r")
+      .replace(/\t/g, "\\t")
+      .replace(/\x08/g, "\\b")
+      .replace(/\f/g, "\\f");
     result = result.split(placeholder).join(replacement);
   }
   return JSON.parse(result);

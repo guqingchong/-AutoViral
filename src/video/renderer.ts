@@ -151,7 +151,7 @@ export function buildFilterComplexArgs(tl: Timeline, inputs: InputSlot[], durati
         let filter = `[base]`;
 
         if (layer.type === "text") {
-          const text = layer.content.replace(/'/g, "'\\\\\\''");
+          const text = layer.content.replace(/'/g, "'\\''");
           const fontSize = layer.fontSize ?? 48;
           const textColor = layer.color ?? "#FFFFFF";
           // Map user-friendly alignment to FFmpeg drawtext values
@@ -189,7 +189,8 @@ export function buildFilterComplexArgs(tl: Timeline, inputs: InputSlot[], durati
         const srcIdx = getInputIndex(layer, inputs);
         const chain = buildLayerVideoChain(layer, srcIdx, tl.canvas, duration);
         const fade = buildFadeFilter(layer);
-        videoFilterParts.push(`[base]${chain}overlay=${pos.x}:${pos.y}:enable='between(t\\,${start}\\,${end})'${fade}[base]`);
+        const cleanFade = fade.replace(/^:([^,]+,\s*)?/, ",");
+        videoFilterParts.push(`[base]${chain},overlay=${pos.x}:${pos.y}:enable='between(t\\,${start}\\,${end})'${cleanFade}[base]`);
       }
     }
   }
@@ -270,7 +271,7 @@ function buildLayerVideoChain(
       chain += `,format=yuv420p`;
     }
   } else if (layer.type === "text") {
-    const text = layer.content.replace(/'/g, "'\\\\\\''");
+    const text = layer.content.replace(/'/g, "'\\''");
     const fontSize = layer.fontSize ?? 48;
     const color = layer.color ?? "#FFFFFF";
     const alignMap: Record<string, string> = { left: "L", center: "C", right: "R" };
