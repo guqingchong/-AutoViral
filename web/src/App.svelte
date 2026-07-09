@@ -7,6 +7,7 @@
   import Topics from "./pages/Topics.svelte";
   import DigitalHumans from "./pages/DigitalHumans.svelte";
   import Assets from "./pages/Assets.svelte";
+  import Templates from "./pages/Templates.svelte";
   import NewWorkModal from "./components/NewWorkModal.svelte";
   import { fetchConfig, updateConfig, fetchWorks, createWorkApi, type WorkSummary, type ContentCategory } from "./lib/api";
   import { t, getLanguage, setLanguage, subscribe } from "./lib/i18n";
@@ -16,7 +17,7 @@
   function tt(key: string): string { void lang; return t(key); }
 
   // App state
-  type Tab = "explore" | "works" | "topics" | "digital-humans" | "assets" | "analytics";
+  type Tab = "explore" | "works" | "topics" | "digital-humans" | "assets" | "analytics" | "templates";
   let activeTab: Tab = $state("works");
   let showStudio = $state(false);
   let currentWorkId: string | null = $state(null);
@@ -168,6 +169,7 @@
     { tab: "topics" as Tab, labelKey: "topics" },
     { tab: "digital-humans" as Tab, labelKey: "digitalHumans" },
     { tab: "assets" as Tab, labelKey: "assetLibrary" },
+    { tab: "templates" as Tab, labelKey: "templates" },
     { tab: "explore" as Tab, labelKey: "explore" },
     { tab: "analytics" as Tab, labelKey: "analytics" },
   ];
@@ -216,6 +218,8 @@
       <DigitalHumans />
     {:else if activeTab === "assets"}
       <Assets />
+    {:else if activeTab === "templates"}
+      <Templates />
     {:else if activeTab === "works"}
       <Works
         onOpenStudio={openStudio}
