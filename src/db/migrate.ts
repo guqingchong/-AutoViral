@@ -178,6 +178,48 @@ CREATE INDEX IF NOT EXISTS idx_assets_category ON asset_library(category);
 CREATE INDEX IF NOT EXISTS idx_assets_compliance ON asset_library(compliance_status);
 `,
   },
+  {
+    version: 3,
+    name: "templates_and_render_jobs",
+    sql: `
+CREATE TABLE IF NOT EXISTS templates (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  content_form TEXT,
+  canvas TEXT NOT NULL DEFAULT '{}',
+  variables TEXT NOT NULL DEFAULT '[]',
+  layers TEXT NOT NULL DEFAULT '[]',
+  audio TEXT NOT NULL DEFAULT '[]',
+  subtitles TEXT DEFAULT '{}',
+  transitions TEXT DEFAULT '[]',
+  preview_url TEXT,
+  status TEXT NOT NULL DEFAULT 'draft',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS render_jobs (
+  id TEXT PRIMARY KEY,
+  work_id TEXT,
+  template_id TEXT,
+  output_path TEXT,
+  status TEXT NOT NULL DEFAULT 'pending',
+  progress REAL NOT NULL DEFAULT 0,
+  duration REAL,
+  current_time REAL,
+  error TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (work_id) REFERENCES works(id) ON DELETE SET NULL,
+  FOREIGN KEY (template_id) REFERENCES templates(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_templates_status ON templates(status);
+CREATE INDEX IF NOT EXISTS idx_templates_content_form ON templates(content_form);
+CREATE INDEX IF NOT EXISTS idx_render_jobs_status ON render_jobs(status);
+CREATE INDEX IF NOT EXISTS idx_render_jobs_work ON render_jobs(work_id);
+`,
+  },
 ];
 
 export function migrate(): void {

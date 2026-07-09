@@ -32,6 +32,18 @@ describe("migrate", () => {
     expect(tables).toContain("asset_library");
   });
 
+  it("creates templates and render_jobs tables", () => {
+    migrate();
+    const db = resetInMemoryDb();
+    migrate();
+    const tables = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+      .pluck()
+      .all() as string[];
+    expect(tables).toContain("templates");
+    expect(tables).toContain("render_jobs");
+  });
+
   it("records applied migrations", () => {
     migrate();
     const db = resetInMemoryDb();
