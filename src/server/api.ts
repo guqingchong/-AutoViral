@@ -53,15 +53,19 @@ export const apiRoutes = new Hono();
 const execFileAsync = promisify(execFile);
 
 // 检测 GBK→UTF-8 mojibake:Windows shell + curl 传中文字面量时,中文 GBK 字节被 daemon
-// 按 UTF-8 解析,codepoint 大量落到 Latin Extended 区段。命中即拒,避免静默生成噪音 mp3。
+// 按 UTF-8 解析。Node 默认 fatal=false,非法序列被替换成 U+FFFD;宽松解码时也可能落到
+// Latin Extended / Cyrillic 等区段。命中即拒,避免静默生成噪音 mp3。
 function looksLikeMojibake(text: string): boolean {
   if (!text || text.length < 3) return false;
   let suspicious = 0;
   for (const ch of text) {
     const cp = ch.codePointAt(0)!;
-    if ((cp >= 0x0080 && cp <= 0x024F) || (cp >= 0x1E00 && cp <= 0x1EFF)) {
-      suspicious++;
-    }
+    // U+FFFD:UTF-8 解码失败的替换字符,权重 2(这是 mojibake 最强信号)
+    if (cp === 0xFFFD) { suspicious += 2; continue; }
+    // Latin Extended-A/B/Additional
+    if ((cp >= 0x0080 && cp <= 0x02AF) || (cp >= 0x1E00 && cp <= 0x1EFF)) { suspicious++; continue; }
+    // Cyrillic / Greek / Armenian(GBK 字节流宽松解码常见误落点)
+    if ((cp >= 0x0370 && cp <= 0x04FF) || (cp >= 0x0530 && cp <= 0x058F)) { suspicious++; continue; }
   }
   return suspicious / text.length > 0.3;
 }
