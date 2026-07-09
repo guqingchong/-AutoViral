@@ -5,6 +5,7 @@ const translations: Record<Language, Record<string, string>> = {
     // Navigation
     explore: "Inspiration",
     works: "Works",
+    topics: "Topics",
     analytics: "Analytics",
     settings: "Settings",
 
@@ -197,6 +198,7 @@ const translations: Record<Language, Record<string, string>> = {
     // Navigation
     explore: "灵感",
     works: "作品",
+    topics: "选题",
     analytics: "数据",
     settings: "设置",
 
