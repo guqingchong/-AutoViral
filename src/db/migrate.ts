@@ -114,6 +114,70 @@ CREATE INDEX IF NOT EXISTS idx_topics_status ON topics(status);
 CREATE INDEX IF NOT EXISTS idx_snapshots_platform_date ON trend_snapshots(platform, snapshot_date);
 `,
   },
+  {
+    version: 2,
+    name: "digital_human_and_asset_library",
+    sql: `
+ALTER TABLE works ADD COLUMN digital_human_id TEXT;
+ALTER TABLE works ADD COLUMN asset_ids TEXT DEFAULT '[]';
+
+CREATE TABLE IF NOT EXISTS avatars (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'draft',
+  source TEXT NOT NULL,
+  reference_video_path TEXT,
+  preview_url TEXT,
+  provider_avatar_id TEXT,
+  config TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS digital_human_jobs (
+  id TEXT PRIMARY KEY,
+  work_id TEXT,
+  avatar_id TEXT NOT NULL,
+  audio_path TEXT NOT NULL,
+  script_id INTEGER,
+  provider TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  progress INTEGER NOT NULL DEFAULT 0,
+  result_url TEXT,
+  result_local_path TEXT,
+  error TEXT,
+  estimated_cost REAL NOT NULL DEFAULT 0,
+  actual_cost REAL NOT NULL DEFAULT 0,
+  provider_job_id TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (work_id) REFERENCES works(id) ON DELETE SET NULL,
+  FOREIGN KEY (avatar_id) REFERENCES avatars(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS asset_library (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  file_path TEXT NOT NULL UNIQUE,
+  category TEXT NOT NULL,
+  type TEXT NOT NULL,
+  tags TEXT DEFAULT '[]',
+  source TEXT NOT NULL DEFAULT 'unknown',
+  license TEXT NOT NULL DEFAULT 'unknown',
+  compliance_status TEXT NOT NULL DEFAULT 'pending',
+  metadata TEXT DEFAULT '{}',
+  usage_count INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_works_digital_human_id ON works(digital_human_id);
+CREATE INDEX IF NOT EXISTS idx_jobs_status ON digital_human_jobs(status);
+CREATE INDEX IF NOT EXISTS idx_jobs_work_id ON digital_human_jobs(work_id);
+CREATE INDEX IF NOT EXISTS idx_assets_category ON asset_library(category);
+CREATE INDEX IF NOT EXISTS idx_assets_compliance ON asset_library(compliance_status);
+`,
+  },
 ];
 
 export function migrate(): void {
