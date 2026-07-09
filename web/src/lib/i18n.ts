@@ -256,6 +256,16 @@ const translations: Record<Language, Record<string, string>> = {
     previewReady: "Preview ready",
     edit: "Edit",
     saved: "Saved",
+
+    // Render Jobs
+    renderJobs: "Render Jobs",
+    renderJobsTitle: "Render Jobs",
+    noRenderJobs: "No render jobs yet.",
+    jobStatusPending: "Pending",
+    jobStatusRunning: "Running",
+    jobStatusCompleted: "Completed",
+    jobStatusFailed: "Failed",
+    jobStatusCancelled: "Cancelled",
   },
   zh: {
     // Navigation
@@ -512,6 +522,16 @@ const translations: Record<Language, Record<string, string>> = {
     previewReady: "预览已生成",
     edit: "编辑",
     saved: "已保存",
+
+    // Render Jobs
+    renderJobs: "渲染任务",
+    renderJobsTitle: "渲染任务",
+    noRenderJobs: "暂无渲染任务",
+    jobStatusPending: "等待中",
+    jobStatusRunning: "渲染中",
+    jobStatusCompleted: "已完成",
+    jobStatusFailed: "失败",
+    jobStatusCancelled: "已取消",
   },
 };
 
