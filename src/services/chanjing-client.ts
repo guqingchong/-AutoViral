@@ -67,14 +67,14 @@ export class ChanjingClient {
     return list.map((a) => ({ id: a.avatar_id, name: a.name, previewUrl: a.preview_url }));
   }
 
-  async createAvatar(params: { name: string; videoUrl: string }): Promise<{ avatarId: string; status: string }> {
+  async createAvatar(params: { name: string; videoUrl: string }): Promise<{ avatarId: string; status: string; previewUrl?: string }> {
     const data = (await this.request("/openapi/v1/avatar/create", {
       method: "POST",
       body: JSON.stringify({ name: params.name, video_url: params.videoUrl }),
-    })) as { data?: { avatar_id: string; status?: string } };
+    })) as { data?: { avatar_id: string; status?: string; preview_url?: string } };
     const avatarId = data.data?.avatar_id;
     if (!avatarId) throw new Error("ChanJing avatar/create did not return avatar_id");
-    return { avatarId, status: data.data?.status ?? "training" };
+    return { avatarId, status: data.data?.status ?? "training", previewUrl: data.data?.preview_url };
   }
 
   async submitVideo(avatarId: string, audioUrl: string, payload?: { text?: string; backgroundUrl?: string }): Promise<ChanjingSubmitResult> {
