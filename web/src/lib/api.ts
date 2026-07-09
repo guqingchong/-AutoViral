@@ -243,3 +243,174 @@ export async function fetchEvalResults(workId: string, step: string): Promise<Ev
   const data = await get<{ results: EvalResult[] }>(`/api/works/${encodeURIComponent(workId)}/eval/results/${encodeURIComponent(step)}`);
   return data.results;
 }
+
+// ---------------------------------------------------------------------------
+// Topics API
+// ---------------------------------------------------------------------------
+
+export interface Topic {
+  id: number;
+  platform?: string;
+  title: string;
+  description?: string;
+  heat?: number;
+  competition?: string;
+  opportunity?: string;
+  emotion_type?: string;
+  emotion_subtype?: string;
+  tags: string[];
+  content_angles: string[];
+  example_hook?: string;
+  category?: string;
+  status: string;
+}
+
+export async function fetchTopics(platform?: string): Promise<Topic[]> {
+  const qs = platform ? `?platform=${encodeURIComponent(platform)}` : "";
+  const data = await request<{ topics: Topic[] }>(`/api/topics${qs}`);
+  return data.topics;
+}
+
+export async function convertTopicToWork(id: number, opts?: { platforms?: string[]; type?: "short-video" | "image-text" }) {
+  return post<{ workId: string }>(`/api/topics/${encodeURIComponent(id)}/convert`, opts ?? {});
+}
+
+// ---------------------------------------------------------------------------
+// Digital Human API
+// ---------------------------------------------------------------------------
+
+export interface Avatar {
+  id: string;
+  name: string;
+  status: "training" | "ready" | "failed";
+  source: "chanjing" | "bailian";
+  provider_avatar_id?: string;
+  preview_url?: string;
+  reference_video_path?: string;
+  config: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DigitalHumanJob {
+  id: string;
+  work_id?: string;
+  avatar_id: string;
+  audio_path: string;
+  script_id?: number;
+  provider: "chanjing" | "bailian";
+  provider_job_id?: string;
+  status: "pending" | "queued" | "running" | "done" | "failed";
+  progress: number;
+  result_url?: string;
+  result_local_path?: string;
+  estimated_cost: number;
+  actual_cost: number;
+  error?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function fetchAvatars(): Promise<Avatar[]> {
+  const data = await request<{ avatars: Avatar[] }>("/api/digital-humans/avatars");
+  return data.avatars;
+}
+
+export async function uploadAvatar(name: string, file: File): Promise<Avatar> {
+  const form = new FormData();
+  form.append("name", name);
+  form.append("file", file);
+  const res = await fetch("/api/digital-humans/avatars", { method: "POST", body: form });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function importAvatar(name: string, providerAvatarId: string): Promise<Avatar> {
+  return post<Avatar>("/api/digital-humans/avatars", { name, providerAvatarId });
+}
+
+export async function fetchDigitalHumanJobs(): Promise<DigitalHumanJob[]> {
+  const data = await request<{ jobs: DigitalHumanJob[] }>("/api/digital-humans/jobs");
+  return data.jobs;
+}
+
+export async function submitDigitalHumanJob(input: {
+  avatarId: string;
+  audioUrl: string;
+  workId?: string;
+  scriptId?: number;
+  estimatedCost?: number;
+  fallbackOnFailure?: boolean;
+}): Promise<DigitalHumanJob> {
+  return post<DigitalHumanJob>("/api/digital-humans/jobs", input);
+}
+
+export async function refreshDigitalHumanJob(id: string): Promise<DigitalHumanJob> {
+  return post<DigitalHumanJob>(`/api/digital-humans/jobs/${encodeURIComponent(id)}/refresh`, {});
+}
+
+// ---------------------------------------------------------------------------
+// Asset Library API
+// ---------------------------------------------------------------------------
+
+export interface AssetLibraryItem {
+  id: number;
+  name: string;
+  file_path: string;
+  category: "characters" | "scenes" | "music" | "templates" | "branding" | "general";
+  type: "image" | "video" | "audio" | "font" | "other";
+  tags: string[];
+  source: "upload" | "pexels" | "pixabay" | "unsplash" | "self-generated" | "unknown";
+  license: "cc0" | "commercial" | "needs-review" | "unknown";
+  compliance_status: "pending" | "passed" | "failed";
+  metadata: Record<string, unknown>;
+  usage_count: number;
+  url?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function fetchLibraryAssets(category?: AssetLibraryItem["category"]): Promise<AssetLibraryItem[]> {
+  const qs = category ? `?category=${encodeURIComponent(category)}` : "";
+  const data = await request<{ assets: AssetLibraryItem[] }>(`/api/assets${qs}`);
+  return data.assets;
+}
+
+export async function uploadLibraryAsset(
+  file: File,
+  category: AssetLibraryItem["category"],
+  source: AssetLibraryItem["source"],
+  license: AssetLibraryItem["license"],
+  tags: string,
+  metadata?: Record<string, unknown>,
+): Promise<AssetLibraryItem> {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("category", category);
+  form.append("source", source);
+  form.append("license", license);
+  form.append("tags", tags);
+  if (metadata) form.append("metadata", JSON.stringify(metadata));
+  const res = await fetch("/api/assets", { method: "POST", body: form });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function updateLibraryAsset(
+  id: number,
+  updates: Partial<Omit<AssetLibraryItem, "id" | "created_at" | "updated_at">>,
+): Promise<AssetLibraryItem> {
+  return request<AssetLibraryItem>(`/api/assets/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(updates),
+  });
+}
+
+export async function deleteLibraryAsset(id: number): Promise<void> {
+  await request<{ deleted: boolean }>(`/api/assets/${id}`, { method: "DELETE" });
+}
+
+export async function recheckAssetCompliance(id: number): Promise<AssetLibraryItem> {
+  return post<AssetLibraryItem>(`/api/assets/${id}/compliance`, {});
+}
