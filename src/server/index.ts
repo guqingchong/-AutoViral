@@ -14,6 +14,7 @@ import { ensureSharedDirs } from "../shared-assets.js";
 import { apiRoutes, setWsBridge } from "./api.js";
 import { WsBridge } from "../ws-bridge.js";
 import { startAnalyticsCollector } from "../analytics-collector.js";
+import { migrate } from "../db/migrate.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -22,6 +23,9 @@ const __dirname = dirname(__filename);
 const WEB_DIST = join(__dirname, "..", "..", "web", "dist");
 
 export async function startServer(port: number): Promise<{ server: Server }> {
+  // 0. Ensure database schema
+  migrate();
+
   // 1. Load config
   const config = await loadConfig();
 

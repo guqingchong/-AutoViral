@@ -1,15 +1,34 @@
 // Work store — manages persistent work (content) definitions for AutoViral
 // Each work is a content piece flowing through a 4-step pipeline.
+// Structured data is delegated to SQLite; file-system assets remain on disk.
 
-import { readFile, writeFile, mkdir, readdir, rm, stat } from "node:fs/promises";
+import { readFile, writeFile, mkdir, readdir, rm } from "node:fs/promises";
 import { join, relative } from "node:path";
-import yaml from "js-yaml";
 import { dataDir } from "./config.js";
+import { migrateLegacyWorks } from "./db/migrate-legacy.js";
+import {
+  createWork as dbCreateWork,
+  getWork as dbGetWork,
+  getWorkSteps,
+  listWorks as dbListWorks,
+  updateWork as dbUpdateWork,
+  deleteWork as dbDeleteWork,
+  updateStep,
+} from "./db/works-repo.js";
+import type { DbWork, DbPipelineStep } from "./db/types.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
 export type WorkType = "short-video" | "image-text";
-export type WorkStatus = "draft" | "creating" | "ready" | "failed";
+export type WorkStatus =
+  | "draft"
+  | "researching"
+  | "planning"
+  | "assetting"
+  | "assembling"
+  | "reviewing"
+  | "published"
+  | "failed";
 
 export interface PipelineStep {
   name: string;
@@ -56,36 +75,6 @@ export interface WorkSummary {
 // ── Storage paths ────────────────────────────────────────────────────────────
 
 const WORKS_BASE = join(dataDir, "works");
-const INDEX_FILE = join(WORKS_BASE, "works.yaml");
-
-interface WorksIndex {
-  works: WorkSummary[];
-}
-
-async function ensureWorksDir(): Promise<void> {
-  await mkdir(WORKS_BASE, { recursive: true });
-}
-
-// ── Index helpers ────────────────────────────────────────────────────────────
-
-async function readIndex(): Promise<WorksIndex> {
-  await ensureWorksDir();
-  try {
-    const raw = await readFile(INDEX_FILE, "utf-8");
-    const parsed = yaml.load(raw) as WorksIndex | null;
-    return parsed ?? { works: [] };
-  } catch {
-    return { works: [] };
-  }
-}
-
-async function writeIndex(data: WorksIndex): Promise<void> {
-  await ensureWorksDir();
-  const raw = yaml.dump(data, { lineWidth: -1 });
-  await writeFile(INDEX_FILE, raw, "utf-8");
-}
-
-// ── Per-work file helpers ────────────────────────────────────────────────────
 
 function workDir(id: string): string {
   return join(WORKS_BASE, id);
@@ -101,23 +90,6 @@ function assetsDir(id: string): string {
 
 function outputDir(id: string): string {
   return join(workDir(id), "output");
-}
-
-async function readWorkFile(id: string): Promise<Work | undefined> {
-  try {
-    const raw = await readFile(workFilePath(id), "utf-8");
-    return yaml.load(raw) as Work;
-  } catch {
-    return undefined;
-  }
-}
-
-async function writeWorkFile(work: Work): Promise<void> {
-  const dir = workDir(work.id);
-  await mkdir(dir, { recursive: true });
-  await mkdir(assetsDir(work.id), { recursive: true });
-  const raw = yaml.dump(work, { lineWidth: -1, sortKeys: false });
-  await writeFile(workFilePath(work.id), raw, "utf-8");
 }
 
 function toSummary(w: Work): WorkSummary {
@@ -153,15 +125,69 @@ function generateId(): string {
   return `w_${ts}_${hex}`;
 }
 
+// ── DB ↔ Work conversion ─────────────────────────────────────────────────────
+
+function dbWorkToWork(w: DbWork, steps?: DbPipelineStep[]): Work {
+  const pipeline: Record<string, PipelineStep> = {};
+  const stepRows = steps ?? getWorkSteps(w.id);
+  for (const s of stepRows) {
+    pipeline[s.step_key] = {
+      name: s.name,
+      status: s.status,
+      startedAt: s.started_at,
+      completedAt: s.completed_at,
+      note: s.note,
+    };
+  }
+  return {
+    id: w.id,
+    title: w.title,
+    type: w.type,
+    contentCategory: w.content_category as ContentCategory | undefined,
+    videoSource: w.video_source as VideoSource | undefined,
+    videoSearchQuery: w.video_search_query,
+    status: w.status,
+    platforms: w.platforms,
+    pipeline,
+    cliSessionId: w.cli_session_id,
+    coverImage: undefined,
+    topicHint: w.topic_hint,
+    evaluationMode: w.evaluation_mode,
+    evalSessionIds: w.eval_session_ids,
+    evalAttempts: w.eval_attempts,
+    createdAt: w.created_at,
+    updatedAt: w.updated_at,
+  };
+}
+
+let legacyMigrated = false;
+async function maybeMigrateLegacy(): Promise<void> {
+  if (legacyMigrated) return;
+  legacyMigrated = true;
+  await migrateLegacyWorks();
+}
+
 // ── Public API ───────────────────────────────────────────────────────────────
 
 export async function listWorks(): Promise<WorkSummary[]> {
-  const index = await readIndex();
-  return index.works;
+  await maybeMigrateLegacy();
+  const rows = dbListWorks();
+  return rows.map((w) => ({
+    id: w.id,
+    title: w.title,
+    type: w.type,
+    contentCategory: w.content_category as ContentCategory | undefined,
+    platforms: w.platforms,
+    status: w.status,
+    updatedAt: w.updated_at,
+  }));
 }
 
 export async function getWork(id: string): Promise<Work | undefined> {
-  return readWorkFile(id);
+  await maybeMigrateLegacy();
+  const w = dbGetWork(id);
+  if (!w) return undefined;
+  return dbWorkToWork(w);
 }
 
 export async function createWork(input: {
@@ -173,24 +199,37 @@ export async function createWork(input: {
   platforms: string[];
   topicHint?: string;
 }): Promise<Work> {
+  await maybeMigrateLegacy();
   const now = new Date().toISOString();
   const id = generateId();
-  const work: Work = {
+  const work: DbWork = {
     id,
     title: input.title,
     type: input.type,
-    contentCategory: input.contentCategory,
-    videoSource: input.videoSource,
-    videoSearchQuery: input.videoSearchQuery,
-    status: input.videoSource === "search" ? "creating" : "draft",
+    content_category: input.contentCategory,
+    video_source: input.videoSource,
+    video_search_query: input.videoSearchQuery,
+    status: input.videoSource === "search" ? "researching" : "draft",
     platforms: input.platforms,
-    pipeline: defaultPipeline(input.type, input.videoSource as VideoSource | undefined),
-    topicHint: input.topicHint,
-    createdAt: now,
-    updatedAt: now,
+    evaluation_mode: false,
+    topic_hint: input.topicHint,
+    tags: [],
+    created_at: now,
+    updated_at: now,
   };
+  const steps = Object.entries(defaultPipeline(input.type, input.videoSource as VideoSource | undefined)).map(([key, s], idx) => ({
+    work_id: id,
+    step_key: key,
+    name: s.name,
+    status: s.status as DbPipelineStep["status"],
+    started_at: s.startedAt,
+    completed_at: s.completedAt,
+    note: s.note,
+    sort_order: idx,
+  }));
+  dbCreateWork(work, steps);
 
-  // Create workspace directories
+  // Keep on-disk workspace directories for assets
   const wDir = join(dataDir, "works", id);
   await mkdir(join(wDir, "research"), { recursive: true });
   await mkdir(join(wDir, "plan"), { recursive: true });
@@ -199,52 +238,49 @@ export async function createWork(input: {
   await mkdir(join(wDir, "assets", "images"), { recursive: true });
   await mkdir(join(wDir, "output"), { recursive: true });
 
-  await writeWorkFile(work);
-
-  // Update index
-  const index = await readIndex();
-  index.works.push(toSummary(work));
-  await writeIndex(index);
-
-  return work;
+  return dbWorkToWork(work, steps);
 }
 
 export async function updateWork(id: string, updates: Partial<Work>): Promise<Work | undefined> {
-  const work = await readWorkFile(id);
-  if (!work) return undefined;
-
-  const updated: Work = { ...work, ...updates, id, updatedAt: new Date().toISOString() };
-  await writeWorkFile(updated);
-
-  // Sync index
-  const index = await readIndex();
-  const idx = index.works.findIndex((w) => w.id === id);
-  const summary = toSummary(updated);
-  if (idx >= 0) {
-    index.works[idx] = summary;
-  } else {
-    index.works.push(summary);
+  await maybeMigrateLegacy();
+  const dbUpdates: Partial<DbWork> = {};
+  if (updates.title !== undefined) dbUpdates.title = updates.title;
+  if (updates.type !== undefined) dbUpdates.type = updates.type;
+  if (updates.contentCategory !== undefined) dbUpdates.content_category = updates.contentCategory;
+  if (updates.videoSource !== undefined) dbUpdates.video_source = updates.videoSource;
+  if (updates.videoSearchQuery !== undefined) dbUpdates.video_search_query = updates.videoSearchQuery;
+  if (updates.status !== undefined) dbUpdates.status = updates.status;
+  if (updates.platforms !== undefined) dbUpdates.platforms = updates.platforms;
+  if (updates.evaluationMode !== undefined) dbUpdates.evaluation_mode = updates.evaluationMode;
+  if (updates.topicHint !== undefined) dbUpdates.topic_hint = updates.topicHint;
+  if (updates.cliSessionId !== undefined) dbUpdates.cli_session_id = updates.cliSessionId;
+  if (updates.evalSessionIds !== undefined) dbUpdates.eval_session_ids = updates.evalSessionIds;
+  if (updates.evalAttempts !== undefined) dbUpdates.eval_attempts = updates.evalAttempts;
+  if (updates.pipeline !== undefined) {
+    // Sync steps back to DB
+    for (const [key, step] of Object.entries(updates.pipeline)) {
+      updateStep(id, key, {
+        status: step.status as DbPipelineStep["status"],
+        started_at: step.startedAt,
+        completed_at: step.completedAt,
+        note: step.note,
+      });
+    }
   }
-  await writeIndex(index);
-
-  return updated;
+  const updated = dbUpdateWork(id, dbUpdates);
+  if (!updated) return undefined;
+  return dbWorkToWork(updated);
 }
 
 export async function deleteWork(id: string): Promise<boolean> {
-  const index = await readIndex();
-  const before = index.works.length;
-  index.works = index.works.filter((w) => w.id !== id);
-  if (index.works.length === before) return false;
-
-  await writeIndex(index);
-
-  // Remove work directory
+  await maybeMigrateLegacy();
+  const ok = dbDeleteWork(id);
+  if (!ok) return false;
   try {
     await rm(workDir(id), { recursive: true, force: true });
   } catch {
     // directory may already be gone
   }
-
   return true;
 }
 
