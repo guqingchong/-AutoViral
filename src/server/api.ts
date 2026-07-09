@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { existsSync } from "node:fs";
 import { readFile, writeFile, appendFile, mkdir, readdir, rm } from "node:fs/promises";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -2518,8 +2519,20 @@ apiRoutes.post("/api/templates/:id/preview", async (c) => {
 
   try {
     const variableValues = { ...fillDefaults(template.variables), ...(body.variables ?? {}) };
-    variableValues.host_video = variableValues.host_video ?? join(previewDir, "host.mp4");
-    variableValues.voice_audio = variableValues.voice_audio ?? join(previewDir, "voice.wav");
+    const defaultHostVideo = join(previewDir, "host.mp4");
+    const defaultVoiceAudio = join(previewDir, "voice.wav");
+    const hostVideo = variableValues.host_video ?? defaultHostVideo;
+    const voiceAudio = variableValues.voice_audio ?? defaultVoiceAudio;
+
+    if (typeof hostVideo !== "string" || !existsSync(hostVideo)) {
+      return c.json({ error: `host_video not found: ${hostVideo}` }, 400);
+    }
+    if (typeof voiceAudio !== "string" || !existsSync(voiceAudio)) {
+      return c.json({ error: `voice_audio not found: ${voiceAudio}` }, 400);
+    }
+
+    variableValues.host_video = hostVideo;
+    variableValues.voice_audio = voiceAudio;
     const baseTimeline: Record<string, unknown> = {
       canvas: template.canvas,
       layers: template.layers,

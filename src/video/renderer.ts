@@ -90,6 +90,10 @@ export function collectInputs(tl: Timeline): InputSlot[] {
 }
 
 export function buildFilterComplexArgs(tl: Timeline, inputs: InputSlot[], duration: number, outputPath: string): string[] {
+  if (tl.transitions && tl.transitions.length > 0) {
+    console.warn(`[renderer] transitions are declared but not yet implemented (${tl.transitions.length} transition(s) ignored)`);
+  }
+
   const args: string[] = [];
 
   // Input declarations
