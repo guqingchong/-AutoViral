@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { readFile, writeFile, appendFile, mkdir, readdir } from "node:fs/promises";
+import { readFile, writeFile, appendFile, mkdir, readdir, rm } from "node:fs/promises";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { join, extname } from "node:path";
@@ -19,6 +19,23 @@ import { resolveClaudeCommand } from "../ws-bridge.js";
 import { getProvider, getDefaultProvider, listProviders } from "../providers/registry.js";
 import { listSharedAssetsWithMeta, getSharedAssetPath, validateCategory, sanitizeFilename, saveSharedAsset, deleteSharedAsset, moveSharedAsset } from "../shared-assets.js";
 import { getLatestCreatorData, getCreatorHistory } from "../analytics-collector.js";
+import * as avatarsRepo from "../db/avatars-repo.js";
+import * as dhJobsRepo from "../db/digital-human-jobs-repo.js";
+import * as assetsRepo from "../db/assets-repo.js";
+import {
+  createAvatarFromUpload,
+  importAvatar,
+  setDefaultAvatar,
+  submitJob,
+  refreshJob,
+} from "../services/digital-human.js";
+import {
+  uploadAsset as uploadLibraryAsset,
+  listAssets as listLibraryAssets,
+  updateAsset as updateLibraryAsset,
+  deleteAsset as deleteLibraryAsset,
+  recheckCompliance,
+} from "../services/asset-library.js";
 import { syncStepConversation } from "../memory-sync.js";
 import { log, readLogs } from "../logger.js";
 import { runPipeline, getRunStatus, listRuns, getRunReport, type RunConfig } from "../test-runner.js";
@@ -2066,4 +2083,235 @@ apiRoutes.post("/api/trends/collect", async (c) => {
   const results = await collectTrends(config.research.platforms);
   const total = results.reduce((sum, r) => sum + r.topics.length, 0);
   return c.json({ collected: total });
+});
+
+// ---------------------------------------------------------------------------
+// Digital Human API
+// ---------------------------------------------------------------------------
+
+function avatarDir(id: string): string { return join(dataDir, "avatars", id); }
+function jobOutputDir(id: string): string { return join(dataDir, "digital-human-jobs", id); }
+
+function guessMime(filename: string): string {
+  const ext = extname(filename).toLowerCase();
+  return MIME_TYPES[ext] ?? "application/octet-stream";
+}
+
+// GET /api/digital-humans/status
+apiRoutes.get("/api/digital-humans/status", async (c) => {
+  const config = await loadConfig();
+  return c.json({
+    chanjing: !!config.chanjing?.appId && !!config.chanjing?.secretKey,
+    bailian: !!config.bailian?.apiKey,
+  });
+});
+
+// GET /api/digital-humans/avatars
+apiRoutes.get("/api/digital-humans/avatars", async (c) => {
+  return c.json({ avatars: avatarsRepo.listAvatars() });
+});
+
+// POST /api/digital-humans/avatars — upload file or import existing provider avatar
+apiRoutes.post("/api/digital-humans/avatars", async (c) => {
+  try {
+    const ct = c.req.header("content-type") ?? "";
+    if (ct.includes("application/json")) {
+      const { name, providerAvatarId } = await c.req.json();
+      if (!name || !providerAvatarId) return c.json({ error: "name and providerAvatarId required" }, 400);
+      const avatar = await importAvatar(name, providerAvatarId);
+      return c.json(avatar, 201);
+    }
+    const body = await c.req.parseBody();
+    const name = (body.name as string) || "New Avatar";
+    const file = body.file as File | undefined;
+    if (!file) return c.json({ error: "file is required" }, 400);
+    const buffer = Buffer.from(await file.arrayBuffer());
+    const avatar = await createAvatarFromUpload(name, buffer, file.name);
+    return c.json(avatar, 201);
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : "Avatar creation failed" }, 500);
+  }
+});
+
+// GET /api/digital-humans/avatars/:id
+apiRoutes.get("/api/digital-humans/avatars/:id", async (c) => {
+  const id = c.req.param("id");
+  const avatar = avatarsRepo.getAvatar(id);
+  if (!avatar) return c.json({ error: "Avatar not found" }, 404);
+  return c.json(avatar);
+});
+
+// GET /api/digital-humans/avatars/:id/media/:filename
+apiRoutes.get("/api/digital-humans/avatars/:id/media/:filename", async (c) => {
+  const id = c.req.param("id");
+  const filename = c.req.param("filename");
+  try {
+    const data = await readFile(join(avatarDir(id), filename));
+    return new Response(data, { headers: { "Content-Type": guessMime(filename) } });
+  } catch {
+    return c.json({ error: "Media not found" }, 404);
+  }
+});
+
+// GET /api/digital-humans/avatars/:id/frame
+apiRoutes.get("/api/digital-humans/avatars/:id/frame", async (c) => {
+  const id = c.req.param("id");
+  try {
+    const data = await readFile(join(avatarDir(id), "frame.jpg"));
+    return new Response(data, { headers: { "Content-Type": "image/jpeg" } });
+  } catch {
+    return c.json({ error: "Frame not found" }, 404);
+  }
+});
+
+// DELETE /api/digital-humans/avatars/:id
+apiRoutes.delete("/api/digital-humans/avatars/:id", async (c) => {
+  const id = c.req.param("id");
+  try {
+    await rm(avatarDir(id), { recursive: true, force: true });
+  } catch { /* directory may not exist */ }
+  const ok = avatarsRepo.deleteAvatar(id);
+  return c.json({ deleted: ok });
+});
+
+// POST /api/digital-humans/avatars/:id/default
+apiRoutes.post("/api/digital-humans/avatars/:id/default", async (c) => {
+  const id = c.req.param("id");
+  const avatar = await setDefaultAvatar(id);
+  if (!avatar) return c.json({ error: "Avatar not found" }, 404);
+  return c.json(avatar);
+});
+
+// POST /api/digital-humans/jobs
+apiRoutes.post("/api/digital-humans/jobs", async (c) => {
+  try {
+    const body = await c.req.json();
+    const { avatarId, audioUrl, workId, scriptId, estimatedCost, fallbackOnFailure } = body;
+    if (!avatarId || !audioUrl) return c.json({ error: "avatarId and audioUrl required" }, 400);
+    const job = await submitJob({ avatarId, audioUrl, workId, scriptId, estimatedCost, fallbackOnFailure });
+    return c.json(job, 201);
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : "Job submission failed" }, 500);
+  }
+});
+
+// GET /api/digital-humans/jobs
+apiRoutes.get("/api/digital-humans/jobs", async (c) => {
+  return c.json({ jobs: dhJobsRepo.listJobs() });
+});
+
+// GET /api/digital-humans/jobs/:id
+apiRoutes.get("/api/digital-humans/jobs/:id", async (c) => {
+  const id = c.req.param("id");
+  const job = dhJobsRepo.getJob(id);
+  if (!job) return c.json({ error: "Job not found" }, 404);
+  return c.json(job);
+});
+
+// POST /api/digital-humans/jobs/:id/refresh
+apiRoutes.post("/api/digital-humans/jobs/:id/refresh", async (c) => {
+  const id = c.req.param("id");
+  try {
+    const job = await refreshJob(id);
+    if (!job) return c.json({ error: "Job not found" }, 404);
+    return c.json(job);
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : "Refresh failed" }, 500);
+  }
+});
+
+// GET /api/digital-humans/jobs/:id/output
+apiRoutes.get("/api/digital-humans/jobs/:id/output", async (c) => {
+  const id = c.req.param("id");
+  try {
+    const data = await readFile(join(jobOutputDir(id), "output.mp4"));
+    return new Response(data, { headers: { "Content-Type": "video/mp4" } });
+  } catch {
+    return c.json({ error: "Output not found" }, 404);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Asset Library API
+// ---------------------------------------------------------------------------
+
+// GET /api/assets
+apiRoutes.get("/api/assets", async (c) => {
+  const category = c.req.query("category") as any;
+  const type = c.req.query("type") as any;
+  const source = c.req.query("source") as any;
+  const tag = c.req.query("tag");
+  const compliance = c.req.query("compliance") as any;
+  const assets = listLibraryAssets({ category, type, source, tag, compliance });
+  return c.json({ assets });
+});
+
+// POST /api/assets
+apiRoutes.post("/api/assets", async (c) => {
+  try {
+    const body = await c.req.parseBody();
+    const file = body.file as File | undefined;
+    if (!file) return c.json({ error: "file is required" }, 400);
+    const category = (body.category as any) || "other";
+    const source = (body.source as any) || "upload";
+    const license = (body.license as any) || (source === "upload" ? "needs-review" : "unknown");
+    const tagsRaw = (body.tags as string) || "";
+    const tags = tagsRaw.split(",").map((t) => t.trim()).filter(Boolean);
+    const metadata = body.metadata ? JSON.parse(body.metadata as string) : {};
+    const buffer = Buffer.from(await file.arrayBuffer());
+    const asset = await uploadLibraryAsset({
+      name: file.name,
+      data: buffer,
+      category,
+      source,
+      license,
+      tags,
+      metadata,
+    });
+    return c.json(asset, 201);
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : "Asset upload failed" }, 500);
+  }
+});
+
+// GET /api/assets/:id
+apiRoutes.get("/api/assets/:id", async (c) => {
+  const id = parseInt(c.req.param("id"), 10);
+  if (Number.isNaN(id)) return c.json({ error: "Invalid id" }, 400);
+  const asset = assetsRepo.getAsset(id);
+  if (!asset) return c.json({ error: "Asset not found" }, 404);
+  return c.json({ ...asset, url: `/api/shared-assets/${encodeURIComponent(asset.category)}/${encodeURIComponent(asset.name)}` });
+});
+
+// PUT /api/assets/:id
+apiRoutes.put("/api/assets/:id", async (c) => {
+  const id = parseInt(c.req.param("id"), 10);
+  if (Number.isNaN(id)) return c.json({ error: "Invalid id" }, 400);
+  try {
+    const body = await c.req.json();
+    const allowed = ["name", "category", "type", "tags", "source", "license", "metadata"];
+    const updates = Object.fromEntries(allowed.filter((k) => k in body).map((k) => [k, body[k]]));
+    const asset = await updateLibraryAsset(id, updates);
+    if (!asset) return c.json({ error: "Asset not found" }, 404);
+    return c.json(asset);
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : "Update failed" }, 500);
+  }
+});
+
+// DELETE /api/assets/:id
+apiRoutes.delete("/api/assets/:id", async (c) => {
+  const id = parseInt(c.req.param("id"), 10);
+  if (Number.isNaN(id)) return c.json({ error: "Invalid id" }, 400);
+  const ok = await deleteLibraryAsset(id);
+  return c.json({ deleted: ok });
+});
+
+// POST /api/assets/:id/compliance
+apiRoutes.post("/api/assets/:id/compliance", async (c) => {
+  const id = parseInt(c.req.param("id"), 10);
+  if (Number.isNaN(id)) return c.json({ error: "Invalid id" }, 400);
+  const asset = await recheckCompliance(id);
+  if (!asset) return c.json({ error: "Asset not found" }, 404);
+  return c.json(asset);
 });
