@@ -5,5 +5,9 @@ export function toJson<T>(value: T): string {
 export function fromJson<T>(value: string | null | undefined): T | null {
   if (value == null) return null;
   if (value === "") return null;
-  return JSON.parse(value) as T;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return null;
+  }
 }

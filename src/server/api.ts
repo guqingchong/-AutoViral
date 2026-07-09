@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { readFile, writeFile, appendFile, mkdir, readdir, rm } from "node:fs/promises";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { join, extname } from "node:path";
+import { join, extname, basename, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import yaml from "js-yaml";
 import { loadConfig, saveConfig, dataDir } from "../config.js";
@@ -2141,7 +2141,13 @@ apiRoutes.get("/api/digital-humans/avatars/:id/media/:filename", async (c) => {
   const id = c.req.param("id");
   const filename = c.req.param("filename");
   try {
-    const data = await readFile(join(avatarDir(id), filename));
+    const safe = basename(filename);
+    const avatarRoot = resolve(avatarDir(id));
+    const filePath = resolve(avatarRoot, safe);
+    if (!filePath.startsWith(avatarRoot + sep) && filePath !== avatarRoot) {
+      return c.json({ error: "Invalid filename" }, 400);
+    }
+    const data = await readFile(filePath);
     return new Response(data, { headers: { "Content-Type": getMimeType(filename) } });
   } catch {
     return c.json({ error: "Media not found" }, 404);
