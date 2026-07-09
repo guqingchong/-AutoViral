@@ -19,11 +19,26 @@ describe("migrate", () => {
     expect(tables).toContain("topics");
   });
 
-  it("records applied migration", () => {
+  it("creates phase 2 tables", () => {
+    migrate();
+    const db = resetInMemoryDb();
+    migrate();
+    const tables = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+      .pluck()
+      .all() as string[];
+    expect(tables).toContain("avatars");
+    expect(tables).toContain("digital_human_jobs");
+    expect(tables).toContain("asset_library");
+  });
+
+  it("records applied migrations", () => {
     migrate();
     const db = resetInMemoryDb();
     migrate();
     const rows = db.prepare("SELECT version FROM migrations").all() as { version: number }[];
-    expect(rows.length).toBeGreaterThan(0);
+    const versions = rows.map((r) => r.version);
+    expect(versions).toContain(1);
+    expect(versions).toContain(2);
   });
 });

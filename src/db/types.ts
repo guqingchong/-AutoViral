@@ -94,3 +94,63 @@ export interface DbScript {
   status: "draft" | "ready";
   created_at: string;
 }
+
+export type DbAvatarStatus = "draft" | "training" | "ready" | "failed";
+export type DbAvatarSource = "chanjing" | "bailian" | "upload";
+
+export interface DbAvatar {
+  id: string;
+  name: string;
+  status: DbAvatarStatus;
+  source: DbAvatarSource;
+  reference_video_path?: string;
+  preview_url?: string;
+  provider_avatar_id?: string;
+  config: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export type DbDigitalHumanJobStatus = "pending" | "queued" | "running" | "done" | "failed";
+export type DbDigitalHumanProvider = "chanjing" | "bailian";
+
+export interface DbDigitalHumanJob {
+  id: string;
+  work_id?: string;
+  avatar_id: string;
+  audio_path: string;
+  script_id?: number;
+  provider: DbDigitalHumanProvider;
+  status: DbDigitalHumanJobStatus;
+  progress: number;
+  result_url?: string;
+  result_local_path?: string;
+  error?: string;
+  estimated_cost: number;
+  actual_cost: number;
+  provider_job_id?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export type DbAssetType = "image" | "video" | "audio" | "font" | "other";
+export type DbAssetCategory = "characters" | "scenes" | "music" | "templates" | "branding" | "general";
+export type DbAssetSource = "pexels" | "pixabay" | "unsplash" | "self-generated" | "upload" | "unknown";
+export type DbAssetLicense = "cc0" | "commercial" | "unknown" | "needs-review";
+export type DbAssetCompliance = "passed" | "failed" | "pending";
+
+export interface DbAsset {
+  id: number;
+  name: string;
+  file_path: string;
+  category: DbAssetCategory;
+  type: DbAssetType;
+  tags: string[];
+  source: DbAssetSource;
+  license: DbAssetLicense;
+  compliance_status: DbAssetCompliance;
+  metadata: Record<string, unknown>;
+  usage_count: number;
+  created_at: string;
+  updated_at: string;
+}

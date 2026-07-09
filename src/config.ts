@@ -12,6 +12,8 @@ export interface Config {
   jimeng: { accessKey: string; secretKey: string };
   openrouter?: { apiKey: string };
   minimax?: { apiKey: string };
+  chanjing?: { appId: string; secretKey: string };
+  bailian?: { apiKey: string };
   research: { enabled: boolean; schedule: string; platforms: string[] };
   interests?: string[];
   memory?: { apiKey: string; userId: string; syncEnabled: boolean };
@@ -69,6 +71,16 @@ export async function loadConfig(): Promise<Config> {
         config.memory = { apiKey: "", userId: "autoviral-user", syncEnabled: false };
       }
       config.memory.apiKey = process.env.EVERMEMOS_API_KEY;
+    }
+
+    if (process.env.CHANJING_APP_ID) {
+      config.chanjing = { ...(config.chanjing ?? { appId: "", secretKey: "" }), appId: process.env.CHANJING_APP_ID };
+    }
+    if (process.env.CHANJING_SECRET_KEY) {
+      config.chanjing = { ...(config.chanjing ?? { appId: "", secretKey: "" }), secretKey: process.env.CHANJING_SECRET_KEY };
+    }
+    if (process.env.BAILIAN_API_KEY) {
+      config.bailian = { apiKey: process.env.BAILIAN_API_KEY };
     }
 
     return config;
