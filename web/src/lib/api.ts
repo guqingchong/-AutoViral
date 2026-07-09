@@ -414,3 +414,86 @@ export async function deleteLibraryAsset(id: number): Promise<void> {
 export async function recheckAssetCompliance(id: number): Promise<AssetLibraryItem> {
   return post<AssetLibraryItem>(`/api/assets/${id}/compliance`, {});
 }
+
+// ---------------------------------------------------------------------------
+// Template & Render API
+// ---------------------------------------------------------------------------
+
+export interface Template {
+  id: string;
+  name: string;
+  contentForm?: string;
+  canvas: { width: number; height: number; fps: number };
+  variables: Array<{ name: string; type: string; label?: string; default?: string | number }>;
+  layers: Record<string, unknown>[];
+  audio: Record<string, unknown>[];
+  subtitles?: Record<string, unknown>;
+  transitions: Record<string, unknown>[];
+  previewUrl?: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RenderJob {
+  id: string;
+  work_id?: string;
+  template_id?: string;
+  output_path?: string;
+  status: string;
+  progress: number;
+  duration?: number;
+  current_time?: number;
+  error?: string;
+  created_at: string;
+}
+
+export async function fetchTemplates(status?: string, contentForm?: string): Promise<Template[]> {
+  const qs = new URLSearchParams();
+  if (status) qs.set("status", status);
+  if (contentForm) qs.set("contentForm", contentForm);
+  const data = await request<{ templates: Template[] }>(`/api/templates?${qs.toString()}`);
+  return data.templates;
+}
+
+export async function fetchTemplate(id: string): Promise<Template> {
+  return request<Template>(`/api/templates/${encodeURIComponent(id)}`);
+}
+
+export async function createTemplate(template: Partial<Template>): Promise<Template> {
+  return post<Template>("/api/templates", template);
+}
+
+export async function updateTemplateApi(id: string, updates: Partial<Template>): Promise<Template> {
+  return request<Template>(`/api/templates/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(updates),
+  });
+}
+
+export async function deleteTemplateApi(id: string): Promise<void> {
+  await request(`/api/templates/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+export async function renderPreview(id: string, variables?: Record<string, string | number>): Promise<{ previewUrl: string }> {
+  return post<{ previewUrl: string }>(`/api/templates/${encodeURIComponent(id)}/preview`, { variables });
+}
+
+export async function fetchRenderJobs(status?: string): Promise<RenderJob[]> {
+  const qs = status ? `?status=${encodeURIComponent(status)}` : "";
+  const data = await request<{ jobs: RenderJob[] }>(`/api/render-jobs${qs}`);
+  return data.jobs;
+}
+
+export async function startWorkRender(workId: string, opts: {
+  templateId: string;
+  digitalHumanVideo: string;
+  voiceAudio: string;
+  subtitlePath?: string;
+  bgmPath?: string;
+  assets?: Record<string, string>;
+  variables?: Record<string, string | number>;
+}) {
+  return post<{ jobId: string; outputPath: string; status: string }>(`/api/works/${encodeURIComponent(workId)}/render`, opts);
+}

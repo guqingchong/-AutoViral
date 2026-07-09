@@ -230,6 +230,24 @@ const translations: Record<Language, Record<string, string>> = {
     recheck: "Recheck",
     filters: "Filters",
     assetUploaded: "Asset uploaded.",
+
+    // Templates
+    templates: "Templates",
+    templatesTitle: "Template Library",
+    templateDraft: "Draft",
+    templateCandidate: "Candidate",
+    templateApproved: "Approved",
+    templateArchived: "Archived",
+    filterAllForms: "All Forms",
+    formHotComment: "Hot Comment",
+    formKnowledge: "Knowledge",
+    formIndustry: "Industry",
+    formInsight: "Insight",
+    formGeneric: "Generic",
+    noTemplates: "No templates yet.",
+    noPreview: "No preview",
+    preview: "Preview",
+    rendering: "Rendering...",
   },
   zh: {
     // Navigation
@@ -460,6 +478,24 @@ const translations: Record<Language, Record<string, string>> = {
     recheck: "重检",
     filters: "筛选",
     assetUploaded: "素材已上传",
+
+    // Templates
+    templates: "模板库",
+    templatesTitle: "模板库",
+    templateDraft: "草稿",
+    templateCandidate: "候选",
+    templateApproved: "已入库",
+    templateArchived: "已归档",
+    filterAllForms: "全部形式",
+    formHotComment: "热点评论",
+    formKnowledge: "知识传播",
+    formIndustry: "行业动态",
+    formInsight: "深度洞察",
+    formGeneric: "通用",
+    noTemplates: "暂无模板",
+    noPreview: "无预览",
+    preview: "预览",
+    rendering: "渲染中...",
   },
 };
 
