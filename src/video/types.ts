@@ -82,6 +82,10 @@ export interface SubtitleTrack {
   style?: string;
 }
 
+/**
+ * Transition between layers.
+ * @deprecated Transitions are parsed and validated but not yet rendered by the FFmpeg pipeline.
+ */
 export interface Transition {
   type: "fade" | "slide" | "wipe";
   duration: number;
@@ -92,6 +96,7 @@ export interface Timeline {
   layers: TimelineLayer[];
   audio: AudioTrack[];
   subtitles?: SubtitleTrack;
+  /** Transitions are declared but not yet rendered. */
   transitions?: Transition[];
 }
 

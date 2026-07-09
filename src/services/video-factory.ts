@@ -53,7 +53,11 @@ export async function startRender(req: RenderRequest): Promise<RenderJobInfo> {
 
   // Run asynchronously
   runRenderLoop(jobId, template, req, outputPath).catch((err) => {
-    updateRenderJob(jobId, { status: "failed", error: err.message });
+    try {
+      updateRenderJob(jobId, { status: "failed", error: err.message });
+    } catch (dbErr) {
+      console.error("Failed to update render job status:", dbErr, "original error:", err);
+    }
   });
 
   return { jobId, outputPath, status: "pending" };
