@@ -2,9 +2,11 @@
   import { onMount } from "svelte";
   import { fetchTemplates, deleteTemplateApi, renderPreview, type Template } from "../lib/api.js";
   import { t } from "../lib/i18n.js";
+  import TemplateEditor from "./TemplateEditor.svelte";
 
   let templates = $state<Template[]>([]);
   let loading = $state(true);
+  let editingId = $state<string | undefined>(undefined);
   let statusFilter = $state<string>("");
   let contentFormFilter = $state<string>("");
   let renderingId = $state<string | null>(null);
@@ -36,59 +38,66 @@
   onMount(load);
 </script>
 
-<div class="templates-page">
-  <header class="page-header">
-    <h1>{t("templatesTitle")}</h1>
-    <div class="filters">
-      <select bind:value={statusFilter} onchange={load}>
-        <option value="">{t("filterAll")}</option>
-        <option value="draft">{t("templateDraft")}</option>
-        <option value="candidate">{t("templateCandidate")}</option>
-        <option value="approved">{t("templateApproved")}</option>
-        <option value="archived">{t("templateArchived")}</option>
-      </select>
-      <select bind:value={contentFormFilter} onchange={load}>
-        <option value="">{t("filterAllForms")}</option>
-        <option value="hot_comment">{t("formHotComment")}</option>
-        <option value="knowledge">{t("formKnowledge")}</option>
-        <option value="industry">{t("formIndustry")}</option>
-        <option value="insight">{t("formInsight")}</option>
-      </select>
-      <button class="btn-primary" onclick={load}>{t("refresh")}</button>
-    </div>
-  </header>
+<div class="templates-root">
+{#if editingId}
+  <TemplateEditor templateId={editingId} onBack={() => { editingId = undefined; load(); }} />
+{:else}
+  <div class="templates-page">
+    <header class="page-header">
+      <h1>{t("templatesTitle")}</h1>
+      <div class="filters">
+        <select bind:value={statusFilter} onchange={load}>
+          <option value="">{t("filterAll")}</option>
+          <option value="draft">{t("templateDraft")}</option>
+          <option value="candidate">{t("templateCandidate")}</option>
+          <option value="approved">{t("templateApproved")}</option>
+          <option value="archived">{t("templateArchived")}</option>
+        </select>
+        <select bind:value={contentFormFilter} onchange={load}>
+          <option value="">{t("filterAllForms")}</option>
+          <option value="hot_comment">{t("formHotComment")}</option>
+          <option value="knowledge">{t("formKnowledge")}</option>
+          <option value="industry">{t("formIndustry")}</option>
+          <option value="insight">{t("formInsight")}</option>
+        </select>
+        <button class="btn-primary" onclick={load}>{t("refresh")}</button>
+      </div>
+    </header>
 
-  {#if loading}
-    <p class="empty">{t("loading")}</p>
-  {:else if templates.length === 0}
-    <p class="empty">{t("noTemplates")}</p>
-  {:else}
-    <div class="template-grid">
-      {#each templates as tpl}
-        <article class="template-card">
-          <div class="preview">
-            {#if tpl.previewUrl}
-              <video src={tpl.previewUrl} muted loop playsinline preload="metadata"></video>
-            {:else}
-              <div class="preview-placeholder">{t("noPreview")}</div>
-            {/if}
-          </div>
-          <div class="meta">
-            <span class="status-badge" data-status={tpl.status}>{t(`template${tpl.status.charAt(0).toUpperCase() + tpl.status.slice(1)}`)}</span>
-            <span class="form">{tpl.contentForm ?? t("formGeneric")}</span>
-          </div>
-          <h3>{tpl.name}</h3>
-          <p class="dims">{tpl.canvas.width} x {tpl.canvas.height} @ {tpl.canvas.fps}fps</p>
-          <div class="actions">
-            <button class="btn-sm" disabled={renderingId === tpl.id} onclick={() => preview(tpl)}>
-              {renderingId === tpl.id ? t("rendering") : t("preview")}
-            </button>
-            <button class="btn-sm secondary" onclick={() => remove(tpl.id)}>{t("delete")}</button>
-          </div>
-        </article>
-      {/each}
-    </div>
-  {/if}
+    {#if loading}
+      <p class="empty">{t("loading")}</p>
+    {:else if templates.length === 0}
+      <p class="empty">{t("noTemplates")}</p>
+    {:else}
+      <div class="template-grid">
+        {#each templates as tpl}
+          <article class="template-card">
+            <div class="preview">
+              {#if tpl.previewUrl}
+                <video src={tpl.previewUrl} muted loop playsinline preload="metadata"></video>
+              {:else}
+                <div class="preview-placeholder">{t("noPreview")}</div>
+              {/if}
+            </div>
+            <div class="meta">
+              <span class="status-badge" data-status={tpl.status}>{t(`template${tpl.status.charAt(0).toUpperCase() + tpl.status.slice(1)}`)}</span>
+              <span class="form">{tpl.contentForm ?? t("formGeneric")}</span>
+            </div>
+            <h3>{tpl.name}</h3>
+            <p class="dims">{tpl.canvas.width} x {tpl.canvas.height} @ {tpl.canvas.fps}fps</p>
+            <div class="actions">
+              <button class="btn-sm" disabled={renderingId === tpl.id} onclick={() => preview(tpl)}>
+                {renderingId === tpl.id ? t("rendering") : t("preview")}
+              </button>
+              <button class="btn-sm secondary" onclick={() => editingId = tpl.id}>{t("edit")}</button>
+              <button class="btn-sm secondary" onclick={() => remove(tpl.id)}>{t("delete")}</button>
+            </div>
+          </article>
+        {/each}
+      </div>
+    {/if}
+  </div>
+{/if}
 </div>
 
 <style>
