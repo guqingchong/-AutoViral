@@ -18,7 +18,7 @@
   let message = $state("");
 
   const categories: AssetLibraryItem["category"][] = ["characters", "scenes", "music", "templates", "branding", "general"];
-  const sources: AssetLibraryItem["source"][] = ["upload", "pexels", "pixabay", "unsplash", "self-generated", "other"];
+  const sources: AssetLibraryItem["source"][] = ["upload", "pexels", "pixabay", "unsplash", "self-generated", "unknown"];
   const licenses: AssetLibraryItem["license"][] = ["cc0", "commercial", "needs-review", "unknown"];
 
   onMount(() => {
