@@ -58,6 +58,25 @@ export async function uploadAsset(input: {
   return assetsRepo.updateAsset(asset.id, { compliance_status: status }) ?? asset;
 }
 
+function validateExternalUrl(url: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error("Invalid URL");
+  }
+  if (!["http:", "https:"].includes(parsed.protocol)) {
+    throw new Error("Only HTTP/HTTPS URLs are allowed");
+  }
+  const hostname = parsed.hostname.toLowerCase();
+  if (hostname === "localhost" || hostname.endsWith(".local")) {
+    throw new Error("Localhost URLs are not allowed");
+  }
+  if (/^(127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/.test(hostname)) {
+    throw new Error("Private IP addresses are not allowed");
+  }
+}
+
 export async function importAssetFromUrl(input: {
   url: string;
   category: DbAssetCategory;
@@ -69,6 +88,7 @@ export async function importAssetFromUrl(input: {
   metadata?: Record<string, unknown>;
 }): Promise<DbAsset> {
   validateCategory(input.category);
+  validateExternalUrl(input.url);
   const res = await fetch(input.url);
   if (!res.ok) throw new Error(`Download failed: ${res.status}`);
   const data = Buffer.from(await res.arrayBuffer());
