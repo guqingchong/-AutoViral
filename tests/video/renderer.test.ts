@@ -42,4 +42,17 @@ describe("renderer command builder", () => {
     expect(fc).toContain("drawtext");
     expect(fc).toContain("amix");
   });
+
+  it("appends subtitles filter when subtitles are present", () => {
+    const tl: Timeline = {
+      ...sampleTimeline(),
+      subtitles: { source: "/tmp/subtitles.srt" },
+    };
+    const inputs = collectInputs(tl);
+    const args = buildFilterComplexArgs(tl, inputs, 60, "/tmp/out.mp4");
+    const fcIndex = args.indexOf("-filter_complex");
+    const fc = args[fcIndex + 1];
+    expect(fc).toContain("subtitles=/tmp/subtitles.srt");
+    expect(fc).toContain("force_style=");
+  });
 });
