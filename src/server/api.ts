@@ -2055,3 +2055,15 @@ apiRoutes.post("/api/topics/:id/convert", async (c) => {
 
   return c.json({ workId: work.id });
 });
+
+// ---------------------------------------------------------------------------
+// Manual trend collection trigger
+// ---------------------------------------------------------------------------
+
+apiRoutes.post("/api/trends/collect", async (c) => {
+  const config = await loadConfig();
+  if (!config.research?.enabled) return c.json({ error: "Research disabled" }, 400);
+  const results = await collectTrends(config.research.platforms);
+  const total = results.reduce((sum, r) => sum + r.topics.length, 0);
+  return c.json({ collected: total });
+});

@@ -14,6 +14,7 @@ import { ensureSharedDirs } from "../shared-assets.js";
 import { apiRoutes, setWsBridge } from "./api.js";
 import { WsBridge } from "../ws-bridge.js";
 import { startAnalyticsCollector } from "../analytics-collector.js";
+import { startTrendScheduler } from "../services/scheduler.js";
 import { migrate } from "../db/migrate.js";
 import { migrateLegacyWorks } from "../db/migrate-legacy.js";
 
@@ -98,6 +99,7 @@ export async function startServer(port: number): Promise<{ server: Server }> {
 
   // 7. Start background services
   await startAnalyticsCollector();
+  await startTrendScheduler();
 
   return { server: httpServer };
 }
