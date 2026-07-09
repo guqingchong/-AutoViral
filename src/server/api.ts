@@ -2009,7 +2009,7 @@ apiRoutes.get("/api/memory/context/:workId", async (c) => {
 
 apiRoutes.get("/api/topics", async (c) => {
   const platform = c.req.query("platform");
-  const limit = Math.min(parseInt(c.req.query("limit") ?? "50", 10), 200);
+  const limit = Math.min(parseInt(c.req.query("limit") ?? "50", 10) || 50, 200);
   const topics = listTopics(platform, limit);
   return c.json({ topics });
 });
@@ -2045,9 +2045,13 @@ apiRoutes.post("/api/topics/:id/convert", async (c) => {
   const script = article.then((a) => generateScriptFromArticle(a));
 
   const [a, s] = await Promise.all([article, script]);
-  createArticle({ work_id: work.id, topic_id: topic.id, title: a.title, content: a.content, platform, status: "ready" });
-  createScript({ work_id: work.id, content: s as unknown as Record<string, unknown>, duration: s.duration, status: "ready" });
-  updateTopic(topic.id, { status: "converted", work_id: work.id });
+  try {
+    createArticle({ work_id: work.id, topic_id: topic.id, title: a.title, content: a.content, platform, status: "ready" });
+    createScript({ work_id: work.id, content: s as unknown as Record<string, unknown>, duration: s.duration, status: "ready" });
+    updateTopic(topic.id, { status: "converted", work_id: work.id });
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : "DB write failed" }, 500);
+  }
 
   return c.json({ workId: work.id });
 });

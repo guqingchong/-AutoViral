@@ -1,7 +1,7 @@
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { join } from "node:path";
-import { createSnapshot, getLatestSnapshot } from "../db/trends-repo.js";
+import { createSnapshot } from "../db/trends-repo.js";
 import { createTopic, listTopics } from "../db/topics-repo.js";
 import type { DbTopic } from "../db/types.js";
 import { resolveClaudeCommand } from "../ws-bridge.js";
@@ -28,7 +28,15 @@ export async function collectTrends(platforms: string[], interests: string[] = [
   for (const platform of platforms) {
     const raw = await fetchTrendData(platform);
     const snapshotDate = new Date().toISOString().slice(0, 10);
-    const snapshot = createSnapshot({ platform, snapshot_date: snapshotDate, raw_data: raw ? JSON.parse(raw) : {} });
+    let parsedRaw: Record<string, unknown> = {};
+    if (raw) {
+      try {
+        parsedRaw = JSON.parse(raw);
+      } catch {
+        parsedRaw = { raw };
+      }
+    }
+    const snapshot = createSnapshot({ platform, snapshot_date: snapshotDate, raw_data: parsedRaw });
     const topics = await analyzeTrendsWithAgent(platform, raw, interests, snapshot.id);
     const created: DbTopic[] = [];
     for (const t of topics) {
