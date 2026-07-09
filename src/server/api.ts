@@ -45,6 +45,14 @@ import { updateTopic } from "../db/topics-repo.js";
 import { createArticle } from "../db/articles-repo.js";
 import { createScript } from "../db/scripts-repo.js";
 import { generateArticleFromTopic, generateScriptFromArticle } from "../services/content-generator.js";
+import { randomUUID } from "node:crypto";
+import { createTemplate, getTemplate, listTemplates, updateTemplate, deleteTemplate, type DbTemplate } from "../db/templates-repo.js";
+import { createRenderJob, getRenderJob, listRenderJobs, updateRenderJob, type DbRenderJob } from "../db/render-jobs-repo.js";
+import { startRender } from "../services/video-factory.js";
+import { renderTimeline } from "../video/renderer.js";
+import { validateTemplate, TimelineValidationError } from "../video/schema.js";
+import { applyVariables, fillDefaults } from "../video/variables.js";
+import type { Timeline } from "../video/types.js";
 
 export const apiRoutes = new Hono();
 
@@ -2401,4 +2409,183 @@ apiRoutes.post("/api/assets/:id/compliance", async (c) => {
   const asset = await recheckCompliance(id);
   if (!asset) return c.json({ error: "Asset not found" }, 404);
   return c.json(asset);
+});
+
+// ---------------------------------------------------------------------------
+// Templates
+// ---------------------------------------------------------------------------
+
+const TEMPLATE_DIR = join(dataDir, "shared-assets", "templates");
+
+function templateToApi(t: DbTemplate) {
+  return {
+    id: t.id,
+    name: t.name,
+    contentForm: t.content_form,
+    canvas: t.canvas,
+    variables: t.variables,
+    layers: t.layers,
+    audio: t.audio,
+    subtitles: t.subtitles,
+    transitions: t.transitions,
+    previewUrl: t.preview_url,
+    status: t.status,
+    createdAt: t.created_at,
+    updatedAt: t.updated_at,
+  };
+}
+
+apiRoutes.get("/api/templates", async (c) => {
+  const status = c.req.query("status") as DbTemplate["status"] | undefined;
+  const contentForm = c.req.query("contentForm") || undefined;
+  const templates = listTemplates(status, contentForm);
+  return c.json({ templates: templates.map(templateToApi) });
+});
+
+apiRoutes.get("/api/templates/:id", async (c) => {
+  const id = c.req.param("id");
+  const template = getTemplate(id);
+  if (!template) return c.json({ error: "Template not found" }, 404);
+  return c.json(templateToApi(template));
+});
+
+apiRoutes.post("/api/templates", async (c) => {
+  try {
+    const body = await c.req.json();
+    const validated = validateTemplate({ id: body.id ?? `tpl_${randomUUID().slice(0, 8)}`, ...body });
+    const template = createTemplate({
+      id: validated.id,
+      name: validated.name,
+      content_form: validated.contentForm,
+      canvas: validated.canvas,
+      variables: validated.variables,
+      layers: validated.timeline.layers as unknown as Record<string, unknown>[],
+      audio: validated.timeline.audio as unknown as Record<string, unknown>[],
+      subtitles: validated.timeline.subtitles as unknown as Record<string, unknown> | undefined,
+      transitions: (validated.timeline.transitions ?? []) as unknown as Record<string, unknown>[],
+      status: (body.status as DbTemplate["status"]) ?? "draft",
+    });
+    return c.json(templateToApi(template), 201);
+  } catch (err) {
+    const message = err instanceof TimelineValidationError ? err.message : err instanceof Error ? err.message : "Invalid template";
+    return c.json({ error: message }, 400);
+  }
+});
+
+apiRoutes.put("/api/templates/:id", async (c) => {
+  const id = c.req.param("id");
+  const existing = getTemplate(id);
+  if (!existing) return c.json({ error: "Template not found" }, 404);
+  try {
+    const body = await c.req.json();
+    const validated = validateTemplate({ ...existing, ...body, id });
+    const updated = updateTemplate(id, {
+      name: validated.name,
+      content_form: validated.contentForm,
+      canvas: validated.canvas,
+      variables: validated.variables,
+      layers: validated.timeline.layers as unknown as Record<string, unknown>[],
+      audio: validated.timeline.audio as unknown as Record<string, unknown>[],
+      subtitles: validated.timeline.subtitles as unknown as Record<string, unknown> | undefined,
+      transitions: (validated.timeline.transitions ?? []) as unknown as Record<string, unknown>[],
+      status: (body.status as DbTemplate["status"]) ?? existing.status,
+    });
+    if (!updated) return c.json({ error: "Template update failed" }, 500);
+    return c.json(templateToApi(updated));
+  } catch (err) {
+    const message = err instanceof TimelineValidationError ? err.message : err instanceof Error ? err.message : "Invalid template";
+    return c.json({ error: message }, 400);
+  }
+});
+
+apiRoutes.delete("/api/templates/:id", async (c) => {
+  const id = c.req.param("id");
+  const ok = deleteTemplate(id);
+  if (!ok) return c.json({ error: "Template not found" }, 404);
+  return c.json({ deleted: true });
+});
+
+// POST /api/templates/:id/preview — render a 5-second preview
+apiRoutes.post("/api/templates/:id/preview", async (c) => {
+  const id = c.req.param("id");
+  const template = getTemplate(id);
+  if (!template) return c.json({ error: "Template not found" }, 404);
+  const body = await c.req.json<{ variables?: Record<string, string | number> }>().catch(() => ({} as { variables?: Record<string, string | number> }));
+
+  const previewDir = join(TEMPLATE_DIR, id);
+  await mkdir(previewDir, { recursive: true });
+  const outputPath = join(previewDir, "preview.mp4");
+
+  try {
+    const variableValues = { ...fillDefaults(template.variables), ...(body.variables ?? {}) };
+    variableValues.host_video = variableValues.host_video ?? join(previewDir, "host.mp4");
+    variableValues.voice_audio = variableValues.voice_audio ?? join(previewDir, "voice.wav");
+    const baseTimeline: Record<string, unknown> = {
+      canvas: template.canvas,
+      layers: template.layers,
+      audio: template.audio,
+      transitions: template.transitions,
+    };
+    if (template.subtitles && typeof template.subtitles === "object" && "source" in template.subtitles) {
+      baseTimeline.subtitles = template.subtitles;
+    }
+    const timeline = applyVariables(baseTimeline, variableValues) as unknown as Timeline;
+
+    await renderTimeline(timeline, { outputPath, preview: true, previewDuration: 5 });
+    updateTemplate(id, { preview_url: `/api/shared-assets/templates/${id}/preview.mp4` });
+    return c.json({ previewUrl: `/api/shared-assets/templates/${id}/preview.mp4` });
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : "Preview failed" }, 500);
+  }
+});
+
+// Render jobs
+apiRoutes.get("/api/render-jobs", async (c) => {
+  const status = c.req.query("status") as DbRenderJob["status"] | undefined;
+  const workId = c.req.query("workId") || undefined;
+  const jobs = listRenderJobs(status, workId);
+  return c.json({ jobs });
+});
+
+apiRoutes.get("/api/render-jobs/:id", async (c) => {
+  const id = c.req.param("id");
+  const job = getRenderJob(id);
+  if (!job) return c.json({ error: "Job not found" }, 404);
+  return c.json(job);
+});
+
+// Trigger render for a work
+apiRoutes.post("/api/works/:id/render", async (c) => {
+  const workId = c.req.param("id");
+  const work = await getWork(workId);
+  if (!work) return c.json({ error: "Work not found" }, 404);
+  const body = await c.req.json<{
+    templateId: string;
+    digitalHumanVideo: string;
+    voiceAudio: string;
+    subtitlePath?: string;
+    bgmPath?: string;
+    assets?: Record<string, string>;
+    variables?: Record<string, string | number>;
+  }>().catch(() => ({} as any));
+
+  if (!body.templateId || !body.digitalHumanVideo || !body.voiceAudio) {
+    return c.json({ error: "templateId, digitalHumanVideo, and voiceAudio are required" }, 400);
+  }
+
+  try {
+    const job = await startRender({
+      workId,
+      templateId: body.templateId,
+      digitalHumanVideo: body.digitalHumanVideo,
+      voiceAudio: body.voiceAudio,
+      subtitlePath: body.subtitlePath,
+      bgmPath: body.bgmPath,
+      assets: body.assets ?? {},
+      variables: body.variables ?? {},
+    });
+    return c.json(job, 202);
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : "Render failed" }, 500);
+  }
 });
