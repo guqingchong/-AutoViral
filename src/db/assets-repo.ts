@@ -49,13 +49,14 @@ export function getAsset(id: number): DbAsset | undefined {
   return row ? rowToAsset(row) : undefined;
 }
 
-export function listAssets(filters?: { category?: string; type?: string; compliance?: string; tag?: string; limit?: number }): DbAsset[] {
+export function listAssets(filters?: { category?: string; type?: string; compliance?: string; source?: string; tag?: string; limit?: number }): DbAsset[] {
   const db = getDb();
   const conditions: string[] = [];
   const params: (string | number)[] = [];
   if (filters?.category) { conditions.push("category = ?"); params.push(filters.category); }
   if (filters?.type) { conditions.push("type = ?"); params.push(filters.type); }
   if (filters?.compliance) { conditions.push("compliance_status = ?"); params.push(filters.compliance); }
+  if (filters?.source) { conditions.push("source = ?"); params.push(filters.source); }
   if (filters?.tag) { conditions.push("tags LIKE ?"); params.push(`%"${filters.tag}"%`); }
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
   const limit = Math.min(filters?.limit ?? 200, 1000);
