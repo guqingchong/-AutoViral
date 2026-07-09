@@ -66,3 +66,19 @@ Base commit: `d1e0e00`
 ## Completed
 
 - Phase 2 Tasks 1-14 complete. Backend build OK, frontend build OK (with pre-existing a11y warnings), Phase 2 focused tests 16/16 pass.
+
+## Final Review Fix Wave
+
+- [x] Fix `AssetLibraryItem.source` type mismatch (`web/src/lib/api.ts` `"other"` → `"unknown"`) and `Assets.svelte` source dropdown (commit 9e37253)
+- [x] Split shared `newName` into `uploadName`/`importName` in `web/src/pages/DigitalHumans.svelte` (commit 9e37253)
+- [x] Fix `sanitizeName` regex duplicate `>` in `src/services/asset-library.ts` (commit 9e37253)
+- [x] Remove unused `rm` import in `src/services/digital-human.ts` (commit 9e37253)
+- [x] Replace `generateId` with `randomUUID` from `node:crypto` in `src/services/digital-human.ts` (commit 9e37253)
+- [x] Re-run frontend type check — passed
+- [x] Re-run Phase 2 focused tests — 9 files / 16 tests all pass
+- [x] Re-run full build — passed
+
+## Final Status
+
+- Phase 2 implementation and review-fixes complete. Branch `worktree-autoviral-mcn-redesign` is ready to merge into the main branch.
+- Remaining unresolved items from whole-branch review: none.
