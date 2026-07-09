@@ -33,22 +33,35 @@ Base commit: `d1e0e00`
 - [x] Task 11: API endpoint tests for topics (commit 289585a, review clean)
 - [x] Task 12: Self-review and Phase 1 handoff
 
-## Phase 2 Tasks (pending Phase 1)
+## Final Whole-Branch Review
 
-- [ ] Task 1: Extend config and DB types/migrations
-- [ ] Task 2: Avatar repository
-- [ ] Task 3: Digital human job repository
-- [ ] Task 4: Asset library metadata repository
-- [ ] Task 5: Chanjing API client
-- [ ] Task 6: Bailian fallback client
-- [ ] Task 7: Digital human orchestration service
-- [ ] Task 8: Asset library service
-- [ ] Task 9: Digital human and asset library API routes
-- [ ] Task 10: Frontend API wrappers and i18n
-- [ ] Task 11: Digital humans page
-- [ ] Task 12: Assets page
-- [ ] Task 13: Tests and Phase 2 handoff
+- **Verdict:** Ready to merge with follow-up issues
+- **Reviewer recommendation:** Merge now
+- **Test evidence:** 36 tests pass, backend build OK, frontend build OK
+- **Follow-up issues for Phase 2:**
+  - [MEDIUM] `POST /api/topics/:id/convert` DB writes not atomic (`src/server/api.ts`)
+  - [MEDIUM] Test disk side effects from `createWork` not cleaned up (`tests/server/topics.test.ts`)
+  - [LOW] Unused `readdir` import in `src/db/migrate-legacy.ts`
+  - [LOW] Unused `t`/`lang` in `web/src/pages/Topics.svelte`
+  - [LOW] `generateId` uses `Math.random()` instead of `randomUUID` (pre-existing, retained per plan)
+  - [LOW] Inconsistent topic CRUD imports in `src/server/api.ts` (some via service, some via repo)
+
+## Phase 2 Tasks (in progress)
+
+- [x] Task 1: Extend config and DB types/migrations (commit ef1c50d, review clean)
+- [x] Task 2: Avatar repository (commit a233dc6, review approved)
+- [x] Task 3: Digital human job repository (commit 8fb712c, review approved)
+- [x] Task 4: Asset library metadata repository (commit 6830d62, review approved)
+- [x] Task 5: Chanjing API client (commit c510495, review approved)
+- [x] Task 6: Bailian fallback client (commit cc065b3, review approved)
+- [x] Task 7: Digital human orchestration service (commit db0ef75, review approved; minor: unused `rm` import in `src/services/digital-human.ts` inherited from brief)
+- [x] Task 8: Asset library service (commit 9acc3b9, review approved)
+- [x] Task 9: Digital human and asset library API routes (commits fb443da..40fa5de, review approved)
+- [x] Task 10: Frontend API wrappers and i18n (commit ff793a3, review approved)
+- [x] Task 11: Digital humans page (commit e714049, review approved)
+- [x] Task 12: Assets page (commit f6f35a4, review approved)
+- [x] Task 13: Tests and Phase 2 handoff (commit e4ad4d0, review approved)
 
 ## Completed
 
-_None yet._
+- Phase 2 Tasks 1-13 complete.
