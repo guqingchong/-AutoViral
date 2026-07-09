@@ -9,7 +9,8 @@
   let lang = $state(getLanguage());
   let avatars = $state<Avatar[]>([]);
   let jobs = $state<DigitalHumanJob[]>([]);
-  let newName = $state("");
+  let uploadName = $state("");
+  let importName = $state("");
   let uploadFiles = $state<FileList | null>(null);
   let providerAvatarId = $state("");
   let audioUrl = $state("");
@@ -32,11 +33,11 @@
   }
 
   async function handleUpload() {
-    if (!uploadFiles?.length || !newName) return;
+    if (!uploadFiles?.length || !uploadName) return;
     busy = true;
     try {
-      await uploadAvatar(newName, uploadFiles[0]);
-      newName = "";
+      await uploadAvatar(uploadName, uploadFiles[0]);
+      uploadName = "";
       uploadFiles = null;
       message = tt("avatarUploaded");
       await load();
@@ -48,11 +49,11 @@
   }
 
   async function handleImport() {
-    if (!newName || !providerAvatarId) return;
+    if (!importName || !providerAvatarId) return;
     busy = true;
     try {
-      await importAvatar(newName, providerAvatarId);
-      newName = "";
+      await importAvatar(importName, providerAvatarId);
+      importName = "";
       providerAvatarId = "";
       message = tt("avatarImported");
       await load();
@@ -95,7 +96,7 @@
   <section class="panel">
     <h2>{tt("uploadAvatar")}</h2>
     <div class="row">
-      <input type="text" bind:value={newName} placeholder={tt("avatarName")} />
+      <input type="text" bind:value={uploadName} placeholder={tt("avatarName")} />
       <input type="file" accept="video/*,image/*" bind:files={uploadFiles} />
       <button class="btn-primary" disabled={busy} onclick={handleUpload}>{tt("uploadAvatar")}</button>
     </div>
@@ -104,7 +105,7 @@
   <section class="panel">
     <h2>{tt("importAvatar")}</h2>
     <div class="row">
-      <input type="text" bind:value={newName} placeholder={tt("avatarName")} />
+      <input type="text" bind:value={importName} placeholder={tt("avatarName")} />
       <input type="text" bind:value={providerAvatarId} placeholder={tt("providerAvatarId")} />
       <button class="btn-primary" disabled={busy} onclick={handleImport}>{tt("importAvatar")}</button>
     </div>

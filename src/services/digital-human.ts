@@ -1,5 +1,6 @@
-import { mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join, extname } from "node:path";
+import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { dataDir, loadConfig } from "../config.js";
@@ -12,10 +13,7 @@ import type { DbAvatar, DbDigitalHumanJob } from "../db/types.js";
 const execFileAsync = promisify(execFile);
 
 function generateId(prefix: string): string {
-  const now = new Date();
-  const ts = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}_${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}`;
-  const hex = Math.random().toString(16).slice(2, 5);
-  return `${prefix}_${ts}_${hex}`;
+  return `${prefix}_${randomUUID()}`;
 }
 
 function now(): string { return new Date().toISOString(); }

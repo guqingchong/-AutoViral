@@ -13,7 +13,7 @@ function detectType(filename: string): DbAssetType {
 }
 
 function sanitizeName(name: string): string {
-  const base = name.replace(/[\\/:*?\"<>>|]/g, "_").trim();
+  const base = name.replace(/[\\/:*?\"<>|]/g, "_").trim();
   return base || `asset_${Date.now()}`;
 }
 

@@ -360,7 +360,7 @@ export interface AssetLibraryItem {
   category: "characters" | "scenes" | "music" | "templates" | "branding" | "general";
   type: "image" | "video" | "audio" | "font" | "other";
   tags: string[];
-  source: "upload" | "pexels" | "pixabay" | "unsplash" | "self-generated" | "other";
+  source: "upload" | "pexels" | "pixabay" | "unsplash" | "self-generated" | "unknown";
   license: "cc0" | "commercial" | "needs-review" | "unknown";
   compliance_status: "pending" | "passed" | "failed";
   metadata: Record<string, unknown>;
