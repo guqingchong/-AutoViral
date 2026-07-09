@@ -1,14 +1,14 @@
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { serveStatic } from "@hono/node-server/serve-static";
-import { readFile } from "node:fs/promises";
+import { readFile, mkdir } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import type { Server } from "node:http";
-import { loadConfig } from "../config.js";
+import { loadConfig, dataDir } from "../config.js";
 import { initProviders } from "../providers/registry.js";
 import { ensureSharedDirs } from "../shared-assets.js";
 import { apiRoutes, setWsBridge } from "./api.js";
@@ -40,6 +40,9 @@ export async function startServer(port: number): Promise<{ server: Server }> {
 
   // 3. Ensure shared asset directories
   await ensureSharedDirs();
+
+  // 3.2. Ensure template asset directory exists
+  await mkdir(join(dataDir, "shared-assets", "templates"), { recursive: true });
 
   // 3.5. Sync skills to ~/.claude/skills/ (agent reads from there)
   const projectSkills = join(process.cwd(), "skills");
