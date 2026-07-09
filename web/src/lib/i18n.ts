@@ -248,6 +248,14 @@ const translations: Record<Language, Record<string, string>> = {
     noPreview: "No preview",
     preview: "Preview",
     rendering: "Rendering...",
+    newTemplate: "New Template",
+    templateName: "Template Name",
+    timelineJson: "Timeline JSON",
+    canvasSize: "Canvas Size",
+    saveFirst: "Save the template first",
+    previewReady: "Preview ready",
+    edit: "Edit",
+    saved: "Saved",
   },
   zh: {
     // Navigation
@@ -496,6 +504,14 @@ const translations: Record<Language, Record<string, string>> = {
     noPreview: "无预览",
     preview: "预览",
     rendering: "渲染中...",
+    newTemplate: "新建模板",
+    templateName: "模板名称",
+    timelineJson: "时间线 JSON",
+    canvasSize: "画布尺寸",
+    saveFirst: "请先保存模板",
+    previewReady: "预览已生成",
+    edit: "编辑",
+    saved: "已保存",
   },
 };
 
