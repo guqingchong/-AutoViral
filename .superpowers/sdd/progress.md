@@ -60,8 +60,9 @@ Base commit: `d1e0e00`
 - [x] Task 10: Frontend API wrappers and i18n (commit ff793a3, review approved)
 - [x] Task 11: Digital humans page (commit e714049, review approved)
 - [x] Task 12: Assets page (commit f6f35a4, review approved)
-- [x] Task 13: Tests and Phase 2 handoff (commit e4ad4d0, review approved)
+- [x] Task 13: Global navigation update (commit e4ad4d0, review approved)
+- [x] Task 14: Self-review and handoff (commits 61bad1e..5798d54)
 
 ## Completed
 
-- Phase 2 Tasks 1-13 complete.
+- Phase 2 Tasks 1-14 complete. Backend build OK, frontend build OK (with pre-existing a11y warnings), Phase 2 focused tests 16/16 pass.
