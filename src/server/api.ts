@@ -7,7 +7,7 @@ import { homedir } from "node:os";
 import yaml from "js-yaml";
 import { loadConfig, saveConfig, dataDir } from "../config.js";
 import {
-  listWorks, getWork, createWork as storeCreateWork,
+  listWorks, getWork, createWork,
   updateWork as storeUpdateWork, deleteWork as storeDeleteWork,
   listAssets, getAssetPath, saveStepHistory, loadStepHistory,
   saveWorkChat, saveEvalResult, loadAllEvalResults,
@@ -23,6 +23,11 @@ import { syncStepConversation } from "../memory-sync.js";
 import { log, readLogs } from "../logger.js";
 import { runPipeline, getRunStatus, listRuns, getRunReport, type RunConfig } from "../test-runner.js";
 import { evaluateWork } from "../test-evaluator.js";
+import { collectTrends, listTopics, getTopic } from "../services/trend-research.js";
+import { updateTopic } from "../db/topics-repo.js";
+import { createArticle } from "../db/articles-repo.js";
+import { createScript } from "../db/scripts-repo.js";
+import { generateArticleFromTopic, generateScriptFromArticle } from "../services/content-generator.js";
 
 export const apiRoutes = new Hono();
 
@@ -202,7 +207,7 @@ apiRoutes.post("/api/works", async (c) => {
     if (!body.title || !body.type || !body.platforms) {
       return c.json({ error: "title, type, and platforms are required" }, 400);
     }
-    const work = await storeCreateWork({
+    const work = await createWork({
       title: body.title,
       type: body.type as "short-video" | "image-text",
       contentCategory: body.contentCategory as any,
@@ -1996,4 +2001,53 @@ apiRoutes.get("/api/memory/context/:workId", async (c) => {
   const platform = typeof firstPlatform === "string" ? firstPlatform : (firstPlatform as any)?.platform ?? "通用";
   const context = await client.buildContext(topic, platform);
   return c.json({ workId, topic, platform, context });
+});
+
+// ---------------------------------------------------------------------------
+// Topics
+// ---------------------------------------------------------------------------
+
+apiRoutes.get("/api/topics", async (c) => {
+  const platform = c.req.query("platform");
+  const limit = Math.min(parseInt(c.req.query("limit") ?? "50", 10), 200);
+  const topics = listTopics(platform, limit);
+  return c.json({ topics });
+});
+
+apiRoutes.get("/api/topics/:id", async (c) => {
+  const id = parseInt(c.req.param("id"), 10);
+  if (Number.isNaN(id)) return c.json({ error: "Invalid id" }, 400);
+  const topic = getTopic(id);
+  if (!topic) return c.json({ error: "Topic not found" }, 404);
+  return c.json(topic);
+});
+
+apiRoutes.post("/api/topics/:id/convert", async (c) => {
+  const id = parseInt(c.req.param("id"), 10);
+  if (Number.isNaN(id)) return c.json({ error: "Invalid id" }, 400);
+  const topic = getTopic(id);
+  if (!topic) return c.json({ error: "Topic not found" }, 404);
+
+  const body = await c.req.json<{ platforms?: string[]; type?: "short-video" | "image-text" }>().catch(() => ({} as { platforms?: string[]; type?: "short-video" | "image-text" }));
+  const platforms = body.platforms ?? ["douyin", "xiaohongshu"];
+  const type = body.type ?? "short-video";
+
+  const work = await createWork({
+    title: topic.title,
+    type,
+    contentCategory: topic.emotion_type as any,
+    platforms,
+    topicHint: [topic.title, topic.description, `情绪：${topic.emotion_type}/${topic.emotion_subtype}`, `标签：${topic.tags.join(",")}`].filter(Boolean).join("\n"),
+  });
+
+  const platform = platforms[0] ?? "douyin";
+  const article = generateArticleFromTopic(topic, platform);
+  const script = article.then((a) => generateScriptFromArticle(a));
+
+  const [a, s] = await Promise.all([article, script]);
+  createArticle({ work_id: work.id, topic_id: topic.id, title: a.title, content: a.content, platform, status: "ready" });
+  createScript({ work_id: work.id, content: s as unknown as Record<string, unknown>, duration: s.duration, status: "ready" });
+  updateTopic(topic.id, { status: "converted", work_id: work.id });
+
+  return c.json({ workId: work.id });
 });
