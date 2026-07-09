@@ -1,5 +1,6 @@
+import { readFile } from "node:fs/promises";
 import { extname } from "node:path";
-import { saveSharedAsset, deleteSharedAsset, validateCategory } from "../shared-assets.js";
+import { saveSharedAsset, deleteSharedAsset, validateCategory, getSharedAssetPath } from "../shared-assets.js";
 import * as assetsRepo from "../db/assets-repo.js";
 import type { DbAsset, DbAssetCategory, DbAssetType, DbAssetSource, DbAssetLicense } from "../db/types.js";
 
@@ -81,6 +82,19 @@ export function listAssets(filters?: Parameters<typeof assetsRepo.listAssets>[0]
 }
 
 export async function updateAsset(id: number, updates: Partial<Omit<DbAsset, "id" | "created_at" | "updated_at">>): Promise<DbAsset | undefined> {
+  const existing = assetsRepo.getAsset(id);
+  if (!existing) return undefined;
+  const newCategory = updates.category ?? existing.category;
+  const newName = updates.name ? sanitizeName(updates.name) : existing.name;
+  if (newCategory !== existing.category || newName !== existing.name) {
+    validateCategory(newCategory as DbAssetCategory);
+    const data = await readFile(getSharedAssetPath(existing.category, existing.name));
+    const saved = await saveSharedAsset(newCategory as DbAssetCategory, newName, data);
+    await deleteSharedAsset(existing.category, existing.name);
+    updates.name = saved.name;
+    updates.category = saved.category as DbAssetCategory;
+    updates.file_path = `${saved.category}/${saved.name}`;
+  }
   const updated = assetsRepo.updateAsset(id, updates);
   if (!updated) return undefined;
   const status = checkCompliance(updated);
