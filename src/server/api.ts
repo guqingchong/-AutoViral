@@ -2092,11 +2092,6 @@ apiRoutes.post("/api/trends/collect", async (c) => {
 function avatarDir(id: string): string { return join(dataDir, "avatars", id); }
 function jobOutputDir(id: string): string { return join(dataDir, "digital-human-jobs", id); }
 
-function guessMime(filename: string): string {
-  const ext = extname(filename).toLowerCase();
-  return MIME_TYPES[ext] ?? "application/octet-stream";
-}
-
 // GET /api/digital-humans/status
 apiRoutes.get("/api/digital-humans/status", async (c) => {
   const config = await loadConfig();
@@ -2147,7 +2142,7 @@ apiRoutes.get("/api/digital-humans/avatars/:id/media/:filename", async (c) => {
   const filename = c.req.param("filename");
   try {
     const data = await readFile(join(avatarDir(id), filename));
-    return new Response(data, { headers: { "Content-Type": guessMime(filename) } });
+    return new Response(data, { headers: { "Content-Type": getMimeType(filename) } });
   } catch {
     return c.json({ error: "Media not found" }, 404);
   }
