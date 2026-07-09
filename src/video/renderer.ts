@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { getFFmpegPath, type FFprobeInfo } from "./ffmpeg.js";
+import { getFFmpegPath } from "./ffmpeg.js";
 import { parseFFmpegProgress } from "./progress.js";
 import { validateTimeline } from "./schema.js";
 import type { Timeline, TimelineLayer, TimelinePosition, TimelineAnimation, AudioTrack } from "./types.js";
@@ -194,6 +194,11 @@ export function buildFilterComplexArgs(tl: Timeline, inputs: InputSlot[], durati
     }
   }
 
+  // Subtitles overlay
+  if (tl.subtitles) {
+    videoFilterParts.push(`[base]subtitles=${tl.subtitles.source}:force_style='FontSize=48,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,Outline=2'[base]`);
+  }
+
   // Audio mixing
   const audioInputs = inputs.filter(i => i.type === "audio");
   if (audioInputs.length > 0) {
@@ -203,7 +208,7 @@ export function buildFilterComplexArgs(tl: Timeline, inputs: InputSlot[], durati
       const start = audio.start ?? 0;
       const dur = audio.duration ?? duration;
       const loopFlag = input.loop ? ",aloop=loop=-1:size=0" : "";
-      audioFilterParts.push(`[${input.index}:a]atrim=${start}:${start + dur},asetpts=PTS-STARTPTS,volume=${vol}${loopFlag}[a${input.index}]`);
+      audioFilterParts.push(`[${input.index}:a]atrim=start=${start}:duration=${dur},asetpts=PTS-STARTPTS,volume=${vol}${loopFlag}[a${input.index}]`);
     }
     const labels = audioInputs.map(i => `[a${i.index}]`).join("");
     audioFilterParts.push(`${labels}amix=inputs=${audioInputs.length}:duration=first:dropout_transition=0[aout]`);
