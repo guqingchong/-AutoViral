@@ -5,7 +5,10 @@ const translations: Record<Language, Record<string, string>> = {
     // Navigation
     explore: "Inspiration",
     works: "Works",
+    topics: "Topics",
     analytics: "Analytics",
+    digitalHumans: "Digital Humans",
+    assetLibrary: "Asset Library",
     settings: "Settings",
 
     // Common
@@ -184,7 +187,7 @@ const translations: Record<Language, Record<string, string>> = {
     output: "Output",
     downloadAll: "Download All",
     noAssetsYet: "No assets yet",
-    uploadAsset: "Upload",
+    uploadAsset: "Upload Asset",
 
     // Settings
     settingsTitle: "Settings",
@@ -192,12 +195,50 @@ const translations: Record<Language, Record<string, string>> = {
     themeSetting: "Theme",
     darkTheme: "Dark",
     lightTheme: "Light",
+
+    // Digital Human
+    digitalHumansTitle: "Digital Humans",
+    avatars: "Avatars",
+    uploadAvatar: "Upload Avatar",
+    importAvatar: "Import Provider Avatar",
+    avatarName: "Avatar Name",
+    providerAvatarId: "Provider Avatar ID",
+    submitJob: "Submit Job",
+    audioUrl: "Audio URL / Path",
+    selectAvatar: "Select Avatar",
+    refresh: "Refresh",
+    download: "Download",
+    jobSubmitted: "Job submitted.",
+    avatarUploaded: "Avatar uploaded.",
+    avatarImported: "Avatar imported.",
+    statusPending: "Pending",
+    statusRunning: "Running",
+    statusDone: "Done",
+    statusFailed: "Failed",
+
+    // Asset Library
+    assetLibraryTitle: "Asset Library",
+    category: "Category",
+    type: "Type",
+    source: "Source",
+    license: "License",
+    tags: "Tags",
+    compliance: "Compliance",
+    compliancePassed: "Passed",
+    compliancePending: "Pending",
+    complianceFailed: "Failed",
+    recheck: "Recheck",
+    filters: "Filters",
+    assetUploaded: "Asset uploaded.",
   },
   zh: {
     // Navigation
     explore: "灵感",
     works: "作品",
+    topics: "选题",
     analytics: "数据",
+    digitalHumans: "数字人",
+    assetLibrary: "素材库",
     settings: "设置",
 
     // Common
@@ -376,7 +417,7 @@ const translations: Record<Language, Record<string, string>> = {
     output: "成品",
     downloadAll: "下载全部",
     noAssetsYet: "暂无素材",
-    uploadAsset: "自己上传",
+    uploadAsset: "上传素材",
 
     // Settings
     settingsTitle: "设置",
@@ -384,6 +425,41 @@ const translations: Record<Language, Record<string, string>> = {
     themeSetting: "主题",
     darkTheme: "深色",
     lightTheme: "浅色",
+
+    // 数字人
+    digitalHumansTitle: "数字人",
+    avatars: "形象",
+    uploadAvatar: "上传形象",
+    importAvatar: "导入蝉镜形象",
+    avatarName: "形象名称",
+    providerAvatarId: "Provider 形象 ID",
+    submitJob: "提交合成任务",
+    audioUrl: "音频 URL / 路径",
+    selectAvatar: "选择形象",
+    refresh: "刷新",
+    download: "下载",
+    jobSubmitted: "任务已提交",
+    avatarUploaded: "形象已上传",
+    avatarImported: "形象已导入",
+    statusPending: "待处理",
+    statusRunning: "进行中",
+    statusDone: "完成",
+    statusFailed: "失败",
+
+    // 素材库
+    assetLibraryTitle: "合规素材库",
+    category: "分类",
+    type: "类型",
+    source: "来源",
+    license: "授权",
+    tags: "标签",
+    compliance: "合规",
+    compliancePassed: "已通过",
+    compliancePending: "待审核",
+    complianceFailed: "未通过",
+    recheck: "重检",
+    filters: "筛选",
+    assetUploaded: "素材已上传",
   },
 };
 
