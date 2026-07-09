@@ -37,7 +37,7 @@ export interface GenerateResult {
   assetPath?: string
   previewUrl?: string
   error?: string
-  code?: 'TIMEOUT' | 'API_ERROR' | 'DOWNLOAD_FAILED' | 'INVALID_PARAMS'
+  code?: 'TIMEOUT' | 'API_ERROR' | 'DOWNLOAD_FAILED' | 'INVALID_PARAMS' | 'ACCESS_DENIED'
 }
 
 export interface GenerateProvider {
