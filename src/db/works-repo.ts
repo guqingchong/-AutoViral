@@ -11,17 +11,17 @@ function rowToWork(row: Record<string, unknown>): DbWork {
     video_source: (row.video_source as string) || undefined,
     video_search_query: (row.video_search_query as string) || undefined,
     status: row.status as DbWork["status"],
-    platforms: fromJson(row.platforms as string),
+    platforms: fromJson<string[]>(row.platforms as string) ?? [],
     evaluation_mode: Boolean(row.evaluation_mode),
     topic_hint: (row.topic_hint as string) || undefined,
     cli_session_id: (row.cli_session_id as string) || undefined,
-    eval_session_ids: fromJson(row.eval_session_ids as string),
-    eval_attempts: fromJson(row.eval_attempts as string),
+    eval_session_ids: fromJson<Record<string, string>>(row.eval_session_ids as string) ?? {},
+    eval_attempts: fromJson<Record<string, number>>(row.eval_attempts as string) ?? {},
     topic_category: (row.topic_category as string) || undefined,
     emotion_type: (row.emotion_type as string) || undefined,
     hook_type: (row.hook_type as string) || undefined,
     template_id: (row.template_id as string) || undefined,
-    tags: fromJson(row.tags as string),
+    tags: fromJson<string[]>(row.tags as string) ?? [],
     created_at: row.created_at as string,
     updated_at: row.updated_at as string,
   };
@@ -156,8 +156,11 @@ export function updateWork(id: string, updates: Partial<DbWork>): DbWork | undef
 
 export function deleteWork(id: string): boolean {
   const db = getDb();
-  const result = db.prepare("DELETE FROM works WHERE id = ?").run(id);
-  return result.changes > 0;
+  const tx = db.transaction(() => {
+    db.prepare("DELETE FROM pipeline_steps WHERE work_id = ?").run(id);
+    return db.prepare("DELETE FROM works WHERE id = ?").run(id);
+  });
+  return tx().changes > 0;
 }
 
 export function workExists(id: string): boolean {

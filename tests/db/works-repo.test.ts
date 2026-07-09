@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { resetInMemoryDb, closeDb } from "../../src/db/connection.js";
 import { migrate } from "../../src/db/migrate.js";
-import { createWork, getWork, listWorks, updateWork, deleteWork, getWorkSteps } from "../../src/db/works-repo.js";
+import { createWork, getWork, listWorks, updateWork, deleteWork, getWorkSteps, workExists, updateStep } from "../../src/db/works-repo.js";
 import type { DbWork, DbPipelineStep } from "../../src/db/types.js";
 
 function makeWork(overrides: Partial<DbWork> = {}): DbWork {
@@ -75,5 +75,26 @@ describe("works-repo", () => {
     expect(found?.hook_type).toBe("经济损失");
     expect(found?.template_id).toBe("tpl_001");
     expect(found?.tags).toEqual(["新能源", "车险"]);
+  });
+
+  it("workExists returns true for existing work", () => {
+    createWork(makeWork(), []);
+    expect(workExists("w_20260708_1200_abc")).toBe(true);
+  });
+
+  it("workExists returns false for non-existent work", () => {
+    expect(workExists("nonexistent")).toBe(false);
+  });
+
+  it("updateStep updates a step status", () => {
+    const work = makeWork();
+    createWork(work, [
+      { work_id: work.id, step_key: "research", name: "话题调研", status: "pending", sort_order: 0 },
+      { work_id: work.id, step_key: "plan", name: "内容策划", status: "pending", sort_order: 1 },
+    ]);
+    updateStep(work.id, "research", { status: "active" });
+    const steps = getWorkSteps(work.id);
+    expect(steps.find((s) => s.step_key === "research")?.status).toBe("active");
+    expect(steps.find((s) => s.step_key === "plan")?.status).toBe("pending");
   });
 });
