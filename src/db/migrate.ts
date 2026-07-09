@@ -196,10 +196,12 @@ export function migrate(): void {
 
   for (const migration of MIGRATIONS) {
     if (applied.has(migration.version)) continue;
-    db.exec(migration.sql);
-    db.prepare("INSERT INTO migrations (version, name) VALUES (?, ?)").run(
-      migration.version,
-      migration.name
-    );
+    db.transaction(() => {
+      db.exec(migration.sql);
+      db.prepare("INSERT INTO migrations (version, name) VALUES (?, ?)").run(
+        migration.version,
+        migration.name
+      );
+    })();
   }
 }

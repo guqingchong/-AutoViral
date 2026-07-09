@@ -159,7 +159,7 @@ async function dispatchJob(jobId: string, allowFallback: boolean): Promise<void>
 
 async function dispatchBailian(job: DbDigitalHumanJob, avatar: DbAvatar): Promise<void> {
   let imageUrl = avatar.preview_url;
-  if (!imageUrl && avatar.reference_video_path) {
+  if (avatar.reference_video_path && [".mp4", ".mov", ".webm", ".avi"].includes(extname(avatar.reference_video_path).toLowerCase())) {
     const framePath = avatarFramePath(avatar.id);
     await extractFirstFrame(avatar.reference_video_path, framePath);
     imageUrl = await resolveMediaUrl(publicAvatarFrameUrl(avatar.id));

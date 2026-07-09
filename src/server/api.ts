@@ -2247,7 +2247,7 @@ apiRoutes.post("/api/assets", async (c) => {
     const body = await c.req.parseBody();
     const file = body.file as File | undefined;
     if (!file) return c.json({ error: "file is required" }, 400);
-    const category = (body.category as any) || "other";
+    const category = (body.category as any) || "general";
     const source = (body.source as any) || "upload";
     const license = (body.license as any) || (source === "upload" ? "needs-review" : "unknown");
     const tagsRaw = (body.tags as string) || "";
