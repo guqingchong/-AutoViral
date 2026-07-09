@@ -15,6 +15,7 @@ import { apiRoutes, setWsBridge } from "./api.js";
 import { WsBridge } from "../ws-bridge.js";
 import { startAnalyticsCollector } from "../analytics-collector.js";
 import { migrate } from "../db/migrate.js";
+import { migrateLegacyWorks } from "../db/migrate-legacy.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -28,6 +29,10 @@ export async function startServer(port: number): Promise<{ server: Server }> {
 
   // 1. Load config
   const config = await loadConfig();
+
+  // 1a. Import legacy YAML works once
+  const migrated = await migrateLegacyWorks();
+  if (migrated > 0) console.log(`Migrated ${migrated} legacy works to SQLite`);
 
   // 2. Initialize providers
   await initProviders(config);
