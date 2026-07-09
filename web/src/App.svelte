@@ -4,6 +4,7 @@
   import Analytics from "./pages/Analytics.svelte";
   import Studio from "./pages/Studio.svelte";
   import Works from "./pages/Works.svelte";
+  import Topics from "./pages/Topics.svelte";
   import NewWorkModal from "./components/NewWorkModal.svelte";
   import { fetchConfig, updateConfig, fetchWorks, createWorkApi, type WorkSummary, type ContentCategory } from "./lib/api";
   import { t, getLanguage, setLanguage, subscribe } from "./lib/i18n";
@@ -13,7 +14,7 @@
   function tt(key: string): string { void lang; return t(key); }
 
   // App state
-  type Tab = "explore" | "works" | "analytics";
+  type Tab = "explore" | "works" | "topics" | "analytics";
   let activeTab: Tab = $state("works");
   let showStudio = $state(false);
   let currentWorkId: string | null = $state(null);
@@ -162,6 +163,7 @@
 
   const navItems = [
     { tab: "works" as Tab, labelKey: "works" },
+    { tab: "topics" as Tab, labelKey: "topics" },
     { tab: "explore" as Tab, labelKey: "explore" },
     { tab: "analytics" as Tab, labelKey: "analytics" },
   ];
@@ -202,6 +204,8 @@
       <Studio workId={currentWorkId} onBack={closeStudio} {initialPrompt} />
     {:else if activeTab === "explore"}
       <Explore />
+    {:else if activeTab === "topics"}
+      <Topics />
     {:else if activeTab === "analytics"}
       <Analytics />
     {:else}

@@ -243,3 +243,34 @@ export async function fetchEvalResults(workId: string, step: string): Promise<Ev
   const data = await get<{ results: EvalResult[] }>(`/api/works/${encodeURIComponent(workId)}/eval/results/${encodeURIComponent(step)}`);
   return data.results;
 }
+
+// ---------------------------------------------------------------------------
+// Topics API
+// ---------------------------------------------------------------------------
+
+export interface Topic {
+  id: number;
+  platform?: string;
+  title: string;
+  description?: string;
+  heat?: number;
+  competition?: string;
+  opportunity?: string;
+  emotion_type?: string;
+  emotion_subtype?: string;
+  tags: string[];
+  content_angles: string[];
+  example_hook?: string;
+  category?: string;
+  status: string;
+}
+
+export async function fetchTopics(platform?: string): Promise<Topic[]> {
+  const qs = platform ? `?platform=${encodeURIComponent(platform)}` : "";
+  const data = await request<{ topics: Topic[] }>(`/api/topics${qs}`);
+  return data.topics;
+}
+
+export async function convertTopicToWork(id: number, opts?: { platforms?: string[]; type?: "short-video" | "image-text" }) {
+  return post<{ workId: string }>(`/api/topics/${encodeURIComponent(id)}/convert`, opts ?? {});
+}
