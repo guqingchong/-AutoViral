@@ -26,8 +26,8 @@ export function scanBannedWords(options: ScanOptions): ComplianceResult {
     if (seen.has(entry.word)) continue;
     seen.add(entry.word);
 
-    if (options.text.includes(entry.word)) {
-      const index = options.text.indexOf(entry.word);
+    const index = options.text.indexOf(entry.word);
+    if (index !== -1) {
       const start = Math.max(0, index - 8);
       const end = Math.min(options.text.length, index + entry.word.length + 8);
       violations.push({

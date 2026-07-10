@@ -27,4 +27,10 @@ describe("compliance-text", () => {
     const result = scanBannedWords({ text: "引流到私域", platform: "xiaohongshu" });
     expect(result.violations.some(v => v.word === "引流")).toBe(true);
   });
+
+  it("returns passed for empty text", () => {
+    const result = scanBannedWords({ text: "", platform: "xiaohongshu" });
+    expect(result.passed).toBe(true);
+    expect(result.violations).toHaveLength(0);
+  });
 });

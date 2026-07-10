@@ -115,10 +115,10 @@ Baseline: 92 tests passing (23 files)
 - [x] Task 4: Platform Driver Interface, Mock Driver, and Factory (commits ad3c276..e169a01, review approved; minor: platform list duplicated between mock-driver and factory)
 - [x] Task 5: Publish Service Orchestration (commits e169a01..79fbe38..ade33fe, review approved after fixes; minor async coverage and dead-code fallback)
 - [x] Task 6: Publish API Routes (commits ade33fe..b8787d1..1c413d0, review approved after fixes; minor unused import in test)
-- [ ] Task 7: Frontend Publish Page
+- [x] Task 7: Frontend Publish Page (commits 1c413d0..e8af488..6a232e4, review approved after fixes)
 
 ## Final Review
 
-- [ ] Task review loop clean
+- [x] Task review loop clean
 - [ ] Whole-branch review
 - [ ] Finish branch

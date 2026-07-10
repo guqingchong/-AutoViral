@@ -25,12 +25,10 @@ export function createBannedWord(word: Omit<DbBannedWord, "id" | "created_at">):
 
 export function listBannedWords(platform?: string): DbBannedWord[] {
   const db = getDb();
-  if (platform) {
-    const rows = db.prepare("SELECT * FROM compliance_banned_words WHERE platform = ? OR platform = 'all' ORDER BY id DESC").all(platform) as Record<string, unknown>[];
-    return rows.map(rowToBannedWord);
-  }
-  const rows = db.prepare("SELECT * FROM compliance_banned_words ORDER BY id DESC").all() as Record<string, unknown>[];
-  return rows.map(rowToBannedWord);
+  const rows = platform
+    ? db.prepare("SELECT * FROM compliance_banned_words WHERE platform = ? OR platform = 'all' ORDER BY id DESC").all(platform)
+    : db.prepare("SELECT * FROM compliance_banned_words ORDER BY id DESC").all();
+  return (rows as Record<string, unknown>[]).map(rowToBannedWord);
 }
 
 export function deleteBannedWord(id: number): boolean {

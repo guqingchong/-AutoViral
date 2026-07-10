@@ -36,13 +36,17 @@
     }
   }
 
+  let renderJobsLoaded = $state(false);
+
   async function loadRenderJobs() {
     try {
       loadError = "";
       const all = await fetchRenderJobs();
       renderJobs = all.filter((j) => j.status === "completed");
+      renderJobsLoaded = true;
     } catch {
       loadError = t("publishLoadError");
+      renderJobsLoaded = true;
     }
   }
 
@@ -108,14 +112,27 @@
 
   onMount(() => {
     loadAccounts();
-    loadRenderJobs().then(() => {
-      unsubPublish = publishTarget.subscribe((target) => {
-        if (target) {
+
+    // Subscribe to publishTarget immediately so we never miss a navigation event
+    let pendingTarget: PublishTarget | null = null;
+    unsubPublish = publishTarget.subscribe((target) => {
+      if (target) {
+        if (!renderJobsLoaded) {
+          pendingTarget = target;
+        } else {
           applyPublishTarget(target);
-          publishTarget.set(null);
         }
-      });
+        publishTarget.set(null);
+      }
     });
+
+    loadRenderJobs().then(() => {
+      if (pendingTarget) {
+        applyPublishTarget(pendingTarget);
+        pendingTarget = null;
+      }
+    });
+
     scheduleLoadJobs();
 
     return () => {
@@ -159,7 +176,7 @@
     <label>{t("publishTitleLabel")} <input type="text" bind:value={title} /></label>
     <label>{t("publishContentLabel")} <textarea bind:value={content}></textarea></label>
     <label>{t("publishMediaPath")} <input type="text" bind:value={mediaPath} /></label>
-    <button onclick={() => handlePublish(false)}>{t("publishPublishButton")}</button>
+    <button onclick={() => handlePublish(false)} disabled={selectedAccounts.length === 0}>{t("publishPublishButton")}</button>
     {#if error}<p class="error">{error}</p>{/if}
   </section>
 
