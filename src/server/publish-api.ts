@@ -157,3 +157,14 @@ publishRoutes.post("/banned-words", async (c) => {
   });
   return c.json({ word }, 201);
 });
+
+publishRoutes.delete("/banned-words/:id", async (c) => {
+  const rawId = c.req.param("id");
+  const id = Number(rawId);
+  if (Number.isNaN(id)) {
+    return c.json({ error: "Invalid banned word ID" }, 400);
+  }
+  const ok = bannedWordsRepo.deleteBannedWord(id);
+  if (!ok) return c.json({ error: "Banned word not found" }, 404);
+  return c.json({ ok: true });
+});

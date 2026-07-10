@@ -274,4 +274,39 @@ describe("publish API", () => {
     const json = await res.json();
     expect(json.error).toContain("severity");
   });
+
+  it("deletes a banned word via API and returns 200", async () => {
+    const app = createTestApp();
+
+    // First create a banned word
+    const createRes = await app.request("/api/publish/banned-words", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ platform: "xiaohongshu", word: "测试删除", severity: "low" }),
+    });
+    expect(createRes.status).toBe(201);
+    const created = await createRes.json() as { word: { id: number } };
+
+    // Delete it
+    const delRes = await app.request(`/api/publish/banned-words/${created.word.id}`, { method: "DELETE" });
+    expect(delRes.status).toBe(200);
+    const delJson = await delRes.json();
+    expect(delJson.ok).toBe(true);
+  });
+
+  it("returns 404 when deleting a non-existent banned word", async () => {
+    const app = createTestApp();
+    const res = await app.request("/api/publish/banned-words/99999", { method: "DELETE" });
+    expect(res.status).toBe(404);
+    const json = await res.json();
+    expect(json.error).toContain("Banned word not found");
+  });
+
+  it("returns 400 for invalid banned word ID", async () => {
+    const app = createTestApp();
+    const res = await app.request("/api/publish/banned-words/invalid", { method: "DELETE" });
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.error).toContain("Invalid banned word ID");
+  });
 });
