@@ -9,6 +9,7 @@
   import Assets from "./pages/Assets.svelte";
   import Templates from "./pages/Templates.svelte";
   import RenderJobs from "./pages/RenderJobs.svelte";
+  import Publish from "./pages/Publish.svelte";
   import NewWorkModal from "./components/NewWorkModal.svelte";
   import { fetchConfig, updateConfig, fetchWorks, createWorkApi, type WorkSummary, type ContentCategory } from "./lib/api";
   import { t, getLanguage, setLanguage, subscribe } from "./lib/i18n";
@@ -18,7 +19,7 @@
   function tt(key: string): string { void lang; return t(key); }
 
   // App state
-  type Tab = "explore" | "works" | "topics" | "digital-humans" | "assets" | "analytics" | "templates" | "jobs";
+  type Tab = "explore" | "works" | "topics" | "digital-humans" | "assets" | "analytics" | "templates" | "jobs" | "publish";
   let activeTab: Tab = $state("works");
   let showStudio = $state(false);
   let currentWorkId: string | null = $state(null);
@@ -172,6 +173,7 @@
     { tab: "assets" as Tab, labelKey: "assetLibrary" },
     { tab: "templates" as Tab, labelKey: "templates" },
     { tab: "jobs" as Tab, labelKey: "renderJobs" },
+    { tab: "publish" as Tab, labelKey: "publish" },
     { tab: "explore" as Tab, labelKey: "explore" },
     { tab: "analytics" as Tab, labelKey: "analytics" },
   ];
@@ -224,6 +226,8 @@
       <Templates />
     {:else if activeTab === "jobs"}
       <RenderJobs />
+    {:else if activeTab === "publish"}
+      <Publish />
     {:else if activeTab === "works"}
       <Works
         onOpenStudio={openStudio}
