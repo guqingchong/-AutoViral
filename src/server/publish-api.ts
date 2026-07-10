@@ -83,6 +83,15 @@ publishRoutes.post("/jobs", async (c) => {
     mediaPath?: string;
     forcePublish?: boolean;
   }>();
+  if (typeof body.workId !== "string" || !body.workId) {
+    return c.json({ error: "workId is required" }, 400);
+  }
+  if (typeof body.title !== "string" || !body.title) {
+    return c.json({ error: "title is required" }, 400);
+  }
+  if (!Array.isArray(body.accountIds)) {
+    return c.json({ error: "accountIds must be an array" }, 400);
+  }
   const result = createPublishJobs(body);
   if (result.blocked) {
     return c.json({ error: result.error ?? "Compliance check failed", compliance: result.compliance }, 400);

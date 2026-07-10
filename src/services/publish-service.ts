@@ -42,6 +42,15 @@ function enqueueAccount(accountId: string, jobId: string): void {
 }
 
 export function createPublishJobs(request: CreatePublishJobsRequest): CreatePublishJobsResult {
+  if (request.accountIds.length === 0) {
+    return {
+      blocked: true,
+      compliance: { passed: false, violations: [] },
+      error: "At least one account must be selected",
+      jobs: [],
+    };
+  }
+
   const lookupResults = request.accountIds.map((id) => ({ id, account: getAccount(id) }));
 
   const missingIds = lookupResults.filter((r) => !r.account).map((r) => r.id);
@@ -132,9 +141,11 @@ async function runPublishJob(jobId: string): Promise<void> {
       published_at: result.publishedAt,
     });
 
-    const work = getWork(job.work_id ?? "");
-    if (work && work.status !== "published") {
-      updateWork(work.id, { status: "published" });
+    if (job.work_id) {
+      const work = getWork(job.work_id);
+      if (work && work.status !== "published") {
+        updateWork(work.id, { status: "published" });
+      }
     }
   } catch (err) {
     updateJob(jobId, {

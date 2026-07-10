@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { resetInMemoryDb } from "../../src/db/connection.js";
 import { migrate } from "../../src/db/migrate.js";
 import { createAccount } from "../../src/db/publish-accounts-repo.js";
-import { createJob, updateJob } from "../../src/db/publish-jobs-repo.js";
+import { updateJob } from "../../src/db/publish-jobs-repo.js";
 import { createWork } from "../../src/db/works-repo.js";
 import { publishRoutes } from "../../src/server/publish-api.js";
 import { Hono } from "hono";
@@ -36,6 +36,42 @@ describe("publish API", () => {
     const res = await app.request("/api/publish/accounts");
     const json = await res.json();
     expect(json.accounts).toHaveLength(1);
+  });
+
+  it("rejects publish with 400 when workId is missing", async () => {
+    const app = createTestApp();
+    const res = await app.request("/api/publish/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ accountIds: ["acc-1"], title: "标题", content: "正文" }),
+    });
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.error).toContain("workId");
+  });
+
+  it("rejects publish with 400 when title is missing", async () => {
+    const app = createTestApp();
+    const res = await app.request("/api/publish/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workId: "w-1", accountIds: ["acc-1"], content: "正文" }),
+    });
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.error).toContain("title");
+  });
+
+  it("rejects publish with 400 when accountIds is not an array", async () => {
+    const app = createTestApp();
+    const res = await app.request("/api/publish/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workId: "w-1", accountIds: "acc-1", title: "标题", content: "正文" }),
+    });
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.error).toContain("accountIds");
   });
 
   it("blocks publish on compliance violation and allows force publish", async () => {
