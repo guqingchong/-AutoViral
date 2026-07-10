@@ -25,12 +25,37 @@ export interface CreatePublishJobsResult {
 
 const accountQueues = new Map<string, Promise<unknown>>();
 
-export function createPublishJobs(request: CreatePublishJobsRequest): CreatePublishJobsResult {
-  const accounts = request.accountIds
-    .map((id) => getAccount(id))
-    .filter((a): a is NonNullable<typeof a> => a !== undefined && a.status === "active");
+export function resetPublishQueues(): void {
+  accountQueues.clear();
+}
 
-  if (accounts.length !== request.accountIds.length) {
+function enqueueAccount(accountId: string, jobId: string): void {
+  const previous = accountQueues.get(accountId) ?? Promise.resolve();
+  const next = previous
+    .then(() => runPublishJob(jobId))
+    .finally(() => {
+      if (accountQueues.get(accountId) === next) {
+        accountQueues.delete(accountId);
+      }
+    });
+  accountQueues.set(accountId, next);
+}
+
+export function createPublishJobs(request: CreatePublishJobsRequest): CreatePublishJobsResult {
+  const lookupResults = request.accountIds.map((id) => ({ id, account: getAccount(id) }));
+
+  const missingIds = lookupResults.filter((r) => !r.account).map((r) => r.id);
+  if (missingIds.length > 0) {
+    return {
+      blocked: true,
+      compliance: { passed: false, violations: [] },
+      error: "One or more accounts were not found",
+      jobs: [],
+    };
+  }
+
+  const inactiveIds = lookupResults.filter((r) => r.account!.status !== "active").map((r) => r.id);
+  if (inactiveIds.length > 0) {
     return {
       blocked: true,
       compliance: { passed: false, violations: [] },
@@ -38,6 +63,8 @@ export function createPublishJobs(request: CreatePublishJobsRequest): CreatePubl
       jobs: [],
     };
   }
+
+  const accounts = lookupResults.map((r) => r.account!);
 
   const combinedText = request.title + request.content;
   const platformChecks = new Map<string, ComplianceResult>();
@@ -82,9 +109,7 @@ export function createPublishJobs(request: CreatePublishJobsRequest): CreatePubl
 
     jobs.push({ id: job.id, platform: job.platform, status: job.status });
 
-    const previous = accountQueues.get(account.id) ?? Promise.resolve();
-    const next = previous.then(() => runPublishJob(job.id));
-    accountQueues.set(account.id, next);
+    enqueueAccount(account.id, job.id);
   }
 
   return { blocked: false, compliance: combinedCompliance, jobs };
@@ -125,8 +150,5 @@ export function retryPublishJob(jobId: string): void {
   if (job.status !== "failed") throw new Error("Only failed jobs can be retried");
 
   updateJob(jobId, { status: "publishing", error: null });
-  const accountId = job.account_id;
-  const previous = accountQueues.get(accountId) ?? Promise.resolve();
-  const next = previous.then(() => runPublishJob(jobId));
-  accountQueues.set(accountId, next);
+  enqueueAccount(job.account_id, jobId);
 }
