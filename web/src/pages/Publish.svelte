@@ -19,26 +19,42 @@
   let renderJobId = $state("");
   let mediaPath = $state("");
   let error = $state("");
+  let loadError = $state("");
   let complianceViolations = $state<Violation[]>([]);
   let showComplianceDialog = $state(false);
-  let timer: ReturnType<typeof setInterval>;
+  let timer: ReturnType<typeof setTimeout>;
   let unsubPublish: (() => void) | null = null;
 
   async function loadAccounts() {
-    const res = await fetch("/api/publish/accounts");
-    const data = await res.json();
-    accounts = data.accounts ?? [];
+    try {
+      loadError = "";
+      const res = await fetch("/api/publish/accounts");
+      const data = await res.json();
+      accounts = data.accounts ?? [];
+    } catch {
+      loadError = t("publishLoadError");
+    }
   }
 
   async function loadRenderJobs() {
-    const all = await fetchRenderJobs();
-    renderJobs = all.filter((j) => j.status === "completed");
+    try {
+      loadError = "";
+      const all = await fetchRenderJobs();
+      renderJobs = all.filter((j) => j.status === "completed");
+    } catch {
+      loadError = t("publishLoadError");
+    }
   }
 
   async function loadJobs() {
-    const res = await fetch("/api/publish/jobs");
-    const data = await res.json();
-    jobs = data.jobs ?? [];
+    try {
+      loadError = "";
+      const res = await fetch("/api/publish/jobs");
+      const data = await res.json();
+      jobs = data.jobs ?? [];
+    } catch {
+      loadError = t("publishLoadError");
+    }
   }
 
   async function handlePublish(force = false) {
@@ -46,22 +62,26 @@
     complianceViolations = [];
     showComplianceDialog = false;
 
-    const res = await fetch("/api/publish/jobs", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ workId, renderJobId, accountIds: selectedAccounts, title, content, mediaPath, forcePublish: force }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      if (data.compliance?.violations?.length) {
-        complianceViolations = data.compliance.violations;
-        showComplianceDialog = true;
-      } else {
-        error = data.error ?? t("publishFailed");
+    try {
+      const res = await fetch("/api/publish/jobs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workId, renderJobId, accountIds: selectedAccounts, title, content, mediaPath, forcePublish: force }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        if (data.compliance?.violations?.length) {
+          complianceViolations = data.compliance.violations;
+          showComplianceDialog = true;
+        } else {
+          error = data.error ?? t("publishFailed");
+        }
+        return;
       }
-      return;
+      await loadJobs();
+    } catch {
+      error = t("publishFailed");
     }
-    await loadJobs();
   }
 
   function selectRenderJob(jobId: string) {
@@ -81,6 +101,11 @@
     if (target.mediaPath) mediaPath = target.mediaPath;
   }
 
+  async function scheduleLoadJobs() {
+    await loadJobs();
+    timer = setTimeout(scheduleLoadJobs, 3000);
+  }
+
   onMount(() => {
     loadAccounts();
     loadRenderJobs().then(() => {
@@ -91,11 +116,10 @@
         }
       });
     });
-    loadJobs();
-    timer = setInterval(loadJobs, 3000);
+    scheduleLoadJobs();
 
     return () => {
-      clearInterval(timer);
+      clearTimeout(timer);
       if (unsubPublish) unsubPublish();
     };
   });
@@ -105,6 +129,10 @@
   <header class="page-header">
     <h1>{t("publishTitle")}</h1>
   </header>
+
+  {#if loadError}
+    <p class="load-error">{loadError}</p>
+  {/if}
 
   <section>
     <h2>{t("publishSelectRenderJob")}</h2>
@@ -159,7 +187,7 @@
         {/if}
         {#if job.error}
           <span class="error">{job.error}</span>
-          <button onclick={() => fetch(`/api/publish/jobs/${job.id}/retry`, { method: "POST" }).then(loadJobs)}>{t("publishRetry")}</button>
+          <button onclick={() => fetch(`/api/publish/jobs/${job.id}/retry`, { method: "POST" }).then(loadJobs).catch(() => { loadError = t("publishLoadError"); })}>{t("publishRetry")}</button>
         {/if}
       </div>
     {/each}
@@ -174,6 +202,7 @@
   label { display: block; margin: 0.5rem 0; }
   input, textarea, select { display: block; width: 100%; margin-top: 0.25rem; }
   .error { color: var(--error); }
+  .load-error { color: var(--error); background: var(--error-soft); padding: 0.5rem 0.75rem; border-radius: var(--card-radius); margin-bottom: 1rem; }
   .compliance-dialog { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: var(--card-radius); padding: 1rem; margin-bottom: 1rem; }
   .job-row { display: flex; gap: 1rem; align-items: center; padding: 0.5rem 0; }
 </style>
