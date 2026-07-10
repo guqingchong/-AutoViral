@@ -54,6 +54,7 @@ import { renderTimeline } from "../video/renderer.js";
 import { validateTemplate, TimelineValidationError } from "../video/schema.js";
 import { applyVariables, fillDefaults } from "../video/variables.js";
 import type { Timeline } from "../video/types.js";
+import { publishRoutes } from "./publish-api.js";
 
 export const apiRoutes = new Hono();
 
@@ -2602,3 +2603,6 @@ apiRoutes.post("/api/works/:id/render", async (c) => {
     return c.json({ error: err instanceof Error ? err.message : "Render failed" }, 500);
   }
 });
+
+// ── Publish API ───────────────────────────────────────────────────────────
+apiRoutes.route("/api/publish", publishRoutes);
