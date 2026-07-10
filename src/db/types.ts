@@ -154,3 +154,61 @@ export interface DbAsset {
   created_at: string;
   updated_at: string;
 }
+
+// ── Publish types (Phase 4) ──────────────────────────────────────────────
+
+export type PublishAccountStatus = "active" | "disabled" | "expired";
+export type PublishJobStatus =
+  | "pending"
+  | "compliance_review"
+  | "compliance_failed"
+  | "publishing"
+  | "published"
+  | "failed";
+
+export interface DbPublishAccount {
+  id: string;
+  platform: string;
+  display_name: string;
+  credentials: Record<string, unknown>; // stored as JSON in DB, serialized by repo
+  status: PublishAccountStatus;
+  is_default: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ComplianceResult {
+  passed: boolean;
+  violations: Array<{
+    platform: string;
+    word: string;
+    severity: "low" | "medium" | "high";
+    context: string;
+  }>;
+}
+
+export interface DbPublishJob {
+  id: string;
+  work_id: string | null;
+  render_job_id: string | null;
+  account_id: string;
+  platform: string;
+  title: string;
+  content: string;
+  media_path: string | null;
+  status: PublishJobStatus;
+  compliance_result: ComplianceResult;
+  error: string | null;
+  post_url: string | null;
+  published_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DbBannedWord {
+  id: number;
+  platform: string;
+  word: string;
+  severity: "low" | "medium" | "high";
+  created_at: string;
+}
