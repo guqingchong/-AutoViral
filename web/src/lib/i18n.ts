@@ -266,6 +266,25 @@ const translations: Record<Language, Record<string, string>> = {
     jobStatusCompleted: "Completed",
     jobStatusFailed: "Failed",
     jobStatusCancelled: "Cancelled",
+
+    // Publish page
+    publishTitle: "Publish",
+    publishAccounts: "Accounts",
+    publishContent: "Content",
+    publishTitleLabel: "Title",
+    publishContentLabel: "Content",
+    publishMediaPath: "Video path",
+    publishSelectRenderJob: "Select rendered video",
+    publishSelectAccount: "Select accounts",
+    publishPublishButton: "Publish",
+    publishForcePublish: "Force publish",
+    publishComplianceWarning: "Compliance warning",
+    publishNoViolations: "No violations",
+    publishRetry: "Retry",
+    publishPostLink: "Link",
+    publishJobs: "Publish jobs",
+    publishGoToPublish: "Publish",
+    publishFailed: "Publish failed",
   },
   zh: {
     // Navigation
@@ -532,6 +551,25 @@ const translations: Record<Language, Record<string, string>> = {
     jobStatusCompleted: "已完成",
     jobStatusFailed: "失败",
     jobStatusCancelled: "已取消",
+
+    // Publish page
+    publishTitle: "发布",
+    publishAccounts: "账号",
+    publishContent: "发布内容",
+    publishTitleLabel: "标题",
+    publishContentLabel: "正文",
+    publishMediaPath: "视频路径",
+    publishSelectRenderJob: "选择已渲染视频",
+    publishSelectAccount: "选择账号",
+    publishPublishButton: "发布",
+    publishForcePublish: "强制发布",
+    publishComplianceWarning: "合规警告",
+    publishNoViolations: "无违规",
+    publishRetry: "重试",
+    publishPostLink: "链接",
+    publishJobs: "发布任务",
+    publishGoToPublish: "去发布",
+    publishFailed: "发布失败",
   },
 };
 
