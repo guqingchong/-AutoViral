@@ -114,7 +114,7 @@ Baseline: 92 tests passing (23 files)
 - [x] Task 3: Compliance Text Service (commits b6b113b..ad3c276, review approved; minor efficiency and coverage suggestions)
 - [x] Task 4: Platform Driver Interface, Mock Driver, and Factory (commits ad3c276..e169a01, review approved; minor: platform list duplicated between mock-driver and factory)
 - [x] Task 5: Publish Service Orchestration (commits e169a01..79fbe38..ade33fe, review approved after fixes; minor async coverage and dead-code fallback)
-- [ ] Task 6: Publish API Routes
+- [x] Task 6: Publish API Routes (commits ade33fe..b8787d1..1c413d0, review approved after fixes; minor unused import in test)
 - [ ] Task 7: Frontend Publish Page
 
 ## Final Review

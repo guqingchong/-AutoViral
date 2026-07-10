@@ -285,6 +285,7 @@ const translations: Record<Language, Record<string, string>> = {
     publishJobs: "Publish jobs",
     publishGoToPublish: "Publish",
     publishFailed: "Publish failed",
+    publishLoadError: "Failed to load data. Check your connection.",
   },
   zh: {
     // Navigation
@@ -570,6 +571,7 @@ const translations: Record<Language, Record<string, string>> = {
     publishJobs: "发布任务",
     publishGoToPublish: "去发布",
     publishFailed: "发布失败",
+    publishLoadError: "加载数据失败，请检查网络连接",
   },
 };
 
