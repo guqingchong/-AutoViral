@@ -82,3 +82,43 @@ Base commit: `d1e0e00`
 
 - Phase 2 implementation and review-fixes complete. Branch `worktree-autoviral-mcn-redesign` is ready to merge into the main branch.
 - Remaining unresolved items from whole-branch review: none.
+
+---
+
+# AutoViral Phase 4 — Publish Module
+
+Plan: `docs/superpowers/plans/2026-07-10-phase4-publish.md`
+Worktree: `C:\Users\顾庆冲\AutoViral\.claude\worktrees\autoviral-phase4`
+Branch: `autoviral-phase4`
+Base commit: `9f126f5`
+Baseline: 92 tests passing (23 files)
+
+## Global Constraints (from plan)
+
+- ESM imports must use `.js` extension; no `require`.
+- Use `randomUUID` from `node:crypto` for IDs.
+- Use `getDb` from `src/db/connection.js`; use `toJson`/`fromJson` from `src/db/json.js`.
+- All structured data in SQLite via `src/db/<entity>-repo.ts`; services never write SQL directly.
+- Use better-sqlite3 prepared statements for all DB operations.
+- Subagents must use Opus model per CLAUDE.md rules.
+- Frontend navigation tabs accumulate; never delete old tabs.
+- Use Svelte 5 runes (`$state`, `$props`) for components.
+- New backend files go under `src/`; new tests under `tests/` mirroring the source path.
+- New API routes must be testable via `tests/server/publish.test.ts` using in-memory DB.
+- All migration changes must be reflected in `tests/db/migrate.test.ts`.
+
+## Phase 4 Tasks
+
+- [x] Task 1: Migration v4 — Publish Tables and Seed Banned Words (commits 9f126f5..3ec2ac8, review clean)
+- [x] Task 2: DB Types and Repositories (commits 3ec2ac8..b6b113b, review approved; minor DRY in `banned-words-repo.ts` and raw SQL in jobs test)
+- [x] Task 3: Compliance Text Service (commits b6b113b..ad3c276, review approved; minor efficiency and coverage suggestions)
+- [x] Task 4: Platform Driver Interface, Mock Driver, and Factory (commits ad3c276..e169a01, review approved; minor: platform list duplicated between mock-driver and factory)
+- [x] Task 5: Publish Service Orchestration (commits e169a01..79fbe38..ade33fe, review approved after fixes; minor async coverage and dead-code fallback)
+- [ ] Task 6: Publish API Routes
+- [ ] Task 7: Frontend Publish Page
+
+## Final Review
+
+- [ ] Task review loop clean
+- [ ] Whole-branch review
+- [ ] Finish branch

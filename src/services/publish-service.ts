@@ -147,7 +147,7 @@ async function runPublishJob(jobId: string): Promise<void> {
 export function retryPublishJob(jobId: string): void {
   const job = getJob(jobId);
   if (!job) throw new Error("Job not found");
-  if (job.status === "published") throw new Error("Only non-published jobs can be retried");
+  if (job.status !== "failed") throw new Error("Only failed jobs can be retried");
 
   updateJob(jobId, { status: "publishing", error: null });
   enqueueAccount(job.account_id, jobId);

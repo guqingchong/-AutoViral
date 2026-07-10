@@ -65,8 +65,10 @@ publishRoutes.delete("/accounts/:id", async (c) => {
 publishRoutes.get("/jobs", async (c) => {
   const status = c.req.query("status");
   const workId = c.req.query("workId");
-  const limit = c.req.query("limit") ? Number(c.req.query("limit")) : 20;
-  const offset = c.req.query("offset") ? Number(c.req.query("offset")) : 0;
+  const rawLimit = Number(c.req.query("limit"));
+  const limit = Number.isFinite(rawLimit) && rawLimit >= 0 ? rawLimit : 20;
+  const rawOffset = Number(c.req.query("offset"));
+  const offset = Number.isFinite(rawOffset) && rawOffset >= 0 ? rawOffset : 0;
   const jobs = jobsRepo.listJobs({ status, workId, limit, offset });
   return c.json({ jobs });
 });

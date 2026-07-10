@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { resetInMemoryDb } from "../../src/db/connection.js";
 import { migrate } from "../../src/db/migrate.js";
 import { createAccount } from "../../src/db/publish-accounts-repo.js";
+import { createJob, updateJob } from "../../src/db/publish-jobs-repo.js";
 import { createWork } from "../../src/db/works-repo.js";
 import { publishRoutes } from "../../src/server/publish-api.js";
 import { Hono } from "hono";
@@ -80,7 +81,7 @@ describe("publish API", () => {
     expect(json2.jobs).toHaveLength(1);
   });
 
-  it("gets a job and retries failed jobs", async () => {
+  it("gets a job and retries a failed job", async () => {
     const account = createAccount({
       id: randomUUID(),
       platform: "xiaohongshu",
@@ -116,6 +117,9 @@ describe("publish API", () => {
     expect(getRes.status).toBe(200);
     const getJson = await getRes.json();
     expect(getJson.job.id).toBe(jobId);
+
+    // Set the job to "failed" status so we can test retry
+    updateJob(jobId, { status: "failed", error: "Simulated failure" });
 
     const retryRes = await app.request(`/api/publish/jobs/${jobId}/retry`, { method: "POST" });
     expect(retryRes.status).toBe(200);
