@@ -220,6 +220,78 @@ CREATE INDEX IF NOT EXISTS idx_render_jobs_status ON render_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_render_jobs_work ON render_jobs(work_id);
 `,
   },
+  {
+    version: 4,
+    name: "publish_and_compliance",
+    sql: `
+CREATE TABLE IF NOT EXISTS publish_accounts (
+  id TEXT PRIMARY KEY,
+  platform TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  credentials TEXT NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL DEFAULT 'active',
+  is_default INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS publish_jobs (
+  id TEXT PRIMARY KEY,
+  work_id TEXT,
+  render_job_id TEXT,
+  account_id TEXT NOT NULL,
+  platform TEXT NOT NULL,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  media_path TEXT,
+  status TEXT NOT NULL DEFAULT 'pending',
+  compliance_result TEXT NOT NULL DEFAULT '{"passed":true,"violations":[]}',
+  error TEXT,
+  post_url TEXT,
+  published_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (work_id) REFERENCES works(id) ON DELETE SET NULL,
+  FOREIGN KEY (account_id) REFERENCES publish_accounts(id) ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS compliance_banned_words (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  platform TEXT NOT NULL,
+  word TEXT NOT NULL,
+  severity TEXT NOT NULL DEFAULT 'high',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_publish_accounts_platform ON publish_accounts(platform);
+CREATE INDEX IF NOT EXISTS idx_publish_accounts_status ON publish_accounts(status);
+CREATE INDEX IF NOT EXISTS idx_publish_jobs_status ON publish_jobs(status);
+CREATE INDEX IF NOT EXISTS idx_publish_jobs_work_id ON publish_jobs(work_id);
+CREATE INDEX IF NOT EXISTS idx_banned_words_platform ON compliance_banned_words(platform);
+
+INSERT INTO compliance_banned_words (platform, word, severity) VALUES
+('all', '色情', 'high'),
+('all', '赌博', 'high'),
+('all', '毒品', 'high'),
+('all', '诈骗', 'high'),
+('all', '虚假宣传', 'medium'),
+('all', '诱导分享', 'medium'),
+('all', '政治敏感', 'high'),
+('all', '低俗', 'medium'),
+('all', '暴力', 'high'),
+('all', '侵权', 'medium'),
+('all', '违禁药品', 'high'),
+('all', '非法交易', 'high'),
+('all', '刷单', 'medium'),
+('all', '传销', 'high'),
+('all', '恶意营销', 'medium'),
+('all', '人身攻击', 'medium'),
+('all', '谣言', 'high'),
+('all', '歧视', 'high'),
+('all', '恐怖', 'high'),
+('all', '伪造', 'medium');
+`,
+  },
 ];
 
 export function migrate(): void {
