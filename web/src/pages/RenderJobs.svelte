@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { fetchRenderJobs, type RenderJob } from "../lib/api.js";
-  import { publishTarget } from "../lib/navigation.js";
+  import { publishTarget, activeTab } from "../lib/navigation.js";
   import { t } from "../lib/i18n.js";
 
   let jobs = $state<RenderJob[]>([]);
@@ -53,7 +53,10 @@
               <span class="error">{job.error}</span>
             {/if}
             {#if job.status === "completed"}
-              <button onclick={() => publishTarget.set({ renderJobId: job.id, workId: job.work_id, mediaPath: job.output_path })}>
+              <button onclick={() => {
+                publishTarget.set({ renderJobId: job.id, workId: job.work_id, mediaPath: job.output_path });
+                activeTab.set("publish");
+              }}>
                 {t("publishGoToPublish")}
               </button>
             {/if}
