@@ -9,6 +9,7 @@ import { listSupportedPlatforms } from "../services/publish-factory.js";
 export const publishRoutes = new Hono();
 
 const SUPPORTED_PLATFORMS = listSupportedPlatforms();
+const VALID_ACCOUNT_STATUSES = ["active", "disabled", "expired"] as const;
 
 publishRoutes.get("/accounts", async (c) => {
   const accounts = accountsRepo.listAccounts();
@@ -48,7 +49,12 @@ publishRoutes.put("/accounts/:id", async (c) => {
   const updates: Partial<Parameters<typeof accountsRepo.updateAccount>[1]> = {};
   if (body.displayName !== undefined) updates.display_name = body.displayName;
   if (body.credentials !== undefined) updates.credentials = body.credentials;
-  if (body.status !== undefined) updates.status = body.status as "active" | "disabled" | "expired";
+  if (body.status !== undefined) {
+    if (!VALID_ACCOUNT_STATUSES.includes(body.status as typeof VALID_ACCOUNT_STATUSES[number])) {
+      return c.json({ error: `Invalid status: must be one of ${VALID_ACCOUNT_STATUSES.join(", ")}` }, 400);
+    }
+    updates.status = body.status as "active" | "disabled" | "expired";
+  }
   if (body.isDefault !== undefined) updates.is_default = body.isDefault;
   const account = accountsRepo.updateAccount(id, updates);
   if (!account) return c.json({ error: "Account not found" }, 404);
@@ -120,7 +126,12 @@ publishRoutes.post("/jobs/:id/retry", async (c) => {
     retryPublishJob(id);
     return c.json({ ok: true });
   } catch (err) {
-    return c.json({ error: err instanceof Error ? err.message : String(err) }, 400);
+    const message = err instanceof Error ? err.message : String(err);
+    // Return 404 for "not found" errors, 400 for other validation errors
+    if (/not found/i.test(message)) {
+      return c.json({ error: message }, 404);
+    }
+    return c.json({ error: message }, 400);
   }
 });
 

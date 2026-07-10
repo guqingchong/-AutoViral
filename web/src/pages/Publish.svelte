@@ -109,8 +109,12 @@
     try {
       const res = await fetch(`/api/publish/jobs/${jobId}/retry`, { method: "POST" });
       if (!res.ok) {
-        const text = await res.text();
-        error = text || "Retry failed";
+        try {
+          const data = await res.json();
+          error = data.error || "Retry failed";
+        } catch {
+          error = "Retry failed";
+        }
         return;
       }
       await loadJobs();

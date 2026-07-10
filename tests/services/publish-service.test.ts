@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { resetInMemoryDb } from "../../src/db/connection.js";
+import { resetInMemoryDb, getDb } from "../../src/db/connection.js";
 import { migrate } from "../../src/db/migrate.js";
 import * as accountsRepo from "../../src/db/publish-accounts-repo.js";
 import * as jobsRepo from "../../src/db/publish-jobs-repo.js";
@@ -320,7 +320,7 @@ describe("publish-service", () => {
     expect(job?.post_url).toBe("https://mock.test/post/abc");
   });
 
-  it("throws on retry when account is not found", () => {
+  it("throws on retry when job is not found", () => {
     const work = createWork({
       id: randomUUID(),
       title: "测试标题",
@@ -367,6 +367,56 @@ describe("publish-service", () => {
     accountsRepo.deleteAccount(account.id);
 
     expect(() => retryPublishJob(jobId)).toThrow(/not found/i);
+  });
+
+  it("throws on retry when account is not found", () => {
+    const work = createWork({
+      id: randomUUID(),
+      title: "测试标题",
+      type: "short-video",
+      status: "draft",
+      platforms: [],
+      evaluation_mode: false,
+      tags: [],
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }, []);
+    const account = accountsRepo.createAccount({
+      id: randomUUID(),
+      platform: "xiaohongshu",
+      display_name: "主号",
+      credentials: {},
+      status: "active",
+      is_default: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+
+    const jobId = randomUUID();
+    jobsRepo.createJob({
+      id: jobId,
+      work_id: work.id,
+      render_job_id: null,
+      account_id: account.id,
+      platform: account.platform,
+      title: "测试标题",
+      content: "正文内容",
+      media_path: null,
+      status: "failed",
+      compliance_result: { passed: true, violations: [] },
+      error: "Previous failure",
+      post_url: null,
+      published_at: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+
+    // Disable FK enforcement to delete the account that has a job
+    getDb().pragma("foreign_keys = OFF");
+    accountsRepo.deleteAccount(account.id);
+    getDb().pragma("foreign_keys = ON");
+
+    expect(() => retryPublishJob(jobId)).toThrow(/Account not found/i);
   });
 
   it("throws on retry when account is not active", () => {
