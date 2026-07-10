@@ -22,17 +22,19 @@
   let loadError = $state("");
   let complianceViolations = $state<Violation[]>([]);
   let showComplianceDialog = $state(false);
-  let timer: ReturnType<typeof setTimeout>;
+  let timer: ReturnType<typeof setTimeout> | null = null;
   let unsubPublish: (() => void) | null = null;
+  let loading = $state(true);
+  let destroyed = $state(false);
 
   async function loadAccounts() {
     try {
       loadError = "";
       const res = await fetch("/api/publish/accounts");
       const data = await res.json();
-      accounts = data.accounts ?? [];
+      if (!destroyed) accounts = data.accounts ?? [];
     } catch {
-      loadError = t("publishLoadError");
+      if (!destroyed) loadError = t("publishLoadError");
     }
   }
 
@@ -42,11 +44,14 @@
     try {
       loadError = "";
       const all = await fetchRenderJobs();
+      if (destroyed) return;
       renderJobs = all.filter((j) => j.status === "completed");
       renderJobsLoaded = true;
     } catch {
-      loadError = t("publishLoadError");
-      renderJobsLoaded = true;
+      if (!destroyed) {
+        loadError = t("publishLoadError");
+        renderJobsLoaded = true;
+      }
     }
   }
 
@@ -55,9 +60,9 @@
       loadError = "";
       const res = await fetch("/api/publish/jobs");
       const data = await res.json();
-      jobs = data.jobs ?? [];
+      if (!destroyed) jobs = data.jobs ?? [];
     } catch {
-      loadError = t("publishLoadError");
+      if (!destroyed) loadError = t("publishLoadError");
     }
   }
 
@@ -125,11 +130,14 @@
 
   async function scheduleLoadJobs() {
     await loadJobs();
-    timer = setTimeout(scheduleLoadJobs, 3000);
+    if (!destroyed) {
+      timer = setTimeout(scheduleLoadJobs, 3000);
+    }
   }
 
   onMount(() => {
-    loadAccounts();
+    loading = true;
+    const accountsPromise = loadAccounts();
 
     // Subscribe to publishTarget immediately so we never miss a navigation event
     let pendingTarget: PublishTarget | null = null;
@@ -144,21 +152,33 @@
       }
     });
 
-    loadRenderJobs().then(() => {
+    const renderPromise = loadRenderJobs().then(() => {
       if (pendingTarget) {
         applyPublishTarget(pendingTarget);
         pendingTarget = null;
       }
     });
 
-    scheduleLoadJobs();
+    const jobsPromise = scheduleLoadJobs();
+
+    Promise.all([accountsPromise, renderPromise, jobsPromise]).finally(() => {
+      if (!destroyed) loading = false;
+    });
 
     return () => {
-      clearTimeout(timer);
+      destroyed = true;
+      if (timer) clearTimeout(timer);
       if (unsubPublish) unsubPublish();
     };
   });
 </script>
+
+{#if loading}
+  <div class="loading-state">
+    <div class="loader"></div>
+    <p>{t("loading")}</p>
+  </div>
+{:else}
 
 <div class="publish-page">
   <header class="page-header">
@@ -228,6 +248,7 @@
     {/each}
   </section>
 </div>
+{/if}
 
 <style>
   .publish-page { padding: 1rem 0; }
@@ -240,4 +261,23 @@
   .load-error { color: var(--error); background: var(--error-soft); padding: 0.5rem 0.75rem; border-radius: var(--card-radius); margin-bottom: 1rem; }
   .compliance-dialog { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: var(--card-radius); padding: 1rem; margin-bottom: 1rem; }
   .job-row { display: flex; gap: 1rem; align-items: center; padding: 0.5rem 0; }
+
+  /* Loading */
+  .loading-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+    padding: 5rem 0;
+    color: var(--text-dim);
+  }
+  .loader {
+    width: 32px;
+    height: 32px;
+    border: 3px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
 </style>

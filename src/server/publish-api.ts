@@ -103,6 +103,9 @@ publishRoutes.post("/jobs", async (c) => {
   if (typeof body.title !== "string" || !body.title) {
     return c.json({ error: "title is required" }, 400);
   }
+  if (typeof body.content !== "string" || !body.content) {
+    return c.json({ error: "content is required" }, 400);
+  }
   if (!Array.isArray(body.accountIds)) {
     return c.json({ error: "accountIds must be an array" }, 400);
   }

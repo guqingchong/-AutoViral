@@ -33,6 +33,9 @@ function enqueueAccount(accountId: string, jobId: string): void {
   const previous = accountQueues.get(accountId) ?? Promise.resolve();
   const next = previous
     .then(() => runPublishJob(jobId))
+    .catch(() => {
+      // runPublishJob catches internally; this is a defensive safety net
+    })
     .finally(() => {
       if (accountQueues.get(accountId) === next) {
         accountQueues.delete(accountId);
