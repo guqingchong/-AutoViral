@@ -3,13 +3,14 @@ import { resetInMemoryDb } from "../../src/db/connection.js";
 import { migrate } from "../../src/db/migrate.js";
 import * as accountsRepo from "../../src/db/publish-accounts-repo.js";
 import { createWork } from "../../src/db/works-repo.js";
-import { createPublishJobs, retryPublishJob } from "../../src/services/publish-service.js";
+import { createPublishJobs, resetPublishQueues, retryPublishJob } from "../../src/services/publish-service.js";
 import { randomUUID } from "node:crypto";
 
 describe("publish-service", () => {
   beforeEach(() => {
     resetInMemoryDb();
     migrate();
+    resetPublishQueues();
   });
 
   it("blocks publish when banned words found", () => {
@@ -80,6 +81,32 @@ describe("publish-service", () => {
 
     expect(result.blocked).toBe(false);
     expect(result.jobs).toHaveLength(1);
+  });
+
+  it("blocks publish when account is not found", () => {
+    const work = createWork({
+      id: randomUUID(),
+      title: "标题",
+      type: "short-video",
+      status: "draft",
+      platforms: [],
+      evaluation_mode: false,
+      tags: [],
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }, []);
+
+    const result = createPublishJobs({
+      workId: work.id,
+      accountIds: ["nonexistent-id"],
+      title: "正常标题",
+      content: "内容",
+      forcePublish: false,
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.error).toContain("not found");
+    expect(result.jobs).toHaveLength(0);
   });
 
   it("blocks publish when account is inactive", () => {
