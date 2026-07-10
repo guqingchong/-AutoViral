@@ -4,7 +4,7 @@ import { migrate } from "../../src/db/migrate.js";
 import * as accountsRepo from "../../src/db/publish-accounts-repo.js";
 import * as jobsRepo from "../../src/db/publish-jobs-repo.js";
 import { createWork, getWork } from "../../src/db/works-repo.js";
-import { createPublishJobs, resetPublishQueues, retryPublishJob } from "../../src/services/publish-service.js";
+import { createPublishJobs, resetPublishQueues, retryPublishJob, recoverStuckJobs } from "../../src/services/publish-service.js";
 import * as publishFactory from "../../src/services/publish-factory.js";
 import { randomUUID } from "node:crypto";
 
@@ -465,5 +465,54 @@ describe("publish-service", () => {
     accountsRepo.updateAccount(account.id, { status: "disabled" });
 
     expect(() => retryPublishJob(jobId)).toThrow(/not active/i);
+  });
+
+  it("recovers stuck publishing jobs on startup", () => {
+    const work = createWork({
+      id: randomUUID(),
+      title: "测试标题",
+      type: "short-video",
+      status: "draft",
+      platforms: [],
+      evaluation_mode: false,
+      tags: [],
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }, []);
+    const account = accountsRepo.createAccount({
+      id: randomUUID(),
+      platform: "xiaohongshu",
+      display_name: "主号",
+      credentials: {},
+      status: "active",
+      is_default: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+
+    const jobId = randomUUID();
+    jobsRepo.createJob({
+      id: jobId,
+      work_id: work.id,
+      render_job_id: null,
+      account_id: account.id,
+      platform: account.platform,
+      title: "测试标题",
+      content: "正文内容",
+      media_path: null,
+      status: "publishing",
+      compliance_result: { passed: true, violations: [] },
+      error: null,
+      post_url: null,
+      published_at: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+
+    recoverStuckJobs();
+
+    const job = jobsRepo.getJob(jobId);
+    expect(job?.status).toBe("failed");
+    expect(job?.error).toBe("Server restarted before publish completed");
   });
 });

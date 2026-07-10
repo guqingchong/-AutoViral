@@ -262,4 +262,16 @@ describe("publish API", () => {
     const json = await listRes.json();
     expect(json.words.some((w: { word: string }) => w.word === "引流")).toBe(true);
   });
+
+  it("rejects banned-words with 400 for invalid severity", async () => {
+    const app = createTestApp();
+    const res = await app.request("/api/publish/banned-words", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ platform: "xiaohongshu", word: "引流", severity: "invalid" }),
+    });
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.error).toContain("severity");
+  });
 });

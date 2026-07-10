@@ -10,6 +10,7 @@ export const publishRoutes = new Hono();
 
 const SUPPORTED_PLATFORMS = listSupportedPlatforms();
 const VALID_ACCOUNT_STATUSES = ["active", "disabled", "expired"] as const;
+const VALID_SEVERITIES = ["low", "medium", "high"] as const;
 
 publishRoutes.get("/accounts", async (c) => {
   const accounts = accountsRepo.listAccounts();
@@ -146,6 +147,9 @@ publishRoutes.get("/banned-words", async (c) => {
 
 publishRoutes.post("/banned-words", async (c) => {
   const body = await c.req.json<{ platform: string; word: string; severity: "low" | "medium" | "high" }>();
+  if (!VALID_SEVERITIES.includes(body.severity as typeof VALID_SEVERITIES[number])) {
+    return c.json({ error: `Invalid severity: must be one of ${VALID_SEVERITIES.join(", ")}` }, 400);
+  }
   const word = bannedWordsRepo.createBannedWord({
     platform: body.platform,
     word: body.word,

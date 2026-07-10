@@ -2,7 +2,7 @@ import type { ComplianceResult } from "./compliance-text.js";
 import { scanBannedWords } from "./compliance-text.js";
 import { getDriver } from "./publish-factory.js";
 import { getAccount } from "../db/publish-accounts-repo.js";
-import { createJob, getJob, updateJob } from "../db/publish-jobs-repo.js";
+import { createJob, getJob, updateJob, listJobs } from "../db/publish-jobs-repo.js";
 import { getWork, updateWork } from "../db/works-repo.js";
 import { randomUUID } from "node:crypto";
 
@@ -167,6 +167,20 @@ async function runPublishJob(jobId: string): Promise<void> {
       }
     } catch {
       // non-critical: publish succeeded, work update is secondary
+    }
+  }
+}
+
+export function recoverStuckJobs(): void {
+  const stuckJobs = listJobs({ status: "publishing" });
+  for (const job of stuckJobs) {
+    try {
+      updateJob(job.id, {
+        status: "failed",
+        error: "Server restarted before publish completed",
+      });
+    } catch {
+      // Best-effort; don't let one failure block recovery of others
     }
   }
 }

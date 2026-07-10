@@ -160,8 +160,9 @@ export interface DbAsset {
 export type PublishAccountStatus = "active" | "disabled" | "expired";
 export type PublishJobStatus =
   | "pending"
-  | "compliance_review"
-  | "compliance_failed"
+  // "compliance_review" and "compliance_failed" are intentionally omitted:
+  // compliance failures are detected and blocked at the request level
+  // before a job is created, so no job ever enters these states.
   | "publishing"
   | "published"
   | "failed";
