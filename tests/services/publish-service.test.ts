@@ -216,6 +216,57 @@ describe("publish-service", () => {
     expect(updatedWork?.status).toBe("published");
   });
 
+  it("sets job to failed when driver.publish throws", async () => {
+    // Override the default mock to simulate a publish failure
+    vi.spyOn(publishFactory, "getDriver").mockReturnValue({
+      platform: "xiaohongshu",
+      async publish() {
+        throw new Error("Simulated publish failure");
+      },
+    });
+
+    const work = createWork({
+      id: randomUUID(),
+      title: "测试标题",
+      type: "short-video",
+      status: "draft",
+      platforms: [],
+      evaluation_mode: false,
+      tags: [],
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }, []);
+    const account = accountsRepo.createAccount({
+      id: randomUUID(),
+      platform: "xiaohongshu",
+      display_name: "主号",
+      credentials: {},
+      status: "active",
+      is_default: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+
+    const result = createPublishJobs({
+      workId: work.id,
+      accountIds: [account.id],
+      title: "测试标题",
+      content: "正文内容",
+      forcePublish: false,
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.jobs).toHaveLength(1);
+    const jobId = result.jobs[0].id;
+
+    // Wait for the queued promise to settle
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const job = jobsRepo.getJob(jobId);
+    expect(job?.status).toBe("failed");
+    expect(job?.error).toBe("Simulated publish failure");
+  });
+
   it("retries a failed publish job", async () => {
     const work = createWork({
       id: randomUUID(),
