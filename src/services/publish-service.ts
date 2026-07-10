@@ -125,10 +125,12 @@ export function createPublishJobs(request: CreatePublishJobsRequest): CreatePubl
 }
 
 async function runPublishJob(jobId: string): Promise<void> {
-  const job = getJob(jobId);
-  if (!job) return;
+  let job: ReturnType<typeof getJob>;
 
   try {
+    job = getJob(jobId);
+    if (!job) return;
+
     const driver = getDriver(job.platform);
     const result = await driver.publish({
       title: job.title,
@@ -140,18 +142,29 @@ async function runPublishJob(jobId: string): Promise<void> {
       post_url: result.postUrl,
       published_at: result.publishedAt,
     });
+  } catch (err) {
+    try {
+      updateJob(jobId, {
+        status: "failed",
+        error: err instanceof Error ? err.message : String(err),
+      });
+    } catch {
+      // Can't even update status; at least don't reject the promise
+    }
+    return;
+  }
 
-    if (job.work_id) {
+  // Best-effort work status update — publish already succeeded,
+  // so a work update failure must not overwrite the job status.
+  if (job.work_id) {
+    try {
       const work = getWork(job.work_id);
       if (work && work.status !== "published") {
         updateWork(work.id, { status: "published" });
       }
+    } catch {
+      // non-critical: publish succeeded, work update is secondary
     }
-  } catch (err) {
-    updateJob(jobId, {
-      status: "failed",
-      error: err instanceof Error ? err.message : String(err),
-    });
   }
 }
 
@@ -159,6 +172,10 @@ export function retryPublishJob(jobId: string): void {
   const job = getJob(jobId);
   if (!job) throw new Error("Job not found");
   if (job.status !== "failed") throw new Error("Only failed jobs can be retried");
+
+  const account = getAccount(job.account_id);
+  if (!account) throw new Error("Account not found");
+  if (account.status !== "active") throw new Error("Account is not active");
 
   updateJob(jobId, { status: "publishing", error: null });
   enqueueAccount(job.account_id, jobId);
