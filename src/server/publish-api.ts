@@ -57,9 +57,17 @@ publishRoutes.put("/accounts/:id", async (c) => {
 
 publishRoutes.delete("/accounts/:id", async (c) => {
   const id = c.req.param("id");
-  const ok = accountsRepo.deleteAccount(id);
-  if (!ok) return c.json({ error: "Account not found" }, 404);
-  return c.json({ ok: true });
+  try {
+    const ok = accountsRepo.deleteAccount(id);
+    if (!ok) return c.json({ error: "Account not found" }, 404);
+    return c.json({ ok: true });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (/constraint failed|FOREIGN KEY/i.test(message)) {
+      return c.json({ error: "Cannot delete account with existing publish jobs" }, 400);
+    }
+    return c.json({ error: "Internal server error" }, 500);
+  }
 });
 
 publishRoutes.get("/jobs", async (c) => {

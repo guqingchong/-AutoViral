@@ -105,6 +105,20 @@
     if (target.mediaPath) mediaPath = target.mediaPath;
   }
 
+  async function handleRetry(jobId: string) {
+    try {
+      const res = await fetch(`/api/publish/jobs/${jobId}/retry`, { method: "POST" });
+      if (!res.ok) {
+        const text = await res.text();
+        error = text || "Retry failed";
+        return;
+      }
+      await loadJobs();
+    } catch (err) {
+      error = String(err);
+    }
+  }
+
   async function scheduleLoadJobs() {
     await loadJobs();
     timer = setTimeout(scheduleLoadJobs, 3000);
@@ -204,7 +218,7 @@
         {/if}
         {#if job.error}
           <span class="error">{job.error}</span>
-          <button onclick={() => fetch(`/api/publish/jobs/${job.id}/retry`, { method: "POST" }).then(loadJobs).catch(() => { loadError = t("publishLoadError"); })}>{t("publishRetry")}</button>
+          <button onclick={() => handleRetry(job.id)}>{t("publishRetry")}</button>
         {/if}
       </div>
     {/each}

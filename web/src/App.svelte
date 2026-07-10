@@ -13,14 +13,13 @@
   import NewWorkModal from "./components/NewWorkModal.svelte";
   import { fetchConfig, updateConfig, fetchWorks, createWorkApi, type WorkSummary, type ContentCategory } from "./lib/api";
   import { t, getLanguage, setLanguage, subscribe } from "./lib/i18n";
+  import { activeTab, type Tab } from "./lib/navigation.js";
 
   let theme: "light" | "dark" = $state("dark");
   let lang = $state(getLanguage());
   function tt(key: string): string { void lang; return t(key); }
 
   // App state
-  type Tab = "explore" | "works" | "topics" | "digital-humans" | "assets" | "analytics" | "templates" | "jobs" | "publish";
-  let activeTab: Tab = $state("works");
   let showStudio = $state(false);
   let currentWorkId: string | null = $state(null);
   let showSettings = $state(false);
@@ -182,7 +181,7 @@
 <div class="shell" data-lang={lang}>
   <header class="topbar">
     <div class="topbar-left">
-      <a class="logo-mark" href="#" onclick={(e) => { e.preventDefault(); activeTab = "works"; showStudio = false; currentWorkId = null; }}>
+      <a class="logo-mark" href="#" onclick={(e) => { e.preventDefault(); $activeTab = "works"; showStudio = false; currentWorkId = null; }}>
         <img class="logo-img" src="/logo.svg" alt="AutoViral" />
         <span class="logo-wordmark">AutoViral</span>
       </a>
@@ -190,10 +189,10 @@
         {#each navItems as item}
           <button
             class="nav-link"
-            class:active={activeTab === item.tab && !showStudio}
+            class:active={$activeTab === item.tab && !showStudio}
             role="tab"
-            aria-selected={activeTab === item.tab && !showStudio}
-            onclick={() => { activeTab = item.tab; showStudio = false; currentWorkId = null; }}
+            aria-selected={$activeTab === item.tab && !showStudio}
+            onclick={() => { $activeTab = item.tab; showStudio = false; currentWorkId = null; }}
           >
             {tt(item.labelKey)}
           </button>
@@ -212,28 +211,28 @@
   <main class="main" class:main-studio={showStudio && currentWorkId}>
     {#if showStudio && currentWorkId}
       <Studio workId={currentWorkId} onBack={closeStudio} {initialPrompt} />
-    {:else if activeTab === "explore"}
+    {:else if $activeTab === "explore"}
       <Explore />
-    {:else if activeTab === "topics"}
+    {:else if $activeTab === "topics"}
       <Topics />
-    {:else if activeTab === "analytics"}
+    {:else if $activeTab === "analytics"}
       <Analytics />
-    {:else if activeTab === "digital-humans"}
+    {:else if $activeTab === "digital-humans"}
       <DigitalHumans />
-    {:else if activeTab === "assets"}
+    {:else if $activeTab === "assets"}
       <Assets />
-    {:else if activeTab === "templates"}
+    {:else if $activeTab === "templates"}
       <Templates />
-    {:else if activeTab === "jobs"}
+    {:else if $activeTab === "jobs"}
       <RenderJobs />
-    {:else if activeTab === "publish"}
+    {:else if $activeTab === "publish"}
       <Publish />
-    {:else if activeTab === "works"}
+    {:else if $activeTab === "works"}
       <Works
         onOpenStudio={openStudio}
         onCreateNew={() => showNewWorkModal = true}
         onCreateFromTrend={handleCreateFromTrend}
-        onGoToInsights={() => { activeTab = "explore"; }}
+        onGoToInsights={() => { $activeTab = "explore"; }}
       />
     {/if}
   </main>

@@ -319,4 +319,101 @@ describe("publish-service", () => {
     expect(job?.status).toBe("published");
     expect(job?.post_url).toBe("https://mock.test/post/abc");
   });
+
+  it("throws on retry when account is not found", () => {
+    const work = createWork({
+      id: randomUUID(),
+      title: "测试标题",
+      type: "short-video",
+      status: "draft",
+      platforms: [],
+      evaluation_mode: false,
+      tags: [],
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }, []);
+    const account = accountsRepo.createAccount({
+      id: randomUUID(),
+      platform: "xiaohongshu",
+      display_name: "主号",
+      credentials: {},
+      status: "active",
+      is_default: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+
+    const jobId = randomUUID();
+    jobsRepo.createJob({
+      id: jobId,
+      work_id: work.id,
+      render_job_id: null,
+      account_id: account.id,
+      platform: account.platform,
+      title: "测试标题",
+      content: "正文内容",
+      media_path: null,
+      status: "failed",
+      compliance_result: { passed: true, violations: [] },
+      error: "Previous failure",
+      post_url: null,
+      published_at: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+
+    // Delete the job and account after creating the job
+    jobsRepo.deleteJob(jobId);
+    accountsRepo.deleteAccount(account.id);
+
+    expect(() => retryPublishJob(jobId)).toThrow(/not found/i);
+  });
+
+  it("throws on retry when account is not active", () => {
+    const work = createWork({
+      id: randomUUID(),
+      title: "测试标题",
+      type: "short-video",
+      status: "draft",
+      platforms: [],
+      evaluation_mode: false,
+      tags: [],
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }, []);
+    const account = accountsRepo.createAccount({
+      id: randomUUID(),
+      platform: "xiaohongshu",
+      display_name: "主号",
+      credentials: {},
+      status: "active",
+      is_default: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+
+    const jobId = randomUUID();
+    jobsRepo.createJob({
+      id: jobId,
+      work_id: work.id,
+      render_job_id: null,
+      account_id: account.id,
+      platform: account.platform,
+      title: "测试标题",
+      content: "正文内容",
+      media_path: null,
+      status: "failed",
+      compliance_result: { passed: true, violations: [] },
+      error: "Previous failure",
+      post_url: null,
+      published_at: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+
+    // Disable the account after creating the job
+    accountsRepo.updateAccount(account.id, { status: "disabled" });
+
+    expect(() => retryPublishJob(jobId)).toThrow(/not active/i);
+  });
 });
