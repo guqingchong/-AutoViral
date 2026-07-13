@@ -18,6 +18,12 @@ describe("credential-crypto", () => {
     expect(decrypted).toEqual(plain);
   });
 
+  it("uses 12-byte IV (24 hex chars) per NIST GCM recommendation", () => {
+    const encrypted = encryptCredentials({ token: "x" });
+    const parsed = JSON.parse(encrypted);
+    expect(parsed.iv).toMatch(/^[0-9a-f]{24}$/);
+  });
+
   it("produces different ciphertext for the same plaintext (non-deterministic IV)", () => {
     const plain = { token: "same-value" };
     const e1 = encryptCredentials(plain);
@@ -40,5 +46,24 @@ describe("credential-crypto", () => {
   it("returns empty object for invalid ciphertext", () => {
     const result = decryptCredentials("not-json-at-all");
     expect(result).toEqual({});
+  });
+
+  it("throws in production when PUBLISH_CREDENTIALS_KEY is not set", () => {
+    const origNodeEnv = process.env.NODE_ENV;
+    const origKey = process.env.PUBLISH_CREDENTIALS_KEY;
+
+    process.env.NODE_ENV = "production";
+    delete process.env.PUBLISH_CREDENTIALS_KEY;
+
+    expect(() => encryptCredentials({ token: "x" })).toThrow(
+      "PUBLISH_CREDENTIALS_KEY"
+    );
+
+    process.env.NODE_ENV = origNodeEnv;
+    if (origKey !== undefined) {
+      process.env.PUBLISH_CREDENTIALS_KEY = origKey;
+    } else {
+      delete process.env.PUBLISH_CREDENTIALS_KEY;
+    }
   });
 });
