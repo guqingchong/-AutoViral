@@ -4,7 +4,7 @@ import { migrate } from "../../src/db/migrate.js";
 import * as accountsRepo from "../../src/db/publish-accounts-repo.js";
 import * as jobsRepo from "../../src/db/publish-jobs-repo.js";
 import { createWork, getWork } from "../../src/db/works-repo.js";
-import { createPublishJobs, resetPublishQueues, retryPublishJob, recoverStuckJobs } from "../../src/services/publish-service.js";
+import { createPublishJobs, resetPublishQueues, retryPublishJob, recoverStuckJobs, recoverTimedOutStuckJobs, stopPublishCron } from "../../src/services/publish-service.js";
 import * as publishFactory from "../../src/services/publish-factory.js";
 import { randomUUID } from "node:crypto";
 
@@ -665,6 +665,67 @@ describe("publish-service", () => {
     expect(() => retryPublishJob(jobId)).toThrow("Only failed jobs can be retried");
   });
 
+  it("marks job as failed on publish timeout", async () => {
+    // Set an extremely low timeout so the mock driver will time out
+    const origTimeout = process.env.PUBLISH_TIMEOUT_MS;
+    process.env.PUBLISH_TIMEOUT_MS = "50";
+
+    vi.spyOn(publishFactory, "getDriver").mockReturnValue({
+      platform: "xiaohongshu",
+      async publish() {
+        // This promise takes longer than the 50ms timeout
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        return { postUrl: "https://mock.test/post/abc", publishedAt: new Date().toISOString() };
+      },
+    });
+
+    const work = createWork({
+      id: randomUUID(),
+      title: "测试标题",
+      type: "short-video",
+      status: "draft",
+      platforms: [],
+      evaluation_mode: false,
+      tags: [],
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }, []);
+    const account = accountsRepo.createAccount({
+      id: randomUUID(),
+      platform: "xiaohongshu",
+      display_name: "主号",
+      credentials: {},
+      status: "active",
+      is_default: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+
+    const result = createPublishJobs({
+      workId: work.id,
+      accountIds: [account.id],
+      title: "测试标题",
+      content: "正文内容",
+    });
+
+    expect(result.blocked).toBe(false);
+    const jobId = result.jobs[0].id;
+
+    // Wait for the timeout to fire
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    const job = jobsRepo.getJob(jobId);
+    expect(job?.status).toBe("failed");
+    expect(job?.error).toContain("Publish timeout");
+
+    // Restore env
+    if (origTimeout !== undefined) {
+      process.env.PUBLISH_TIMEOUT_MS = origTimeout;
+    } else {
+      delete process.env.PUBLISH_TIMEOUT_MS;
+    }
+  });
+
   it("recovers stuck publishing jobs on startup", () => {
     const work = createWork({
       id: randomUUID(),
@@ -712,5 +773,76 @@ describe("publish-service", () => {
     const job = jobsRepo.getJob(jobId);
     expect(job?.status).toBe("failed");
     expect(job?.error).toBe("Server restarted before publish completed");
+  });
+
+  it("recoverTimedOutStuckJobs only recovers jobs updated beyond threshold", () => {
+    const work = createWork({
+      id: randomUUID(),
+      title: "测试标题",
+      type: "short-video",
+      status: "draft",
+      platforms: [],
+      evaluation_mode: false,
+      tags: [],
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }, []);
+    const account = accountsRepo.createAccount({
+      id: randomUUID(),
+      platform: "xiaohongshu",
+      display_name: "主号",
+      credentials: {},
+      status: "active",
+      is_default: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+
+    // Job stuck for a long time (should be recovered)
+    const oldJobId = randomUUID();
+    const oldDate = new Date(Date.now() - 20 * 60 * 1000).toISOString();
+    jobsRepo.createJob({
+      id: oldJobId,
+      work_id: work.id,
+      render_job_id: null,
+      account_id: account.id,
+      platform: "xiaohongshu",
+      title: "旧任务",
+      content: "内容",
+      media_path: null,
+      status: "publishing",
+      compliance_result: { passed: true, violations: [] },
+      error: null,
+      post_url: null,
+      published_at: null,
+      created_at: oldDate,
+      updated_at: oldDate,
+    });
+
+    // Job stuck recently (should NOT be recovered)
+    const recentJobId = randomUUID();
+    const recentDate = new Date().toISOString();
+    jobsRepo.createJob({
+      id: recentJobId,
+      work_id: work.id,
+      render_job_id: null,
+      account_id: account.id,
+      platform: "xiaohongshu",
+      title: "新任务",
+      content: "内容",
+      media_path: null,
+      status: "publishing",
+      compliance_result: { passed: true, violations: [] },
+      error: null,
+      post_url: null,
+      published_at: null,
+      created_at: recentDate,
+      updated_at: recentDate,
+    });
+
+    recoverTimedOutStuckJobs();
+
+    expect(jobsRepo.getJob(oldJobId)?.status).toBe("failed");
+    expect(jobsRepo.getJob(recentJobId)?.status).toBe("publishing");
   });
 });

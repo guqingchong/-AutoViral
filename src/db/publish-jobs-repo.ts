@@ -68,6 +68,18 @@ export function listJobs(options?: { status?: string; workId?: string; limit?: n
   return rows.map(rowToJob);
 }
 
+/**
+ * Return ALL jobs with status "publishing", without limit.
+ * Used by recoverStuckJobs to ensure no stuck job is missed.
+ */
+export function listStuckJobs(): DbPublishJob[] {
+  const db = getDb();
+  const rows = db
+    .prepare("SELECT * FROM publish_jobs WHERE status = 'publishing' ORDER BY updated_at ASC")
+    .all() as Record<string, unknown>[];
+  return rows.map(rowToJob);
+}
+
 export function updateJob(id: string, updates: Partial<DbPublishJob>): DbPublishJob | undefined {
   const db = getDb();
   const existing = getJob(id);

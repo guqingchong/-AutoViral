@@ -1,18 +1,26 @@
 import { getDb } from "./connection.js";
-import { fromJson, toJson } from "./json.js";
+import { toJson } from "./json.js";
+import { encryptCredentials, decryptCredentials } from "../services/credential-crypto.js";
 import type { DbPublishAccount } from "./types.js";
 
 function rowToAccount(row: Record<string, unknown>): DbPublishAccount {
+  const encrypted = (row.credentials as string) ?? "{}";
+  const credentials = decryptCredentials(encrypted);
   return {
     id: row.id as string,
     platform: row.platform as string,
     display_name: row.display_name as string,
-    credentials: fromJson<Record<string, unknown>>((row.credentials as string) ?? "{}") ?? {},
+    credentials,
     status: row.status as DbPublishAccount["status"],
     is_default: Boolean(row.is_default),
     created_at: row.created_at as string,
     updated_at: row.updated_at as string,
   };
+}
+
+/** Encrypt the credentials field before storing. */
+function encryptAccountCredentials(account: { credentials: Record<string, unknown> }): string {
+  return encryptCredentials(account.credentials);
 }
 
 export function createAccount(account: DbPublishAccount): DbPublishAccount {
@@ -24,7 +32,7 @@ export function createAccount(account: DbPublishAccount): DbPublishAccount {
     account.id,
     account.platform,
     account.display_name,
-    toJson(account.credentials),
+    encryptAccountCredentials(account),
     account.status,
     account.is_default ? 1 : 0,
     account.created_at,
@@ -59,7 +67,7 @@ export function updateAccount(id: string, updates: Partial<DbPublishAccount>): D
   ).run(
     account.platform,
     account.display_name,
-    toJson(account.credentials),
+    encryptAccountCredentials(account),
     account.status,
     account.is_default ? 1 : 0,
     account.updated_at,

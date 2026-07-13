@@ -252,6 +252,7 @@ CREATE TABLE IF NOT EXISTS publish_jobs (
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
   FOREIGN KEY (work_id) REFERENCES works(id) ON DELETE SET NULL,
+  FOREIGN KEY (render_job_id) REFERENCES render_jobs(id) ON DELETE SET NULL,
   FOREIGN KEY (account_id) REFERENCES publish_accounts(id) ON DELETE RESTRICT
 );
 
@@ -290,6 +291,45 @@ INSERT INTO compliance_banned_words (platform, word, severity) VALUES
 ('all', '歧视', 'high'),
 ('all', '恐怖', 'high'),
 ('all', '伪造', 'medium');
+`,
+  },
+  {
+    version: 5,
+    name: "publish_jobs_render_job_fk",
+    sql: `
+-- Add FOREIGN KEY on publish_jobs.render_job_id for existing databases.
+-- SQLite does not support ALTER TABLE ADD FOREIGN KEY, so we recreate.
+PRAGMA foreign_keys = OFF;
+
+CREATE TABLE IF NOT EXISTS publish_jobs_v5 (
+  id TEXT PRIMARY KEY,
+  work_id TEXT,
+  render_job_id TEXT,
+  account_id TEXT NOT NULL,
+  platform TEXT NOT NULL,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  media_path TEXT,
+  status TEXT NOT NULL DEFAULT 'pending',
+  compliance_result TEXT NOT NULL DEFAULT '{"passed":true,"violations":[]}',
+  error TEXT,
+  post_url TEXT,
+  published_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (work_id) REFERENCES works(id) ON DELETE SET NULL,
+  FOREIGN KEY (render_job_id) REFERENCES render_jobs(id) ON DELETE SET NULL,
+  FOREIGN KEY (account_id) REFERENCES publish_accounts(id) ON DELETE RESTRICT
+);
+
+INSERT INTO publish_jobs_v5 SELECT * FROM publish_jobs;
+DROP TABLE publish_jobs;
+ALTER TABLE publish_jobs_v5 RENAME TO publish_jobs;
+
+CREATE INDEX IF NOT EXISTS idx_publish_jobs_status ON publish_jobs(status);
+CREATE INDEX IF NOT EXISTS idx_publish_jobs_work_id ON publish_jobs(work_id);
+
+PRAGMA foreign_keys = ON;
 `,
   },
 ];
