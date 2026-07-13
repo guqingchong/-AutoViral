@@ -30,6 +30,12 @@ export function createBaseline(baseline: Omit<DbBaseline, "id">): DbBaseline {
   return { ...baseline, id: Number(result.lastInsertRowid) };
 }
 
+export function listBaselines(limit = 20): DbBaseline[] {
+  const db = getDb();
+  const rows = db.prepare("SELECT * FROM baselines ORDER BY computed_at DESC LIMIT ?").all(limit) as Record<string, unknown>[];
+  return rows.map(rowToBaseline);
+}
+
 export function getLatestBaseline(metricName: string, platform?: string): DbBaseline | undefined {
   const db = getDb();
   const sql = platform

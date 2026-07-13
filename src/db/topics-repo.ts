@@ -98,3 +98,9 @@ export function updateTopic(id: number, updates: Partial<DbTopic>): DbTopic | un
   );
   return topic;
 }
+
+export function deleteTopic(id: number): boolean {
+  const db = getDb();
+  const result = db.prepare("DELETE FROM topics WHERE id = ?").run(id);
+  return result.changes > 0;
+}

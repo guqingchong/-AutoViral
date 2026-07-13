@@ -27,3 +27,17 @@ export function getScript(id: number): DbScript | undefined {
     created_at: row.created_at as string,
   };
 }
+
+export function listScriptsByWork(workId: string): DbScript[] {
+  const db = getDb();
+  const rows = db.prepare("SELECT * FROM scripts WHERE work_id = ? ORDER BY created_at DESC").all(workId) as Record<string, unknown>[];
+  return rows.map((row) => ({
+    id: row.id as number,
+    work_id: (row.work_id as string) || undefined,
+    article_id: (row.article_id as number) || undefined,
+    content: fromJson(row.content as string) ?? {},
+    duration: (row.duration as number) || undefined,
+    status: row.status as DbScript["status"],
+    created_at: row.created_at as string,
+  }));
+}

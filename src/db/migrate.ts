@@ -493,6 +493,21 @@ CREATE INDEX IF NOT EXISTS idx_schedule_work ON content_schedule(work_id);
 CREATE INDEX IF NOT EXISTS idx_schedule_account ON content_schedule(account_id);
 `,
   },
+  {
+    version: 10,
+    name: "prd_work_fields",
+    sql: `
+ALTER TABLE works ADD COLUMN topic_id INTEGER REFERENCES topics(id) ON DELETE SET NULL;
+ALTER TABLE works ADD COLUMN content_form TEXT;
+ALTER TABLE works ADD COLUMN article_id INTEGER REFERENCES articles(id) ON DELETE SET NULL;
+ALTER TABLE works ADD COLUMN script_id INTEGER REFERENCES scripts(id) ON DELETE SET NULL;
+ALTER TABLE works ADD COLUMN estimated_cost REAL DEFAULT 0;
+ALTER TABLE works ADD COLUMN actual_cost REAL DEFAULT 0;
+
+CREATE INDEX IF NOT EXISTS idx_works_topic_id ON works(topic_id);
+CREATE INDEX IF NOT EXISTS idx_works_content_form ON works(content_form);
+`,
+  },
 ];
 
 export function migrate(): void {

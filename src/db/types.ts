@@ -15,12 +15,17 @@ export interface DbWork {
   title: string;
   type: DbWorkType;
   content_category?: string;
+  content_form?: string;           // PRD: hot_comment | knowledge | industry | insight
   video_source?: string;
   video_search_query?: string;
   status: DbWorkStatus;
   platforms: string[];
   evaluation_mode: boolean;
   topic_hint?: string;
+  topic_id?: number;               // FK → topics.id (PRD: Work → Topic back-reference)
+  article_id?: number;             // FK → articles.id
+  script_id?: number;              // FK → scripts.id
+  digital_human_id?: string;       // column exists since migration v2, type was missing
   cli_session_id?: string;
   account_id?: string;
   eval_session_ids?: Record<string, string>;
@@ -30,6 +35,8 @@ export interface DbWork {
   hook_type?: string;
   template_id?: string;
   tags: string[];
+  estimated_cost?: number;         // PRD: 预估成本
+  actual_cost?: number;            // PRD: 实际成本
   created_at: string;
   updated_at: string;
 }

@@ -43,11 +43,11 @@ import { log, readLogs } from "../logger.js";
 import { runPipeline, getRunStatus, listRuns, getRunReport, type RunConfig } from "../test-runner.js";
 import { evaluateWork } from "../test-evaluator.js";
 import { collectTrends, listTopics, getTopic } from "../services/trend-research.js";
-import { updateTopic } from "../db/topics-repo.js";
 import { getAccount } from "../db/accounts-repo.js";
 import { buildTonePrompt } from "../services/tone-profile.js";
-import { createArticle } from "../db/articles-repo.js";
-import { createScript } from "../db/scripts-repo.js";
+import { updateTopic, deleteTopic } from "../db/topics-repo.js";
+import { createArticle, listArticlesByWork } from "../db/articles-repo.js";
+import { createScript, listScriptsByWork } from "../db/scripts-repo.js";
 import { generateArticleFromTopic, generateScriptFromArticle } from "../services/content-generator.js";
 import { randomUUID } from "node:crypto";
 import { createTemplate, getTemplate, listTemplates, updateTemplate, deleteTemplate, type DbTemplate } from "../db/templates-repo.js";
@@ -400,6 +400,20 @@ apiRoutes.get("/api/works/:id/assets/*", async (c) => {
   } catch {
     return c.json({ error: "Asset not found" }, 404);
   }
+});
+
+// GET /api/works/:id/articles — PRD: list articles for a work
+apiRoutes.get("/api/works/:id/articles", async (c) => {
+  const id = c.req.param("id");
+  const articles = listArticlesByWork(id);
+  return c.json({ articles });
+});
+
+// GET /api/works/:id/scripts — PRD: list scripts for a work
+apiRoutes.get("/api/works/:id/scripts", async (c) => {
+  const id = c.req.param("id");
+  const scripts = listScriptsByWork(id);
+  return c.json({ scripts });
 });
 
 // POST /api/works/:id/assets/upload — upload file to work assets
@@ -2157,6 +2171,47 @@ apiRoutes.get("/api/topics/:id", async (c) => {
   const topic = getTopic(id);
   if (!topic) return c.json({ error: "Topic not found" }, 404);
   return c.json(topic);
+});
+
+// DELETE /api/topics/:id — remove a topic
+apiRoutes.delete("/api/topics/:id", async (c) => {
+  const id = parseInt(c.req.param("id"), 10);
+  if (Number.isNaN(id)) return c.json({ error: "Invalid id" }, 400);
+  const ok = deleteTopic(id);
+  if (!ok) return c.json({ error: "Topic not found" }, 404);
+  return c.json({ deleted: true });
+});
+
+// POST /api/topics — manually create a topic (bypass AI collection)
+apiRoutes.post("/api/topics", async (c) => {
+  const body = await c.req.json<{
+    title: string;
+    description?: string;
+    platform?: string;
+    category?: string;
+    tags?: string[];
+    content_angles?: string[];
+    emotion_type?: string;
+    heat?: number;
+    competition?: string;
+    opportunity?: string;
+  }>();
+  if (!body.title) return c.json({ error: "title is required" }, 400);
+  const { createTopic } = await import("../db/topics-repo.js");
+  const topic = createTopic({
+    title: body.title,
+    description: body.description ?? "",
+    platform: body.platform,
+    category: body.category,
+    tags: body.tags ?? [],
+    content_angles: body.content_angles ?? [],
+    emotion_type: body.emotion_type,
+    heat: body.heat ?? 0,
+    competition: body.competition ?? "中",
+    opportunity: body.opportunity ?? "",
+    status: "selected",
+  });
+  return c.json(topic, 201);
 });
 
 // Topics are collected globally (independent of accounts) during trend research.
