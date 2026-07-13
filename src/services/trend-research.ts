@@ -50,13 +50,26 @@ export async function collectTrends(platforms: string[], interests: string[] = [
 function analyzeTrendsWithAgent(platform: string, rawData: string, interests: string[], snapshotId: number): Promise<Omit<DbTopic, "id" | "created_at" | "status">[]> {
   return new Promise((resolve) => {
     const platformLabel = platform === "xiaohongshu" ? "小红书" : platform === "douyin" ? "抖音" : platform;
-    const interestClause = interests.length ? `用户关注领域：${interests.join("、")}` : "";
-    const dataClause = rawData ? `实时热搜数据：\n${rawData.slice(0, 4000)}` : "无 API 数据，请使用 WebSearch 搜索最新趋势。";
+    const interestClause = interests.length
+      ? `\n用户特别关注以下领域：${interests.join("、")}。请优先覆盖这些领域的趋势，同时也包含其他热门方向。\n`
+      : "";
+    const dataClause = rawData
+      ? `\n以下是通过 API 获取的 ${platformLabel} 实时热搜数据，请以此为基础进行分析：\n\`\`\`json\n${rawData.slice(0, 4000)}\n\`\`\`\n`
+      : `\n无法通过 API 获取实时数据，请使用 WebSearch 搜索最新热搜信息。搜索："${platformLabel} 爆款内容 趋势 2026" "${platformLabel} 热门话题 最新"\n`;
     const prompt = [
-      `你是社交媒体趋势研究员。分析 ${platformLabel} 当前热门内容趋势。`,
+      `你是一个专业的社交媒体趋势研究员。请分析 ${platformLabel} 平台当前最热门的内容趋势。`,
       dataClause,
       interestClause,
-      `输出严格 JSON（不要 Markdown）：`,
+      ``,
+      `## 核心创作方向（强制执行）`,
+      ``,
+      `每个推荐的话题/方向必须能触发以下四种情绪中的至少一种，否则不予推荐：`,
+      `1. **焦虑**（落后焦虑/错过焦虑/被替代焦虑/身份下坠焦虑）— 让观众觉得"我是不是落后了"`,
+      `2. **愤怒**（不公/冒犯/双标/欺骗/价值观冲突）— 让观众觉得"这不对/凭什么"`,
+      `3. **搞笑/抽象**（反转/共鸣/错位）— 让观众笑出来想转发`,
+      `4. **羡慕**（想成为/想拥有）— 让观众觉得"我也想要这样的生活"`,
+      ``,
+      `输出严格 JSON（不要 Markdown，只输出 JSON 对象）：`,
       JSON.stringify({
         topics: [{
           title: "话题标题",
@@ -65,14 +78,25 @@ function analyzeTrendsWithAgent(platform: string, rawData: string, interests: st
           opportunity: "金矿",
           emotionType: "焦虑",
           emotionSubtype: "被替代焦虑",
-          description: "趋势描述",
-          tags: ["标签1"],
-          contentAngles: ["切入角度1"],
-          exampleHook: "爆款开头示例",
+          description: "趋势描述和为什么值得做",
+          tags: ["推荐标签1", "推荐标签2", "推荐标签3"],
+          contentAngles: ["切入角度1", "切入角度2", "切入角度3"],
+          exampleHook: "一句话爆款开头示例",
           category: "所属领域",
         }],
       }, null, 2),
-      `要求：topics 至少 10 个；heat 1-5；competition 低/中/高；opportunity 金矿/蓝海/红海；emotionType 焦虑/愤怒/搞笑/羡慕；tags 3-5 个；contentAngles 2-3 个。`,
+      ``,
+      `## 输出约束`,
+      `- topics 至少 10 个，不够就多搜多看`,
+      `- heat 为 1-5 整数，5 = 现象级刷屏`,
+      `- competition "低"/"中"/"高"——低竞争是蓝海机会`,
+      `- opportunity "金矿"(高热低竞)/"蓝海"(低热低竞)/"红海"(高热高竞)`,
+      `- emotionType 必填，为 "焦虑"/"愤怒"/"搞笑"/"羡慕" 之一`,
+      `- emotionSubtype 必填，为该情绪的具体子类型`,
+      `- tags 3-5 个`,
+      `- contentAngles 2-3 个具体的内容切入角度`,
+      `- exampleHook 一句话的爆款开头示例`,
+      `- category 为所属领域（美食/科技/穿搭/生活/情感/职场/健身/旅行/宠物/教育）`,
     ].join("\n");
 
     const cli = resolveClaudeCommand();

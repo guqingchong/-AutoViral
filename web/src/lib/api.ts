@@ -325,8 +325,8 @@ export async function cancelTrendResearch(sessionKey: string) {
   return post<{ cancelled: boolean }>(`/api/trends/cancel/${encodeURIComponent(sessionKey)}`, {});
 }
 
-export async function collectTrends() {
-  return post<{ collected: number }>("/api/trends/collect", {});
+export async function collectTrends(platform?: string, interests?: string[]) {
+  return post<{ collected: number; platform: string; topics: Array<{ id: number; title: string; heat: number }> }>("/api/trends/collect", { platform, interests });
 }
 
 // ---------------------------------------------------------------------------

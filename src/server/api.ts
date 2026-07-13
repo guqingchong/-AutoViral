@@ -2190,10 +2190,12 @@ apiRoutes.post("/api/topics/:id/convert", async (c) => {
 
 apiRoutes.post("/api/trends/collect", async (c) => {
   const config = await loadConfig();
-  if (!config.research?.enabled) return c.json({ error: "Research disabled" }, 400);
-  const results = await collectTrends(config.research.platforms);
+  const body = await c.req.json<{ platform?: string; interests?: string[] }>().catch(() => ({}));
+  const platform = (body as any).platform ?? config.research?.platforms?.[0] ?? "douyin";
+  const interests = (body as any).interests ?? config.interests ?? [];
+  const results = await collectTrends([platform], interests);
   const total = results.reduce((sum, r) => sum + r.topics.length, 0);
-  return c.json({ collected: total });
+  return c.json({ collected: total, platform, topics: results.flatMap(r => r.topics.map(t => ({ id: t.id, title: t.title, heat: t.heat }))) });
 });
 
 // ---------------------------------------------------------------------------
