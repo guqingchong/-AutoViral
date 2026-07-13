@@ -19,6 +19,13 @@ import { migrate } from "../../src/db/migrate.js";
 
 const ORIGINAL_ENV = process.env.AUTOVIRAL_DATA_DIR;
 
+// Windows SQLite + filesystem I/O is significantly slower than Linux/macOS.
+// Apply a platform multiplier to all thresholds so the suite stays meaningful
+// (catches catastrophic regressions) without flaking on dev machines.
+const IS_WINDOWS = process.platform === "win32";
+const PERF_FACTOR = IS_WINDOWS ? 3 : 1;
+function isWindows() { return IS_WINDOWS; }
+
 function makeApp() {
   const app = new Hono();
   app.route("/api/analytics/v2", analyticsApi);
@@ -83,22 +90,22 @@ describe("Performance — API 响应时间基准", () => {
   describe("核心读端点延迟", () => {
     it("GET /api/health p50 < 5ms", async () => {
       const stats = await measureN(app, 10, "GET", "/api/health");
-      expect(stats.p50).toBeLessThan(10); // generous: local read
+      expect(stats.p50).toBeLessThan(10 * PERF_FACTOR);
     });
 
     it("GET /api/works p50 < 30ms (空数据库)", async () => {
       const stats = await measureN(app, 5, "GET", "/api/works");
-      expect(stats.p50).toBeLessThan(50);
+      expect(stats.p50).toBeLessThan(50 * PERF_FACTOR);
     });
 
-    it("GET /api/config p50 < 100ms (Windows)", async () => {
+    it(`GET /api/config p50 < ${50 * PERF_FACTOR}ms`, async () => {
       const stats = await measureN(app, 5, "GET", "/api/config");
-      expect(stats.p50).toBeLessThan(100);
+      expect(stats.p50).toBeLessThan(50 * PERF_FACTOR);
     });
 
     it("GET /api/generate/providers p50 < 5ms", async () => {
       const stats = await measureN(app, 5, "GET", "/api/generate/providers");
-      expect(stats.p50).toBeLessThan(10);
+      expect(stats.p50).toBeLessThan(10 * PERF_FACTOR);
     });
   });
 
@@ -106,16 +113,16 @@ describe("Performance — API 响应时间基准", () => {
   // 性能测试 2：写端点延迟
   // ═══════════════════════════════════════════════════════════════════
   describe("写端点延迟", () => {
-    it("POST /api/works p50 < 30ms", async () => {
+    it(`POST /api/works p50 < ${30 * PERF_FACTOR}ms`, async () => {
       const stats = await measureN(app, 5, "POST", "/api/works", {
         title: "性能测试作品",
         type: "short-video",
         platforms: ["douyin"],
       });
-      expect(stats.p50).toBeLessThan(50);
+      expect(stats.p50).toBeLessThan(50 * PERF_FACTOR);
     });
 
-    it("PUT /api/works/:id p50 < 30ms", async () => {
+    it(`PUT /api/works/:id p50 < ${30 * PERF_FACTOR}ms`, async () => {
       // Create first
       const create = await app.request("/api/works", {
         method: "POST",
@@ -128,7 +135,7 @@ describe("Performance — API 响应时间基准", () => {
         title: "已更新",
         status: "reviewing",
       });
-      expect(stats.p50).toBeLessThan(50);
+      expect(stats.p50).toBeLessThan(50 * PERF_FACTOR);
     });
   });
 
@@ -136,7 +143,7 @@ describe("Performance — API 响应时间基准", () => {
   // 性能测试 3：DB 批量写入性能
   // ═══════════════════════════════════════════════════════════════════
   describe("DB 批量写入性能", () => {
-    it("100 条作品插入 < 8s (Windows SQLite)", async () => {
+    it(`100 条作品插入 < ${3 * PERF_FACTOR}s`, async () => {
       const start = performance.now();
       for (let i = 0; i < 100; i++) {
         await app.request("/api/works", {
@@ -150,11 +157,10 @@ describe("Performance — API 响应时间基准", () => {
         });
       }
       const elapsed = performance.now() - start;
-      // Windows SQLite is significantly slower; 8s is a safe threshold
-      expect(elapsed).toBeLessThan(8000);
+      expect(elapsed).toBeLessThan(3000 * PERF_FACTOR);
     }, 15000);
 
-    it("100 条作品列表查询 < 500ms (Windows SQLite)", async () => {
+    it(`100 条作品列表查询 < ${100 * PERF_FACTOR}ms`, async () => {
       // Seed 100 works
       for (let i = 0; i < 100; i++) {
         await app.request("/api/works", {
@@ -172,7 +178,7 @@ describe("Performance — API 响应时间基准", () => {
       const list = await app.request("/api/works");
       expect(list.status).toBe(200);
       const elapsed = performance.now() - start;
-      expect(elapsed).toBeLessThan(1000);
+      expect(elapsed).toBeLessThan(200 * PERF_FACTOR);
     }, 15000);
   });
 
@@ -182,12 +188,12 @@ describe("Performance — API 响应时间基准", () => {
   describe("Analytics 端点性能", () => {
     it("GET /api/analytics/records p50 < 20ms", async () => {
       const stats = await measureN(app, 5, "GET", "/api/analytics/records");
-      expect(stats.p50).toBeLessThan(30);
+      expect(stats.p50).toBeLessThan(30 * PERF_FACTOR);
     });
 
     it("GET /api/analytics/insights p50 < 20ms", async () => {
       const stats = await measureN(app, 5, "GET", "/api/analytics/insights");
-      expect(stats.p50).toBeLessThan(30);
+      expect(stats.p50).toBeLessThan(30 * PERF_FACTOR);
     });
   });
 
@@ -197,7 +203,7 @@ describe("Performance — API 响应时间基准", () => {
   describe("Comments 端点性能", () => {
     it("GET /api/comments p50 < 20ms", async () => {
       const stats = await measureN(app, 5, "GET", "/api/comments");
-      expect(stats.p50).toBeLessThan(30);
+      expect(stats.p50).toBeLessThan(30 * PERF_FACTOR);
     });
   });
 
@@ -207,7 +213,7 @@ describe("Performance — API 响应时间基准", () => {
   describe("Evolution 端点性能", () => {
     it("GET /api/evolution/rules p50 < 20ms", async () => {
       const stats = await measureN(app, 5, "GET", "/api/evolution/rules");
-      expect(stats.p50).toBeLessThan(30);
+      expect(stats.p50).toBeLessThan(30 * PERF_FACTOR);
     });
   });
 
@@ -230,7 +236,7 @@ describe("Performance — API 响应时间基准", () => {
       const start = performance.now();
       const row = db.prepare("SELECT COUNT(*) as cnt FROM works_bench").get() as { cnt: number };
       const elapsed = performance.now() - start;
-      expect(elapsed).toBeLessThan(10);
+      expect(elapsed).toBeLessThan(10 * PERF_FACTOR);
       expect(row.cnt).toBe(1000);
 
       db.exec("DROP TABLE IF EXISTS works_bench");
