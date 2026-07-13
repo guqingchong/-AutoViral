@@ -2623,18 +2623,18 @@ apiRoutes.post("/api/works/:id/render", async (c) => {
 // ── Admin: backup, restore, migration ─────────────────────────────────────
 
 apiRoutes.post("/api/admin/backup", async (c) => {
-  const body = await c.req.json<{ path?: string }>().catch(() => ({}));
-  const dest = body?.path ?? join(getConfigDir(), `autoviral-backup-${Date.now()}.zip`);
+  const body = await c.req.json<{ path?: string }>().catch(() => ({ path: undefined } as { path?: string }));
+  const dest = body.path ?? join(getConfigDir(), `autoviral-backup-${Date.now()}.zip`);
   await exportBackup(dest);
   return c.json({ ok: true, path: dest });
 });
 
 apiRoutes.post("/api/admin/restore", async (c) => {
-  const body = await c.req.json<{ path?: string; overwrite?: boolean }>().catch(() => ({}));
-  const src = body?.path;
+  const body = await c.req.json<{ path?: string; overwrite?: boolean }>().catch(() => ({ path: undefined, overwrite: false } as { path?: string; overwrite?: boolean }));
+  const src = body.path;
   if (!src) return c.json({ error: "Missing backup path" }, 400);
   if (!existsSync(src)) return c.json({ error: "Backup file not found" }, 404);
-  const restored = await importBackup(src, { overwrite: body?.overwrite ?? false });
+  const restored = await importBackup(src, { overwrite: body.overwrite ?? false });
   return c.json({ ok: true, restored });
 });
 
