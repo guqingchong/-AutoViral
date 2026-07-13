@@ -48,6 +48,27 @@ describe("credential-crypto", () => {
     expect(result).toEqual({});
   });
 
+  it("returns empty object when ciphertext is tampered with (decryption failure)", () => {
+    const plain = { token: "secret" };
+    const encrypted = encryptCredentials(plain);
+    const parsed = JSON.parse(encrypted);
+
+    // Tamper with the ciphertext
+    const tampered = JSON.stringify({ iv: parsed.iv, data: "deadbeef", tag: parsed.tag });
+    const result = decryptCredentials(tampered);
+    expect(result).toEqual({});
+
+    // Tamper with the auth tag
+    const tamperedTag = JSON.stringify({ iv: parsed.iv, data: parsed.data, tag: "00000000000000000000000000000000" });
+    const result2 = decryptCredentials(tamperedTag);
+    expect(result2).toEqual({});
+
+    // Tamper with the IV
+    const tamperedIv = JSON.stringify({ iv: "000000000000000000000000", data: parsed.data, tag: parsed.tag });
+    const result3 = decryptCredentials(tamperedIv);
+    expect(result3).toEqual({});
+  });
+
   it("throws in production when PUBLISH_CREDENTIALS_KEY is not set", () => {
     const origNodeEnv = process.env.NODE_ENV;
     const origKey = process.env.PUBLISH_CREDENTIALS_KEY;

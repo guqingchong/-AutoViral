@@ -49,13 +49,13 @@ function assertAes256GcmSupported(): void {
 export function encryptCredentials(plain: Record<string, unknown>): string {
   assertAes256GcmSupported();
   const key = getEncryptionKey();
-  const iv = randomBytes(12).toString("hex");
+  const iv = randomBytes(12); // 12-byte Buffer per NIST GCM recommendation
   const cipher = createCipheriv(ALGORITHM, key, iv);
   const json = JSON.stringify(plain);
   let encrypted = cipher.update(json, "utf-8", "hex");
   encrypted += cipher.final("hex");
   const authTag = cipher.getAuthTag().toString("hex");
-  return JSON.stringify({ iv, data: encrypted, tag: authTag });
+  return JSON.stringify({ iv: iv.toString("hex"), data: encrypted, tag: authTag });
 }
 
 /**
@@ -75,11 +75,15 @@ export function decryptCredentials(cipherJson: string): Record<string, unknown> 
   // Check if this looks like an encrypted payload (has iv, data, tag string fields)
   if (typeof parsed.iv === "string" && typeof parsed.data === "string" && typeof parsed.tag === "string") {
     const { iv, data, tag } = parsed as { iv: string; data: string; tag: string };
-    const decipher = createDecipheriv(ALGORITHM, key, iv);
-    decipher.setAuthTag(Buffer.from(tag, "hex"));
-    let decrypted = decipher.update(data, "hex", "utf-8");
-    decrypted += decipher.final("utf-8");
-    return JSON.parse(decrypted) as Record<string, unknown>;
+    try {
+      const decipher = createDecipheriv(ALGORITHM, key, Buffer.from(iv, "hex"));
+      decipher.setAuthTag(Buffer.from(tag, "hex"));
+      let decrypted = decipher.update(data, "hex", "utf-8");
+      decrypted += decipher.final("utf-8");
+      return JSON.parse(decrypted) as Record<string, unknown>;
+    } catch {
+      return {};
+    }
   }
   // Legacy plaintext JSON — return as-is
   return parsed as Record<string, unknown>;

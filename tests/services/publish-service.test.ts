@@ -170,6 +170,48 @@ describe("publish-service", () => {
     expect(result.jobs).toHaveLength(0);
   });
 
+  it("treats empty string renderJobId and mediaPath as null", () => {
+    const work = createWork({
+      id: randomUUID(),
+      title: "测试标题",
+      type: "short-video",
+      status: "draft",
+      platforms: [],
+      evaluation_mode: false,
+      tags: [],
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }, []);
+    const account = accountsRepo.createAccount({
+      id: randomUUID(),
+      platform: "xiaohongshu",
+      display_name: "主号",
+      credentials: {},
+      status: "active",
+      is_default: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+
+    const result = createPublishJobs({
+      workId: work.id,
+      renderJobId: "",
+      accountIds: [account.id],
+      title: "测试标题",
+      content: "正文内容",
+      mediaPath: "",
+      forcePublish: false,
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.jobs).toHaveLength(1);
+
+    const job = jobsRepo.getJob(result.jobs[0].id);
+    expect(job).toBeDefined();
+    expect(job!.render_job_id).toBeNull();
+    expect(job!.media_path).toBeNull();
+  });
+
   it("publishes job asynchronously and updates work status", async () => {
     const work = createWork({
       id: randomUUID(),
