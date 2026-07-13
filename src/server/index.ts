@@ -17,7 +17,7 @@ import { startAnalyticsCollector } from "../analytics-collector.js";
 import { startTrendScheduler } from "../services/scheduler.js";
 import { migrate } from "../db/migrate.js";
 import { migrateLegacyWorks } from "../db/migrate-legacy.js";
-import { recoverStuckJobs } from "../services/publish-service.js";
+import { recoverStuckJobs, startPublishCron } from "../services/publish-service.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -31,6 +31,9 @@ export async function startServer(port: number): Promise<{ server: Server }> {
 
   // 0.5. Recover publish jobs that were stuck "publishing" from a prior crash
   recoverStuckJobs();
+
+  // 0.6. Start periodic stuck-job sweep (every 5 minutes)
+  startPublishCron();
 
   // 1. Load config
   const config = await loadConfig();

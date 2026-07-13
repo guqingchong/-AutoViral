@@ -12,13 +12,16 @@ export interface ComplianceViolation {
 
 export interface ScanOptions {
   text: string;
-  platform: string;
+  /** Optional platform filter. When absent, all words are scanned. */
+  platform?: string;
+  /** Optional severity filter. When absent, all severities are scanned. */
+  severity?: "low" | "medium" | "high";
 }
 
 export function scanBannedWords(options: ScanOptions): ComplianceResult {
   if (!options.text) return { passed: true, violations: [] };
 
-  const words = listBannedWords(options.platform);
+  const words = listBannedWords(options.platform, options.severity);
   const violations: ComplianceViolation[] = [];
   const seen = new Set<string>();
 

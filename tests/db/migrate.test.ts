@@ -75,4 +75,14 @@ describe("migrate", () => {
       .get() as number;
     expect(count).toBeGreaterThan(0);
   });
+
+  it("has foreign key on publish_jobs.render_job_id", () => {
+    const db = resetInMemoryDb();
+    migrate();
+    const fks = db
+      .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'publish_jobs'")
+      .pluck()
+      .get() as string;
+    expect(fks).toContain("FOREIGN KEY (render_job_id) REFERENCES render_jobs(id) ON DELETE SET NULL");
+  });
 });

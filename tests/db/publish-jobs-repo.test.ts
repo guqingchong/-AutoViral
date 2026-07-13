@@ -148,4 +148,18 @@ describe("publish-jobs-repo", () => {
   it("returns false when deleting nonexistent job", () => {
     expect(jobsRepo.deleteJob("nonexistent")).toBe(false);
   });
+
+  it("listStuckJobs returns all publishing jobs without limit", () => {
+    const aid = createAccount();
+    // Create more than 20 publishing jobs
+    for (let i = 0; i < 25; i++) {
+      jobsRepo.createJob(makeJob(aid, { id: randomUUID(), status: "publishing", title: `Stuck Job ${i}` }));
+    }
+    // Create one non-publishing job
+    jobsRepo.createJob(makeJob(aid, { id: randomUUID(), status: "published" }));
+
+    const stuck = jobsRepo.listStuckJobs();
+    expect(stuck.length).toBe(25); // All publishing jobs returned
+    expect(stuck.every(j => j.status === "publishing")).toBe(true);
+  });
 });

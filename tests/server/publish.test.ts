@@ -1,10 +1,12 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { resetInMemoryDb } from "../../src/db/connection.js";
 import { migrate } from "../../src/db/migrate.js";
 import { createAccount } from "../../src/db/publish-accounts-repo.js";
 import { updateJob } from "../../src/db/publish-jobs-repo.js";
 import { createWork } from "../../src/db/works-repo.js";
 import { publishRoutes } from "../../src/server/publish-api.js";
+import * as publishFactory from "../../src/services/publish-factory.js";
+import { resetPublishQueues } from "../../src/services/publish-service.js";
 import { Hono } from "hono";
 import { randomUUID } from "node:crypto";
 
@@ -18,6 +20,41 @@ describe("publish API", () => {
   beforeEach(() => {
     resetInMemoryDb();
     migrate();
+    resetPublishQueues();
+    // Stub the driver for deterministic, fast async publish tests
+    // (no 1-3s delay, no random failures).
+    vi.spyOn(publishFactory, "getDriver").mockReturnValue({
+      platform: "xiaohongshu",
+      async publish() {
+        return { postUrl: "https://mock.test/post/abc", publishedAt: new Date().toISOString() };
+      },
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("lists accounts without credentials and with configured field", async () => {
+    createAccount({
+      id: randomUUID(),
+      platform: "xiaohongshu",
+      display_name: "主号",
+      credentials: { token: "secret" },
+      status: "active",
+      is_default: false,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+
+    const app = createTestApp();
+    const res = await app.request("/api/publish/accounts");
+    const json = await res.json();
+    expect(json.accounts).toHaveLength(1);
+    const acct = json.accounts[0];
+    expect(acct.credentials).toBeUndefined();
+    expect(acct.configured).toBe(true); // had { token: "secret" }
+    expect(acct.display_name).toBe("主号");
   });
 
   it("lists accounts", async () => {
@@ -403,8 +440,11 @@ describe("publish API", () => {
       body: JSON.stringify({ workId: work.id, accountIds: [account.id], title: "标题", content: "正文" }),
     });
 
-    // Filter by status
-    const res1 = await app.request("/api/publish/jobs?status=publishing");
+    // Wait for async publish to complete (mock resolves immediately in next microtask)
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // Filter by status (mock driver publishes immediately, so jobs will be "published")
+    const res1 = await app.request("/api/publish/jobs?status=published");
     const json1 = await res1.json();
     expect(json1.jobs.length).toBeGreaterThanOrEqual(1);
 

@@ -2,7 +2,7 @@ import type { ComplianceResult } from "./compliance-text.js";
 import { scanBannedWords } from "./compliance-text.js";
 import { getDriver } from "./publish-factory.js";
 import { getAccount } from "../db/publish-accounts-repo.js";
-import { createJob, getJob, updateJob, listJobs } from "../db/publish-jobs-repo.js";
+import { createJob, getJob, updateJob, listJobs, listStuckJobs } from "../db/publish-jobs-repo.js";
 import { getWork, updateWork } from "../db/works-repo.js";
 import { randomUUID } from "node:crypto";
 
@@ -127,6 +127,26 @@ export function createPublishJobs(request: CreatePublishJobsRequest): CreatePubl
   return { blocked: false, compliance: combinedCompliance, jobs };
 }
 
+/**
+ * Default publish timeout in milliseconds.
+ * Override via PUBLISH_TIMEOUT_MS environment variable.
+ */
+function getPublishTimeoutMs(): number {
+  const env = process.env.PUBLISH_TIMEOUT_MS;
+  if (env) {
+    const parsed = Number(env);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return 5 * 60 * 1000; // default 5 minutes
+}
+
+/** Create a promise that rejects after the given timeout. */
+function timeoutPromise(ms: number): Promise<never> {
+  return new Promise((_, reject) => {
+    setTimeout(() => reject(new Error("Publish timeout")), ms);
+  });
+}
+
 async function runPublishJob(jobId: string): Promise<void> {
   let job: ReturnType<typeof getJob>;
 
@@ -135,11 +155,15 @@ async function runPublishJob(jobId: string): Promise<void> {
     if (!job) return;
 
     const driver = getDriver(job.platform);
-    const result = await driver.publish({
-      title: job.title,
-      content: job.content,
-      mediaPath: job.media_path ?? undefined,
-    });
+    const timeoutMs = getPublishTimeoutMs();
+    const result = await Promise.race([
+      driver.publish({
+        title: job.title,
+        content: job.content,
+        mediaPath: job.media_path ?? undefined,
+      }),
+      timeoutPromise(timeoutMs),
+    ]);
     updateJob(jobId, {
       status: "published",
       post_url: result.postUrl,
@@ -172,7 +196,7 @@ async function runPublishJob(jobId: string): Promise<void> {
 }
 
 export function recoverStuckJobs(): void {
-  const stuckJobs = listJobs({ status: "publishing" });
+  const stuckJobs = listStuckJobs();
   for (const job of stuckJobs) {
     try {
       updateJob(job.id, {
@@ -196,4 +220,64 @@ export function retryPublishJob(jobId: string): void {
 
   updateJob(jobId, { status: "publishing", error: null });
   enqueueAccount(job.account_id, jobId);
+}
+
+// ── Periodic stuck-job sweep ───────────────────────────────────────────────
+
+let cronJob: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * Hard threshold: jobs whose updated_at is older than this duration (ms)
+ * and still in "publishing" status are considered stuck.
+ */
+const STUCK_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
+
+/**
+ * Recover jobs that have been stuck in "publishing" status beyond the
+ * threshold (10 minutes by default). This is the periodic sweep variant
+ * that avoids touching recently-started jobs.
+ */
+export function recoverTimedOutStuckJobs(): void {
+  const stuckJobs = listStuckJobs();
+  const cutoff = Date.now() - STUCK_THRESHOLD_MS;
+  for (const job of stuckJobs) {
+    const updatedAt = new Date(job.updated_at).getTime();
+    if (updatedAt < cutoff) {
+      try {
+        updateJob(job.id, {
+          status: "failed",
+          error: "Publish timed out — stuck in publishing for more than 10 minutes",
+        });
+      } catch {
+        // Best-effort
+      }
+    }
+  }
+}
+
+/**
+ * Start the periodic stuck-job sweep using setInterval.
+ * Runs every `intervalMs` (default 5 minutes).
+ * Returns the timer handle for testing/cleanup.
+ */
+export function startPublishCron(intervalMs: number = 5 * 60 * 1000): ReturnType<typeof setInterval> {
+  if (cronJob) clearInterval(cronJob);
+  cronJob = setInterval(() => {
+    try {
+      recoverTimedOutStuckJobs();
+    } catch {
+      // Never let the cron crash
+    }
+  }, intervalMs);
+  return cronJob;
+}
+
+/**
+ * Stop the periodic stuck-job sweep.
+ */
+export function stopPublishCron(): void {
+  if (cronJob) {
+    clearInterval(cronJob);
+    cronJob = null;
+  }
 }

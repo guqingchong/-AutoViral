@@ -23,12 +23,23 @@ export function createBannedWord(word: Omit<DbBannedWord, "id" | "created_at">):
   };
 }
 
-export function listBannedWords(platform?: string): DbBannedWord[] {
+export function listBannedWords(platform?: string, severity?: "low" | "medium" | "high"): DbBannedWord[] {
   const db = getDb();
-  const rows = platform
-    ? db.prepare("SELECT * FROM compliance_banned_words WHERE platform = ? OR platform = 'all' ORDER BY id DESC").all(platform)
-    : db.prepare("SELECT * FROM compliance_banned_words ORDER BY id DESC").all();
-  return (rows as Record<string, unknown>[]).map(rowToBannedWord);
+  const conditions: string[] = [];
+  const params: (string | number)[] = [];
+
+  if (platform) {
+    conditions.push("(platform = ? OR platform = 'all')");
+    params.push(platform);
+  }
+  if (severity) {
+    conditions.push("severity = ?");
+    params.push(severity);
+  }
+
+  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+  const rows = db.prepare(`SELECT * FROM compliance_banned_words ${where} ORDER BY id DESC`).all(...params) as Record<string, unknown>[];
+  return rows.map(rowToBannedWord);
 }
 
 export function deleteBannedWord(id: number): boolean {

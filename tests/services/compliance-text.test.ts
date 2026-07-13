@@ -65,4 +65,30 @@ describe("compliance-text", () => {
     const violation = result.violations.find(v => v.word === "赌博");
     expect(violation!.context).toBe("赌博");
   });
+
+  it("scans all platforms when platform is omitted", () => {
+    const result = scanBannedWords({ text: "赌博内容" });
+    expect(result.passed).toBe(false);
+    expect(result.violations.some(v => v.word === "赌博")).toBe(true);
+  });
+
+  it("filters by severity when severity is provided", () => {
+    bannedWordsRepo.createBannedWord({ platform: "xiaohongshu", word: "轻微违规", severity: "low" });
+    // Scan with high severity only — should not match "轻微违规"
+    const result = scanBannedWords({ text: "轻微违规", platform: "xiaohongshu", severity: "high" });
+    expect(result.passed).toBe(true);
+    expect(result.violations).toHaveLength(0);
+
+    // Scan with low severity — should match "轻微违规"
+    const result2 = scanBannedWords({ text: "轻微违规", platform: "xiaohongshu", severity: "low" });
+    expect(result2.passed).toBe(false);
+    expect(result2.violations.some(v => v.word === "轻微违规")).toBe(true);
+  });
+
+  it("scans all severities when severity is omitted", () => {
+    bannedWordsRepo.createBannedWord({ platform: "xiaohongshu", word: "轻微违规", severity: "low" });
+    const result = scanBannedWords({ text: "轻微违规", platform: "xiaohongshu" });
+    expect(result.passed).toBe(false);
+    expect(result.violations.some(v => v.word === "轻微违规")).toBe(true);
+  });
 });

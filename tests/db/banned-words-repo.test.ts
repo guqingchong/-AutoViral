@@ -45,6 +45,14 @@ describe("banned-words-repo", () => {
     expect(repo.deleteBannedWord(99999)).toBe(false);
   });
 
+  it("filters banned words by severity", () => {
+    repo.createBannedWord({ platform: "douyin", word: "low_risk", severity: "low" });
+    const highOnly = repo.listBannedWords(undefined, "high");
+    expect(highOnly.every(w => w.severity === "high")).toBe(true);
+    // "low_risk" should not appear in high-only results
+    expect(highOnly.some(w => w.word === "low_risk")).toBe(false);
+  });
+
   it("lists words ordered by id desc", () => {
     const w1 = repo.createBannedWord({ platform: "douyin", word: "word_a", severity: "high" });
     const w2 = repo.createBannedWord({ platform: "douyin", word: "word_b", severity: "high" });

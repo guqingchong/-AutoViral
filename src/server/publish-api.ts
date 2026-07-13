@@ -5,6 +5,7 @@ import * as jobsRepo from "../db/publish-jobs-repo.js";
 import * as bannedWordsRepo from "../db/banned-words-repo.js";
 import { createPublishJobs, retryPublishJob } from "../services/publish-service.js";
 import { listSupportedPlatforms } from "../services/publish-factory.js";
+import type { DbPublishAccount } from "../db/types.js";
 
 export const publishRoutes = new Hono();
 
@@ -12,9 +13,23 @@ const SUPPORTED_PLATFORMS = listSupportedPlatforms();
 const VALID_ACCOUNT_STATUSES = ["active", "disabled", "expired"] as const;
 const VALID_SEVERITIES = ["low", "medium", "high"] as const;
 
+/** Strip credentials from an account for API responses. Return a safe view. */
+function safeAccount(account: DbPublishAccount): Record<string, unknown> {
+  return {
+    id: account.id,
+    platform: account.platform,
+    display_name: account.display_name,
+    configured: Object.keys(account.credentials ?? {}).length > 0,
+    status: account.status,
+    is_default: account.is_default,
+    created_at: account.created_at,
+    updated_at: account.updated_at,
+  };
+}
+
 publishRoutes.get("/accounts", async (c) => {
   const accounts = accountsRepo.listAccounts();
-  return c.json({ accounts });
+  return c.json({ accounts: accounts.map(safeAccount) });
 });
 
 publishRoutes.post("/accounts", async (c) => {
@@ -36,7 +51,7 @@ publishRoutes.post("/accounts", async (c) => {
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   });
-  return c.json({ account }, 201);
+  return c.json({ account: safeAccount(account) }, 201);
 });
 
 publishRoutes.put("/accounts/:id", async (c) => {
@@ -59,7 +74,7 @@ publishRoutes.put("/accounts/:id", async (c) => {
   if (body.isDefault !== undefined) updates.is_default = body.isDefault;
   const account = accountsRepo.updateAccount(id, updates);
   if (!account) return c.json({ error: "Account not found" }, 404);
-  return c.json({ account });
+  return c.json({ account: safeAccount(account) });
 });
 
 publishRoutes.delete("/accounts/:id", async (c) => {
@@ -81,7 +96,7 @@ publishRoutes.get("/jobs", async (c) => {
   const status = c.req.query("status");
   const workId = c.req.query("workId");
   const rawLimit = Number(c.req.query("limit"));
-  const limit = Number.isFinite(rawLimit) && rawLimit >= 0 ? rawLimit : 20;
+  const limit = Number.isFinite(rawLimit) && rawLimit >= 0 ? Math.min(rawLimit, 1000) : 20;
   const rawOffset = Number(c.req.query("offset"));
   const offset = Number.isFinite(rawOffset) && rawOffset >= 0 ? rawOffset : 0;
   const jobs = jobsRepo.listJobs({ status, workId, limit, offset });
@@ -141,12 +156,19 @@ publishRoutes.post("/jobs/:id/retry", async (c) => {
 
 publishRoutes.get("/banned-words", async (c) => {
   const platform = c.req.query("platform");
-  const words = bannedWordsRepo.listBannedWords(platform ?? undefined);
+  const severity = c.req.query("severity");
+  const words = bannedWordsRepo.listBannedWords(platform ?? undefined, severity as "low" | "medium" | "high" | undefined);
   return c.json({ words });
 });
 
 publishRoutes.post("/banned-words", async (c) => {
   const body = await c.req.json<{ platform: string; word: string; severity: "low" | "medium" | "high" }>();
+  if (!body.word || typeof body.word !== "string") {
+    return c.json({ error: "word is required and must be non-empty" }, 400);
+  }
+  if (!SUPPORTED_PLATFORMS.includes(body.platform) && body.platform !== "all") {
+    return c.json({ error: `Invalid platform: must be one of ${SUPPORTED_PLATFORMS.join(", ")} or "all"` }, 400);
+  }
   if (!VALID_SEVERITIES.includes(body.severity as typeof VALID_SEVERITIES[number])) {
     return c.json({ error: `Invalid severity: must be one of ${VALID_SEVERITIES.join(", ")}` }, 400);
   }
