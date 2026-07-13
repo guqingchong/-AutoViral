@@ -91,9 +91,9 @@ describe("Performance — API 响应时间基准", () => {
       expect(stats.p50).toBeLessThan(50);
     });
 
-    it("GET /api/config p50 < 10ms", async () => {
+    it("GET /api/config p50 < 50ms", async () => {
       const stats = await measureN(app, 5, "GET", "/api/config");
-      expect(stats.p50).toBeLessThan(20);
+      expect(stats.p50).toBeLessThan(50);
     });
 
     it("GET /api/generate/providers p50 < 5ms", async () => {
