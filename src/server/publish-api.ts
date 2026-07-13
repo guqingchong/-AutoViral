@@ -5,6 +5,7 @@ import * as jobsRepo from "../db/publish-jobs-repo.js";
 import * as bannedWordsRepo from "../db/banned-words-repo.js";
 import { createPublishJobs, retryPublishJob } from "../services/publish-service.js";
 import { listSupportedPlatforms } from "../services/publish-factory.js";
+import { workExists } from "../db/works-repo.js";
 import type { DbPublishAccount } from "../db/types.js";
 
 export const publishRoutes = new Hono();
@@ -124,6 +125,9 @@ publishRoutes.post("/jobs", async (c) => {
   }
   if (!Array.isArray(body.accountIds)) {
     return c.json({ error: "accountIds must be an array" }, 400);
+  }
+  if (!workExists(body.workId)) {
+    return c.json({ error: "Work not found" }, 400);
   }
   const result = createPublishJobs(body);
   if (result.blocked) {

@@ -87,6 +87,18 @@ describe("publish API", () => {
     expect(json.error).toContain("workId");
   });
 
+  it("rejects publish with 400 when workId does not exist", async () => {
+    const app = createTestApp();
+    const res = await app.request("/api/publish/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workId: "non-existent-work-id", accountIds: ["acc-1"], title: "标题", content: "正文" }),
+    });
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.error).toBe("Work not found");
+  });
+
   it("rejects publish with 400 when title is missing", async () => {
     const app = createTestApp();
     const res = await app.request("/api/publish/jobs", {
