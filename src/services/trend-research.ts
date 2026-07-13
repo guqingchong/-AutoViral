@@ -10,16 +10,18 @@ import { buildTonePrompt } from "./tone-profile.js";
 const execFileAsync = promisify(execFile);
 const SCRIPTS_DIR = join(process.cwd(), "skills", "trend-research", "scripts");
 
+const PYTHON_BIN = process.platform === "win32" ? "python" : "python3";
+
 export async function fetchTrendData(platform: string): Promise<string> {
   try {
     if (platform === "douyin") {
-      const { stdout } = await execFileAsync("python3", [join(SCRIPTS_DIR, "douyin_hot_search.py"), "--top", "30"], { timeout: 30000 });
+      const { stdout } = await execFileAsync(PYTHON_BIN, [join(SCRIPTS_DIR, "douyin_hot_search.py"), "--top", "30"], { timeout: 30000 });
       return stdout;
     }
-    const { stdout } = await execFileAsync("python3", [join(SCRIPTS_DIR, "newsnow_trends.py"), platform, "--top", "20"], { timeout: 30000 });
+    const { stdout } = await execFileAsync(PYTHON_BIN, [join(SCRIPTS_DIR, "newsnow_trends.py"), platform, "--top", "20"], { timeout: 30000 });
     return stdout;
   } catch (err) {
-    console.error(`[trends] script error for ${platform}:`, err);
+    console.error(`[trends] script error for ${platform} (cmd: ${PYTHON_BIN}):`, err instanceof Error ? err.message : err);
     return "";
   }
 }
@@ -72,8 +74,8 @@ function analyzeTrendsWithAgent(platform: string, rawData: string, interests: st
       ? interests.map(i => `"${platformLabel} ${i} 最新 ${year}"`).join(" ")
       : "";
     const dataClause = rawData
-      ? `\n以下是通过 API 获取的 ${platformLabel} 实时热搜数据。请筛选其中与用户关注领域相关的条目，同时补充领域专属搜索：\n\`\`\`json\n${rawData.slice(0, 4000)}\n\`\`\`\n`
-      : `\n无法通过 API 获取实时数据。请使用 WebSearch 按以下关键词搜索（每条搜索一个独立搜索）：\n${interestSearchTerms || `"${platformLabel} 爆款内容 趋势 ${year}" "${platformLabel} 热门话题 最新 ${year}"`}\n${interests.length ? `\n**注意**：搜索结果必须围绕用户关注领域展开。不要返回与用户领域无关的泛热门内容。` : ""}\n`;
+      ? `\n以下是通过 API 获取的 ${platformLabel} 实时热搜数据。请先从中筛选出与用户关注领域直接相关的条目（如果没有则跳过）。然后**必须使用 WebSearch 工具**搜索以下关键词，每个关键词一次独立搜索，补充领域专属内容：\n${interestSearchTerms || `"${platformLabel} 爆款内容 趋势 ${year}"`}\n\n**重要**：WebSearch 搜索是关键步骤，不要跳过。用户关注领域的热门话题通常不在泛热搜榜上，必须通过定向搜索获取。\n\n热搜原始数据：\n\`\`\`json\n${rawData.slice(0, 3000)}\n\`\`\`\n`
+      : `\n无法通过 API 获取实时数据。请使用 WebSearch 按以下关键词搜索（每个关键词一次独立搜索）：\n${interestSearchTerms || `"${platformLabel} 爆款内容 趋势 ${year}" "${platformLabel} 热门话题 最新 ${year}"`}\n${interests.length ? `\n**注意**：搜索结果必须围绕用户关注领域展开。不要返回与用户领域无关的泛热门内容。` : ""}\n`;
     const tonePrefix = buildTonePrompt(toneProfile);
     const prompt = [
       `你是一个专业的社交媒体趋势研究员。请分析 ${platformLabel} 平台上用户关注领域的最新内容趋势。`,
@@ -129,19 +131,28 @@ function analyzeTrendsWithAgent(platform: string, rawData: string, interests: st
     ].join("\n");
 
     const cli = resolveClaudeCommand();
+    console.log(`[trends] spawning Claude CLI for ${platformLabel} (cli=${cli}, interests=[${interests.join(",")}])`);
     const proc = spawn(cli, ["-p", prompt, "--output-format", "json", "--dangerously-skip-permissions", "--model", "haiku"], {
       cwd: process.env.HOME ?? process.cwd(),
       env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: "cli" },
     });
     let stdout = "";
+    let stderr = "";
     proc.stdout?.on("data", (d: Buffer) => { stdout += d.toString(); });
-    proc.on("exit", () => {
+    proc.stderr?.on("data", (d: Buffer) => { stderr += d.toString(); });
+    proc.on("exit", (code) => {
+      if (code !== 0 || stderr) {
+        console.error(`[trends] Claude CLI exit code=${code}, stderr=${stderr.slice(0, 500)}`);
+      }
       try {
         const envelope = JSON.parse(stdout);
         const text = (envelope.result ?? "").replace(/```json?\s*/gi, "").replace(/```/g, "").trim();
         const first = text.indexOf("{");
         const last = text.lastIndexOf("}");
-        if (first < 0 || last <= first) return resolve([]);
+        if (first < 0 || last <= first) {
+          console.error(`[trends] Claude CLI returned no JSON object. result preview: ${text.slice(0, 200)}`);
+          return resolve([]);
+        }
         const parsed = JSON.parse(text.slice(first, last + 1));
         const topics = (parsed.topics ?? []).map((t: any) => ({
           platform,
@@ -158,12 +169,18 @@ function analyzeTrendsWithAgent(platform: string, rawData: string, interests: st
           category: String(t.category ?? ""),
           source_url: String(t.sourceUrl ?? ""),
         }));
+        console.log(`[trends] Claude CLI returned ${topics.length} topics for ${platformLabel}`);
         resolve(topics);
-      } catch {
+      } catch (err) {
+        console.error(`[trends] Claude CLI JSON parse error:`, err instanceof Error ? err.message : err);
+        console.error(`[trends] stdout preview:`, stdout.slice(0, 1000));
         resolve([]);
       }
     });
-    proc.on("error", () => resolve([]));
+    proc.on("error", (err) => {
+      console.error(`[trends] Claude CLI spawn error:`, err.message);
+      resolve([]);
+    });
     setTimeout(() => { try { proc.kill(); } catch {} resolve([]); }, 120000);
   });
 }
