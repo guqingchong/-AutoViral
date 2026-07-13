@@ -448,6 +448,27 @@ CREATE TABLE IF NOT EXISTS platform_credentials (
 CREATE INDEX IF NOT EXISTS idx_platform_credentials_platform ON platform_credentials(platform);
 `,
   },
+  {
+    version: 8,
+    name: "account_management",
+    sql: `
+CREATE TABLE IF NOT EXISTS accounts (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  platform TEXT NOT NULL,
+  tone_profile TEXT NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+ALTER TABLE works ADD COLUMN account_id TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_accounts_platform ON accounts(platform);
+CREATE INDEX IF NOT EXISTS idx_accounts_status ON accounts(status);
+CREATE INDEX IF NOT EXISTS idx_works_account_id ON works(account_id);
+`,
+  },
 ];
 
 export function migrate(): void {

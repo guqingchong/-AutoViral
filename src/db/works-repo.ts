@@ -15,6 +15,7 @@ function rowToWork(row: Record<string, unknown>): DbWork {
     evaluation_mode: Boolean(row.evaluation_mode),
     topic_hint: (row.topic_hint as string) || undefined,
     cli_session_id: (row.cli_session_id as string) || undefined,
+    account_id: (row.account_id as string) || undefined,
     eval_session_ids: fromJson<Record<string, string>>(row.eval_session_ids as string) ?? {},
     eval_attempts: fromJson<Record<string, number>>(row.eval_attempts as string) ?? {},
     topic_category: (row.topic_category as string) || undefined,
@@ -43,8 +44,8 @@ function rowToStep(row: Record<string, unknown>): DbPipelineStep {
 export function createWork(work: DbWork, steps: DbPipelineStep[]): DbWork {
   const db = getDb();
   const insert = db.prepare(
-    `INSERT INTO works (id, title, type, content_category, video_source, video_search_query, status, platforms, evaluation_mode, topic_hint, cli_session_id, eval_session_ids, eval_attempts, topic_category, emotion_type, hook_type, template_id, tags, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO works (id, title, type, content_category, video_source, video_search_query, status, platforms, evaluation_mode, topic_hint, cli_session_id, account_id, eval_session_ids, eval_attempts, topic_category, emotion_type, hook_type, template_id, tags, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
   const insertStep = db.prepare(
     `INSERT INTO pipeline_steps (work_id, step_key, name, status, started_at, completed_at, note, sort_order)
@@ -63,6 +64,7 @@ export function createWork(work: DbWork, steps: DbPipelineStep[]): DbWork {
       work.evaluation_mode ? 1 : 0,
       work.topic_hint ?? null,
       work.cli_session_id ?? null,
+      work.account_id ?? null,
       toJson(work.eval_session_ids ?? {}),
       toJson(work.eval_attempts ?? {}),
       work.topic_category ?? null,
@@ -127,7 +129,7 @@ export function updateWork(id: string, updates: Partial<DbWork>): DbWork | undef
   db.prepare(
     `UPDATE works SET
       title = ?, type = ?, content_category = ?, video_source = ?, video_search_query = ?,
-      status = ?, platforms = ?, evaluation_mode = ?, topic_hint = ?, cli_session_id = ?, eval_session_ids = ?, eval_attempts = ?,
+      status = ?, platforms = ?, evaluation_mode = ?, topic_hint = ?, cli_session_id = ?, account_id = ?, eval_session_ids = ?, eval_attempts = ?,
       topic_category = ?, emotion_type = ?, hook_type = ?, template_id = ?, tags = ?, updated_at = ?
      WHERE id = ?`
   ).run(
@@ -141,6 +143,7 @@ export function updateWork(id: string, updates: Partial<DbWork>): DbWork | undef
     work.evaluation_mode ? 1 : 0,
     work.topic_hint ?? null,
     work.cli_session_id ?? null,
+    work.account_id ?? null,
     toJson(work.eval_session_ids ?? {}),
     toJson(work.eval_attempts ?? {}),
     work.topic_category ?? null,
