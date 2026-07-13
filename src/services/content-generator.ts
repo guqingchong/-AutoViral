@@ -1,6 +1,7 @@
 import { resolveClaudeCommand } from "../ws-bridge.js";
 import { spawn } from "node:child_process";
 import type { DbTopic } from "../db/types.js";
+import { buildTonePrompt } from "./tone-profile.js";
 
 export interface GeneratedArticle {
   title: string;
@@ -13,8 +14,15 @@ export interface GeneratedScript {
   duration: number;
 }
 
-export async function generateArticleFromTopic(topic: DbTopic, platform: string): Promise<GeneratedArticle> {
+export interface ContentGenOptions {
+  /** Account tone_profile JSON — injected as style instructions. */
+  toneProfile?: Record<string, unknown> | null;
+}
+
+export async function generateArticleFromTopic(topic: DbTopic, platform: string, opts?: ContentGenOptions): Promise<GeneratedArticle> {
+  const tonePrefix = buildTonePrompt(opts?.toneProfile);
   const prompt = [
+    tonePrefix,
     `根据以下选题，为 ${platform} 平台写一篇完整的中文文章/文案。`,
     `选题：${topic.title}`,
     `描述：${topic.description ?? ""}`,
@@ -23,17 +31,19 @@ export async function generateArticleFromTopic(topic: DbTopic, platform: string)
     `切入角度：${topic.content_angles.join("；")}`,
     `爆款开头：${topic.example_hook ?? ""}`,
     `输出 JSON：{"title":"标题","content":"正文"}。content 为可直接发布的正文（含换行）。`,
-  ].join("\n");
+  ].filter(Boolean).join("\n");
   return runJsonPrompt<GeneratedArticle>(prompt);
 }
 
-export async function generateScriptFromArticle(article: GeneratedArticle, duration = 180): Promise<GeneratedScript> {
+export async function generateScriptFromArticle(article: GeneratedArticle, duration = 180, opts?: ContentGenOptions): Promise<GeneratedScript> {
+  const tonePrefix = buildTonePrompt(opts?.toneProfile);
   const prompt = [
+    tonePrefix,
     `将以下文章改写成 ${Math.floor(duration / 60)} 分钟口播视频脚本。`,
     `标题：${article.title}`,
     `文章：${article.content}`,
     `输出 JSON：{"scenes":[{"timestamp":"0:00-0:15","narration":"口播文案","visual":"画面描述"}],"duration":${duration}}。`,
-  ].join("\n");
+  ].filter(Boolean).join("\n");
   return runJsonPrompt<GeneratedScript>(prompt);
 }
 
