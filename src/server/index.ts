@@ -12,9 +12,14 @@ import { loadConfig, dataDir } from "../config.js";
 import { initProviders } from "../providers/registry.js";
 import { ensureSharedDirs } from "../shared-assets.js";
 import { apiRoutes, setWsBridge } from "./api.js";
+import { analyticsApi } from "./analytics-api.js";
+import { analyticsRoutes } from "./routes/analytics.js";
+import { commentsRoutes } from "./routes/comments.js";
+import { evolutionRoutes } from "./routes/evolution.js";
 import { WsBridge } from "../ws-bridge.js";
 import { registerAllAdapters } from "./analytics-api.js";
 import { startTrendScheduler } from "../services/scheduler.js";
+import { startMetricsScheduler } from "../services/analytics-scheduler.js";
 import { migrate } from "../db/migrate.js";
 import { migrateLegacyWorks } from "../db/migrate-legacy.js";
 import { recoverStuckJobs, startPublishCron } from "../services/publish-service.js";
@@ -73,7 +78,13 @@ export async function startServer(port: number): Promise<{ server: Server }> {
 
   const app = new Hono();
 
-  // 5. Mount API routes
+  // 5. Mount Phase 5 analytics / comments / evolution routes (v2 kept first for specificity)
+  app.route("/api/analytics/v2", analyticsApi);
+  app.route("/api/analytics", analyticsRoutes);
+  app.route("/api/comments", commentsRoutes);
+  app.route("/api/evolution", evolutionRoutes);
+
+  // 5. Mount legacy API routes
   app.route("/", apiRoutes);
 
   // 8. Serve static frontend files from web/dist/
@@ -114,6 +125,7 @@ export async function startServer(port: number): Promise<{ server: Server }> {
   // 7. Start background services
   await startTrendScheduler();
   registerAllAdapters();
+  startMetricsScheduler(config.analytics);
 
   return { server: httpServer };
 }

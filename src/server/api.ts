@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { join, extname, basename, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import yaml from "js-yaml";
-import { loadConfig, saveConfig, dataDir } from "../config.js";
+import { loadConfig, saveConfig, dataDir, type AnalyticsSource } from "../config.js";
 import {
   listWorks, getWork, createWork,
   updateWork as storeUpdateWork, deleteWork as storeDeleteWork,
@@ -54,9 +54,10 @@ import { validateTemplate, TimelineValidationError } from "../video/schema.js";
 import { applyVariables, fillDefaults } from "../video/variables.js";
 import type { Timeline } from "../video/types.js";
 import { publishRoutes } from "./publish-api.js";
-import { analyticsApi } from "./analytics-api.js";
-import { commentsApi } from "./comments-api.js";
-import { evolutionApi } from "./evolution-api.js";
+import {
+  listPublishRecords,
+} from "../db/publish-records-repo.js";
+import { listLatestWorkMetrics } from "../db/platform-metrics-repo.js";
 
 export const apiRoutes = new Hono();
 
@@ -137,6 +138,30 @@ apiRoutes.get("/api/status", async (c) => {
   });
 });
 
+function flattenAnalytics(cfg: import("../config.js").Config) {
+  return {
+    analyticsEnabled: cfg.analytics.enabled,
+    analyticsInterval: cfg.analytics.collectInterval,
+    analyticsSourcesJson: JSON.stringify(cfg.analytics.sources),
+  };
+}
+
+function parseAnalytics(body: Record<string, unknown>): import("../config.js").Config["analytics"] {
+  const sources = (() => {
+    try {
+      const raw = body.analyticsSourcesJson;
+      return raw ? (JSON.parse(String(raw)) as AnalyticsSource[]) : [];
+    } catch {
+      return [];
+    }
+  })();
+  return {
+    enabled: Boolean(body.analyticsEnabled),
+    collectInterval: Math.max(5, Number(body.analyticsInterval) || 60),
+    sources,
+  };
+}
+
 // GET /api/config
 apiRoutes.get("/api/config", async (c) => {
   const config = await loadConfig();
@@ -148,8 +173,8 @@ apiRoutes.get("/api/config", async (c) => {
     minimaxKey: config.minimax?.apiKey ?? "",
     researchEnabled: config.research?.enabled ?? false,
     researchCron: config.research?.schedule ?? "0 9 * * *",
-    douyinUrl: config.analytics?.douyinUrl ?? "",
     memorySyncEnabled: config.memory?.syncEnabled ?? false,
+    ...flattenAnalytics(config),
   });
 });
 
@@ -184,14 +209,12 @@ apiRoutes.put("/api/config", async (c) => {
   if (body.model !== undefined) {
     config.model = body.model as string;
   }
-  if (body.douyinUrl !== undefined) {
-    if (!config.analytics) config.analytics = { douyinUrl: "", collectInterval: 60, enabled: true };
-    config.analytics.douyinUrl = body.douyinUrl as string;
-  }
   if (body.memorySyncEnabled !== undefined) {
     if (!config.memory) config.memory = { apiKey: "", userId: "autoviral-user", syncEnabled: false };
     config.memory.syncEnabled = body.memorySyncEnabled as boolean;
   }
+
+  config.analytics = parseAnalytics(body);
 
   await saveConfig(config);
   return c.json(config);
@@ -394,17 +417,21 @@ apiRoutes.post("/api/works/:id/assets/upload", async (c) => {
 });
 
 // GET /api/analytics — aggregate metrics from all works
-apiRoutes.get("/api/analytics", async (c) => {
+apiRoutes.get("/api/analytics", (c) => {
   try {
-    const summaries = await listWorks();
-    const totalWorks = summaries.length;
-    const totalViews = 0;
-    const totalLikes = 0;
-    const totalComments = 0;
+    const records = listPublishRecords();
+    const latestMetrics = listLatestWorkMetrics();
+    const totalViews = latestMetrics.reduce((s, m) => s + (m.views ?? 0), 0);
+    const totalLikes = latestMetrics.reduce((s, m) => s + (m.likes ?? 0), 0);
 
-    return c.json({ totalWorks, totalViews, totalLikes, totalComments });
+    return c.json({
+      totalRecords: records.length,
+      totalViews,
+      totalLikes,
+      platforms: Array.from(new Set(records.map((r) => r.platform))),
+    });
   } catch {
-    return c.json({ totalWorks: 0, totalViews: 0, totalLikes: 0, totalComments: 0 });
+    return c.json({ totalRecords: 0, totalViews: 0, totalLikes: 0, platforms: [] });
   }
 });
 
@@ -1075,7 +1102,7 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
       // Load user interests and competitors for topic relevance
       const config = await loadConfig();
       const userInterests = (config.interests ?? []) as string[];
-      const douyinUrl = (config as any).douyinUrl ?? "";
+      const douyinUrl = config.analytics.sources.find((s) => s.platform === "douyin")?.accountUrl ?? "";
       const cat = (work.contentCategory as string) ?? "";
 
       // --- Info sufficiency check (OPT-1) ---
@@ -2590,6 +2617,3 @@ apiRoutes.post("/api/works/:id/render", async (c) => {
 
 // ── Publish API ───────────────────────────────────────────────────────────
 apiRoutes.route("/api/publish", publishRoutes);
-apiRoutes.route("/api/analytics/v2", analyticsApi);
-apiRoutes.route("/api/comments", commentsApi);
-apiRoutes.route("/api/evolution", evolutionApi);

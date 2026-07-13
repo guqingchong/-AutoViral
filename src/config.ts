@@ -3,8 +3,11 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import yaml from "js-yaml";
 import dotenv from "dotenv";
+import type { AnalyticsSource } from "./services/platform-adapters/types.js";
 
 dotenv.config();
+
+let cachedConfig: Config | undefined;
 
 export interface Config {
   port: number;
@@ -17,12 +20,10 @@ export interface Config {
   research: { enabled: boolean; schedule: string; platforms: string[] };
   interests?: string[];
   memory?: { apiKey: string; userId: string; syncEnabled: boolean };
-  analytics?: {
-    douyinUrl: string;
-    collectInterval: number;
+  analytics: {
     enabled: boolean;
-    /** Phase 5: per-platform data collection sources */
-    sources?: AnalyticsSource[];
+    collectInterval: number; // minutes
+    sources: AnalyticsSource[];
   };
   /** Phase 5: self-evolution configuration */
   evolution?: {
@@ -32,12 +33,7 @@ export interface Config {
   };
 }
 
-export interface AnalyticsSource {
-  platform: string;
-  enabled: boolean;
-  accountId?: string;
-  credentials?: Record<string, string>;
-}
+export type { AnalyticsSource };
 
 const CONFIG_DIR = join(homedir(), ".autoviral");
 const CONFIG_PATH = join(CONFIG_DIR, "config.yaml");
@@ -52,12 +48,34 @@ export function getDefaultConfig(): Config {
     jimeng: { accessKey: "", secretKey: "" },
     research: { enabled: true, schedule: "0 9,21 * * *", platforms: ["douyin", "xiaohongshu"] },
     interests: [],
-    analytics: { douyinUrl: "", collectInterval: 60, enabled: true },
+    analytics: { enabled: false, collectInterval: 60, sources: [] },
   };
 }
 
 export async function ensureDir(dirPath: string): Promise<void> {
   await mkdir(dirPath, { recursive: true });
+}
+
+/**
+ * Migrate legacy analytics configuration to the new multi-source format.
+ * Backwards-compatible: old analytics.douyinUrl becomes a cookie/rpa source.
+ */
+function migrateOldAnalytics(config: Config): Config {
+  const old = (config as unknown as Record<string, unknown>).analytics as Record<string, unknown> | undefined;
+  if (old && typeof old.douyinUrl === "string" && old.douyinUrl) {
+    config.analytics.sources.push({
+      platform: "douyin",
+      authType: "cookie",
+      accountUrl: old.douyinUrl,
+      credentials: {},
+    });
+    delete old.douyinUrl;
+  }
+  return config;
+}
+
+export function getConfig(): Config {
+  return cachedConfig ?? getDefaultConfig();
 }
 
 export async function loadConfig(): Promise<Config> {
@@ -67,6 +85,9 @@ export async function loadConfig(): Promise<Config> {
     const parsed = yaml.load(raw) as Partial<Config> | null;
     const config: Config = { ...getDefaultConfig(), ...parsed };
     config.interests = config.interests ?? [];
+    config.analytics = config.analytics ?? getDefaultConfig().analytics;
+    config.analytics.sources = config.analytics.sources ?? [];
+    migrateOldAnalytics(config);
 
     // .env overrides
     if (process.env.JIMENG_ACCESS_KEY) {
@@ -98,6 +119,7 @@ export async function loadConfig(): Promise<Config> {
       config.bailian = { apiKey: process.env.BAILIAN_API_KEY };
     }
 
+    cachedConfig = config;
     return config;
   } catch {
     const config = getDefaultConfig();
@@ -110,6 +132,7 @@ export async function saveConfig(config: Config): Promise<void> {
   await ensureDir(CONFIG_DIR);
   const raw = yaml.dump(config, { lineWidth: -1 });
   await writeFile(CONFIG_PATH, raw, "utf-8");
+  cachedConfig = config;
 }
 
 export function getConfigDir(): string {
