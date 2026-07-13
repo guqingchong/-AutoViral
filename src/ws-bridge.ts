@@ -97,6 +97,7 @@ export function resolveClaudeCommand(): string {
 export class WsBridge {
   private sessions: Map<string, WsSession> = new Map();
   private eventListeners: Map<string, Set<(event: string, data: unknown) => void>> = new Map();
+  private chatSaveTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private browserWss: WebSocketServer;
 
   constructor(_serverPort: number) {
@@ -144,6 +145,25 @@ export class WsBridge {
     if (workId.startsWith("trends_")) return;
     const chatFile = join(dataDir, "works", workId, "chat.jsonl");
     appendFile(chatFile, JSON.stringify(block) + "\n", "utf-8").catch(() => {});
+  }
+
+  /**
+   * Schedule an incremental save of messageHistory to disk.
+   * Debounced: fires at most once per 3 seconds per workId regardless
+   * of how many times it's called. This prevents message loss on crash
+   * (BUG-4) without hammering the disk during active streaming.
+   */
+  private scheduleIncrementalSave(workId: string): void {
+    if (workId.startsWith("trends_")) return;
+    const existing = this.chatSaveTimers.get(workId);
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(() => {
+      this.chatSaveTimers.delete(workId);
+      const session = this.sessions.get(workId);
+      if (!session || session.messageHistory.length === 0) return;
+      saveWorkChat(workId, { blocks: session.messageHistory }).catch(() => {});
+    }, 3000);
+    this.chatSaveTimers.set(workId, timer);
   }
 
   /**
@@ -416,6 +436,7 @@ ${memoryContext}
     };
     session.messageHistory.push(userBlock);
     this.appendToChatLog(workId, userBlock);
+    this.scheduleIncrementalSave(workId);
 
     // Real-time memory sync — user message
     if (!workId.startsWith("trends_")) {
@@ -713,6 +734,7 @@ ${memoryContext}
                   const textBlock: ChatBlock = { type: "text", text: block.text as string, timestamp: new Date().toISOString() };
                   session.messageHistory.push(textBlock);
                   this.appendToChatLog(session.workId, textBlock);
+                  this.scheduleIncrementalSave(session.workId);
                 }
                 this.broadcastToBrowsers(session.workId, {
                   event: "assistant_text",
@@ -723,6 +745,7 @@ ${memoryContext}
                   const thinkBlock: ChatBlock = { type: "thinking", text: block.thinking as string, collapsed: true };
                   session.messageHistory.push(thinkBlock);
                   this.appendToChatLog(session.workId, thinkBlock);
+                  this.scheduleIncrementalSave(session.workId);
                 }
                 this.broadcastToBrowsers(session.workId, {
                   event: "assistant_thinking",
@@ -733,6 +756,7 @@ ${memoryContext}
                   const toolBlock: ChatBlock = { type: "tool_use", text: JSON.stringify(block.input), toolName: block.name as string };
                   session.messageHistory.push(toolBlock);
                   this.appendToChatLog(session.workId, toolBlock);
+                  this.scheduleIncrementalSave(session.workId);
                 }
                 this.broadcastToBrowsers(session.workId, {
                   event: "tool_use",
@@ -757,6 +781,7 @@ ${memoryContext}
                     const trBlock: ChatBlock = { type: "tool_result", text: resultContent, collapsed: true };
                     session.messageHistory.push(trBlock);
                     this.appendToChatLog(session.workId, trBlock);
+                    this.scheduleIncrementalSave(session.workId);
                   }
                   this.broadcastToBrowsers(session.workId, {
                     event: "tool_result",
@@ -991,6 +1016,7 @@ ${memoryContext}
                   const eb: ChatBlock = { type: "text", text: block.text as string, source: "evaluator", timestamp: new Date().toISOString() };
                   session.messageHistory.push(eb);
                   this.appendToChatLog(session.workId, eb);
+                  this.scheduleIncrementalSave(session.workId);
                   this.broadcastToBrowsers(session.workId, {
                     event: "assistant_text",
                     data: { workId: session.workId, text: block.text, source: "evaluator" },
@@ -1007,6 +1033,7 @@ ${memoryContext}
                   const eb: ChatBlock = { type: "tool_use", text: JSON.stringify(block.input), toolName: block.name as string, source: "evaluator" };
                   session.messageHistory.push(eb);
                   this.appendToChatLog(session.workId, eb);
+                  this.scheduleIncrementalSave(session.workId);
                   this.broadcastToBrowsers(session.workId, {
                     event: "tool_use",
                     data: { workId: session.workId, name: block.name, input: block.input, source: "evaluator" },
@@ -1025,6 +1052,7 @@ ${memoryContext}
                   const eb: ChatBlock = { type: "tool_result", text: resultContent, source: "evaluator", collapsed: true };
                   session.messageHistory.push(eb);
                   this.appendToChatLog(session.workId, eb);
+                  this.scheduleIncrementalSave(session.workId);
                   this.broadcastToBrowsers(session.workId, {
                     event: "tool_result",
                     data: { workId: session.workId, content: resultContent, source: "evaluator" },
