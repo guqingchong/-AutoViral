@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { fetchTopics, convertTopicToWork, collectTrends, refreshTrendsStream, cancelTrendResearch, type Topic } from "../lib/api.js";
-  import { fetchConfig, updateConfig } from "../lib/api.js";
+  import { fetchTopics, convertTopicToWork, collectTrends, fetchConfig, updateConfig, type Topic } from "../lib/api.js";
   import { t, getLanguage, subscribe } from "../lib/i18n.js";
 
   let topics = $state<Topic[]>([]);
@@ -11,7 +10,7 @@
   let interests = $state("");
   let researchStatus: "idle" | "collecting" | "streaming" | "done" | "error" = $state("idle");
   let researchMessage = $state("");
-  let collectingSessionKey = $state<string | null>(null);
+  let lastCollectedCount = $state(0);
   let deleteConfirmId = $state<number | null>(null);
 
   function tt(key: string): string { void lang; return t(key); }
@@ -57,48 +56,49 @@
   }
 
   async function startAITrendResearch() {
-    researchStatus = "streaming";
-    researchMessage = tt("topicsCollecting").replace("{platform}", platform || "douyin");
+    researchStatus = "collecting";
+    const targetPlatform = platform || "douyin";
+    researchMessage = tt("topicsCollecting").replace("{platform}", targetPlatform === "douyin" ? "抖音" : targetPlatform === "xiaohongshu" ? "小红书" : targetPlatform);
     try {
       const interestArr = interests.split(",").map(s => s.trim()).filter(Boolean);
-      const result = await refreshTrendsStream(platform || "douyin", interestArr);
-      collectingSessionKey = result.sessionKey;
-      // Poll for completion — the backend writes topics to DB as agent works
-      // Show research in-progress state for a few seconds then poll
-      await new Promise(r => setTimeout(r, 3000));
-      // Refresh topics list
+      // Save interests to config for future sessions
+      await updateConfig({ interests: interestArr } as any);
+      // Call synchronous collect endpoint — backend runs Python scripts + Claude analysis
+      const result = await collectTrends(targetPlatform, interestArr);
+      lastCollectedCount = result.collected;
+      // Refresh the topics list from DB
       await load();
       researchStatus = "done";
-      researchMessage = tt("topicsCollected").replace("{count}", String(topics.length));
-      collectingSessionKey = null;
+      researchMessage = tt("topicsCollected").replace("{count}", String(result.collected));
+      setTimeout(() => { if (researchStatus === "done") researchStatus = "idle"; }, 5000);
     } catch {
       researchStatus = "error";
       researchMessage = tt("topicsResearchFailed");
-      collectingSessionKey = null;
+      setTimeout(() => { if (researchStatus === "error") researchStatus = "idle"; }, 5000);
     }
   }
 
   async function quickCollect() {
     researchStatus = "collecting";
-    researchMessage = tt("topicsCollecting").replace("{platform}", platform || "all");
+    const targetPlatform = platform || "douyin";
+    researchMessage = tt("topicsCollecting").replace("{platform}", targetPlatform === "douyin" ? "抖音" : targetPlatform === "xiaohongshu" ? "小红书" : targetPlatform);
     try {
-      await collectTrends();
+      const interestArr = interests.split(",").map(s => s.trim()).filter(Boolean);
+      const result = await collectTrends(targetPlatform, interestArr);
+      lastCollectedCount = result.collected;
       await load();
       researchStatus = "done";
-      researchMessage = tt("topicsCollected").replace("{count}", String(topics.length));
-      setTimeout(() => { researchStatus = "idle"; }, 3000);
+      researchMessage = tt("topicsCollected").replace("{count}", String(result.collected));
+      setTimeout(() => { if (researchStatus === "done") researchStatus = "idle"; }, 5000);
     } catch {
       researchStatus = "error";
       researchMessage = tt("topicsResearchFailed");
-      setTimeout(() => { researchStatus = "idle"; }, 3000);
+      setTimeout(() => { if (researchStatus === "error") researchStatus = "idle"; }, 5000);
     }
   }
 
   function cancelResearch() {
-    if (collectingSessionKey) {
-      cancelTrendResearch(collectingSessionKey).catch(() => {});
-      collectingSessionKey = null;
-    }
+    // Synchronous collect can't be cancelled mid-flight; just reset UI
     researchStatus = "idle";
     researchMessage = "";
   }
