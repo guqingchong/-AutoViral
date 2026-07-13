@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { existsSync } from "node:fs";
-import { readFile, writeFile, appendFile, mkdir, readdir, rm } from "node:fs/promises";
+import { readFile, writeFile, appendFile, mkdir, readdir, rm, rename, unlink } from "node:fs/promises";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { join, extname, basename, resolve, sep } from "node:path";
@@ -2510,6 +2510,7 @@ apiRoutes.delete("/api/templates/:id", async (c) => {
 // POST /api/templates/:id/preview — render a 5-second preview
 apiRoutes.post("/api/templates/:id/preview", async (c) => {
   const id = c.req.param("id");
+  if (!/^[a-zA-Z0-9_-]+$/.test(id)) return c.json({ error: "Invalid template id" }, 400);
   const template = getTemplate(id);
   if (!template) return c.json({ error: "Template not found" }, 404);
   const body = await c.req.json<{ variables?: Record<string, string | number> }>().catch(() => ({} as { variables?: Record<string, string | number> }));
@@ -2517,6 +2518,7 @@ apiRoutes.post("/api/templates/:id/preview", async (c) => {
   const previewDir = join(TEMPLATE_DIR, id);
   await mkdir(previewDir, { recursive: true });
   const outputPath = join(previewDir, "preview.mp4");
+  const tmpPath = join(previewDir, `preview-${randomUUID()}.tmp.mp4`);
 
   try {
     const variableValues = { ...fillDefaults(template.variables), ...(body.variables ?? {}) };
@@ -2545,10 +2547,12 @@ apiRoutes.post("/api/templates/:id/preview", async (c) => {
     }
     const timeline = applyVariables(baseTimeline, variableValues) as unknown as Timeline;
 
-    await renderTimeline(timeline, { outputPath, preview: true, previewDuration: 5 });
+    await renderTimeline(timeline, { outputPath: tmpPath, preview: true, previewDuration: 5 });
+    await rename(tmpPath, outputPath);
     updateTemplate(id, { preview_url: `/api/shared-assets/templates/${id}/preview.mp4` });
     return c.json({ previewUrl: `/api/shared-assets/templates/${id}/preview.mp4` });
   } catch (err) {
+    try { await unlink(tmpPath); } catch {}
     return c.json({ error: err instanceof Error ? err.message : "Preview failed" }, 500);
   }
 });

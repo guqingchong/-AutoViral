@@ -134,8 +134,12 @@ function validateSubtitles(subs: unknown): SubtitleTrack {
 export function validateTemplate(template: unknown): VideoTemplate {
   if (!template || typeof template !== "object") throw new TimelineValidationError("template must be an object");
   const t = template as Record<string, unknown>;
+  const id = assertString(t.id, "template.id");
+  if (!/^[a-zA-Z0-9_-]+$/.test(id)) {
+    throw new TimelineValidationError("template.id must contain only letters, numbers, underscores, or hyphens");
+  }
   return {
-    id: assertString(t.id, "template.id"),
+    id,
     name: assertString(t.name, "template.name"),
     contentForm: (t.contentForm as string) || undefined,
     canvas: validateTimeline({ canvas: t.canvas, layers: t.layers ?? [], audio: t.audio ?? [] }).canvas,

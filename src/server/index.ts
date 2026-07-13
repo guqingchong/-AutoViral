@@ -18,6 +18,7 @@ import { startTrendScheduler } from "../services/scheduler.js";
 import { migrate } from "../db/migrate.js";
 import { migrateLegacyWorks } from "../db/migrate-legacy.js";
 import { recoverStuckJobs, startPublishCron } from "../services/publish-service.js";
+import { recoverStuckRenderJobs } from "../services/video-factory.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -32,7 +33,10 @@ export async function startServer(port: number): Promise<{ server: Server }> {
   // 0.5. Recover publish jobs that were stuck "publishing" from a prior crash
   recoverStuckJobs();
 
-  // 0.6. Start periodic stuck-job sweep (every 5 minutes)
+  // 0.6. Recover render jobs that were stuck "running" or "pending" from a prior crash
+  recoverStuckRenderJobs();
+
+  // 0.7. Start periodic stuck-job sweep (every 5 minutes)
   startPublishCron();
 
   // 1. Load config

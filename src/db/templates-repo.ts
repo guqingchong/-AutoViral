@@ -94,30 +94,32 @@ export function listTemplates(status?: TemplateStatus, contentForm?: string, lim
 }
 
 export function updateTemplate(id: string, updates: Partial<DbTemplate>): DbTemplate | undefined {
-  const existing = getTemplate(id);
-  if (!existing) return undefined;
-  const template: DbTemplate = { ...existing, ...updates, id, updated_at: new Date().toISOString() };
   const db = getDb();
-  db.prepare(
-    `UPDATE templates SET
-      name = ?, content_form = ?, canvas = ?, variables = ?, layers = ?, audio = ?, subtitles = ?,
-      transitions = ?, preview_url = ?, status = ?, updated_at = ?
-     WHERE id = ?`
-  ).run(
-    template.name,
-    template.content_form ?? null,
-    toJson(template.canvas),
-    toJson(template.variables),
-    toJson(template.layers),
-    toJson(template.audio),
-    template.subtitles ? toJson(template.subtitles) : null,
-    toJson(template.transitions),
-    template.preview_url ?? null,
-    template.status,
-    template.updated_at,
-    id
-  );
-  return template;
+  return db.transaction(() => {
+    const existing = getTemplate(id);
+    if (!existing) return undefined;
+    const template: DbTemplate = { ...existing, ...updates, id, updated_at: new Date().toISOString() };
+    db.prepare(
+      `UPDATE templates SET
+        name = ?, content_form = ?, canvas = ?, variables = ?, layers = ?, audio = ?, subtitles = ?,
+        transitions = ?, preview_url = ?, status = ?, updated_at = ?
+       WHERE id = ?`
+    ).run(
+      template.name,
+      template.content_form ?? null,
+      toJson(template.canvas),
+      toJson(template.variables),
+      toJson(template.layers),
+      toJson(template.audio),
+      template.subtitles ? toJson(template.subtitles) : null,
+      toJson(template.transitions),
+      template.preview_url ?? null,
+      template.status,
+      template.updated_at,
+      id
+    );
+    return template;
+  })();
 }
 
 export function deleteTemplate(id: string): boolean {
