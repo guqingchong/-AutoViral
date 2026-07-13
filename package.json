@@ -1,7 +1,8 @@
 {
   "name": "@nanxingw/autocode-cli",
   "version": "0.2.0",
-  "description": "AutoCode — Self-evolving intelligence for Claude Code: skills, memory, and autonomous tasks",
+  "main": "electron/main.cjs",
+  "description": "AutoViral — Self-evolving intelligence for Claude Code: skills, memory, and autonomous tasks",
   "type": "module",
   "bin": {
     "autocode": "dist/index.js",
@@ -10,15 +11,21 @@
   "files": [
     "dist/",
     "skills/",
-    "web/dist/"
+    "web/dist/",
+    "electron/",
+    "scripts/",
+    "bin/",
+    "docs/"
   ],
   "scripts": {
     "build": "npm run build:backend && npm run build:frontend",
     "build:backend": "tsc",
     "build:frontend": "vite build",
+    "build:installer": "powershell -ExecutionPolicy Bypass -File scripts/build-installer.ps1",
+    "build:installer:bash": "bash scripts/build-installer.sh",
     "dev": "tsc --watch",
     "dev:frontend": "vite dev",
-    "postinstall": "node dist/postinstall.js",
+    "postinstall": "node -e \"console.log('postinstall: dependencies installed. Run \\\"npm run build\\\" to compile backend and frontend.')\"",
     "test": "vitest run"
   },
   "keywords": [
@@ -31,9 +38,10 @@
     "claude"
   ],
   "dependencies": {
-    "better-sqlite3": "^12.0.0",
     "@hono/node-server": "^1.13.0",
     "@types/dompurify": "^3.0.5",
+    "adm-zip": "^0.5.16",
+    "better-sqlite3": "^12.0.0",
     "commander": "^12.0.0",
     "dompurify": "^3.3.3",
     "dotenv": "^16.4.0",
@@ -46,12 +54,14 @@
     "ws": "^8.0.0"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.12",
     "@sveltejs/vite-plugin-svelte": "^5.0.0",
+    "@types/better-sqlite3": "^7.6.12",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.0.0",
     "@types/node-cron": "^3.0.0",
     "@types/ws": "^8.5.0",
+    "electron": "^31.0.0",
+    "electron-builder": "^25.0.0",
     "svelte": "^5.0.0",
     "typescript": "^5.9.3",
     "vite": "^6.0.0",

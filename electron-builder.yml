@@ -1,0 +1,47 @@
+appId: cc.autoviral.desktop
+productName: AutoViral
+copyright: Copyright © 2026 AutoViral
+directories:
+  output: release
+  buildResources: build-resources
+files:
+  - dist/**
+  - web/dist/**
+  - skills/**
+  - electron/**
+  - scripts/**
+  - bin/ffmpeg/**
+  - docs/setup-guide.md
+  - docs/troubleshooting.md
+  - docs/ops/claude-code-model-setup.md
+  - package.json
+extraResources:
+  - from: bin/ffmpeg
+    to: bin/ffmpeg
+    filter:
+      - "**/*"
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+  icon: build-resources/icon.ico
+  publisherName: AutoViral
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  installerIcon: build-resources/icon.ico
+  uninstallerIcon: build-resources/icon.ico
+  installerHeaderIcon: build-resources/icon.ico
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: AutoViral
+  include: build-resources/installer.nsh
+portable:
+  artifactName: "${productName}-${version}-portable.exe"
+  requestExecutionLevel: user
+extraMetadata:
+  main: electron/main.cjs

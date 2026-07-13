@@ -31,6 +31,26 @@ const __dirname = dirname(__filename);
 // Resolve web/dist relative to the package root (two levels up from dist/server/)
 const WEB_DIST = join(__dirname, "..", "..", "web", "dist");
 
+function resolveBundledFfmpeg(): { ffmpeg: string; ffprobe: string } | undefined {
+  const appRoot = process.env.AUTOVIRAL_APP_ROOT;
+  if (!appRoot) return undefined;
+  const ffmpeg = join(appRoot, "bin", "ffmpeg", "ffmpeg.exe");
+  const ffprobe = join(appRoot, "bin", "ffmpeg", "ffprobe.exe");
+  if (existsSync(ffmpeg) && existsSync(ffprobe)) {
+    return { ffmpeg, ffprobe };
+  }
+  return undefined;
+}
+
+function setFfmpegEnv(): void {
+  const bundled = resolveBundledFfmpeg();
+  if (bundled) {
+    process.env.FFMPEG_PATH = bundled.ffmpeg;
+    process.env.FFPROBE_PATH = bundled.ffprobe;
+    console.log(`Using bundled FFmpeg: ${bundled.ffmpeg}`);
+  }
+}
+
 export async function startServer(port: number): Promise<{ server: Server }> {
   // 0. Ensure database schema
   migrate();
@@ -47,6 +67,9 @@ export async function startServer(port: number): Promise<{ server: Server }> {
   // 1. Load config
   const config = await loadConfig();
 
+  // 1b. Detect bundled FFmpeg in packaged builds
+  setFfmpegEnv();
+
   // 1a. Import legacy YAML works once
   const migrated = await migrateLegacyWorks();
   if (migrated > 0) console.log(`Migrated ${migrated} legacy works to SQLite`);
@@ -61,14 +84,16 @@ export async function startServer(port: number): Promise<{ server: Server }> {
   await mkdir(join(dataDir, "shared-assets", "templates"), { recursive: true });
 
   // 3.5. Sync skills to ~/.claude/skills/ (agent reads from there)
-  const projectSkills = join(process.cwd(), "skills");
-  const installedSkills = join(homedir(), ".claude", "skills");
-  if (existsSync(projectSkills)) {
-    try {
-      execSync(`rsync -a --delete "${projectSkills}/" "${installedSkills}/"`, { stdio: "ignore" });
-      console.log("Skills synced to ~/.claude/skills/");
-    } catch {
-      console.warn("Warning: failed to sync skills to ~/.claude/skills/");
+  if (!process.env.AUTOVIRAL_PACKAGED) {
+    const projectSkills = join(process.cwd(), "skills");
+    const installedSkills = join(homedir(), ".claude", "skills");
+    if (existsSync(projectSkills)) {
+      try {
+        execSync(`rsync -a --delete "${projectSkills}/" "${installedSkills}/"`, { stdio: "ignore" });
+        console.log("Skills synced to ~/.claude/skills/");
+      } catch {
+        console.warn("Warning: failed to sync skills to ~/.claude/skills/");
+      }
     }
   }
 
