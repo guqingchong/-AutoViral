@@ -13,6 +13,7 @@
   import Templates from "./pages/Templates.svelte";
   import RenderJobs from "./pages/RenderJobs.svelte";
   import Publish from "./pages/Publish.svelte";
+  import Publishing from "./pages/Publishing.svelte";
   import NewWorkModal from "./components/NewWorkModal.svelte";
   import { fetchConfig, updateConfig, fetchWorks, createWorkApi, type WorkSummary, type ContentCategory } from "./lib/api";
   import { t, getLanguage, setLanguage, subscribe } from "./lib/i18n";
@@ -176,6 +177,7 @@
     { tab: "templates" as Tab, labelKey: "templates" },
     { tab: "jobs" as Tab, labelKey: "renderJobs" },
     { tab: "publish" as Tab, labelKey: "publish" },
+    { tab: "publishing" as Tab, labelKey: "publishing" },
     { tab: "explore" as Tab, labelKey: "explore" },
     { tab: "analytics" as Tab, labelKey: "analytics" },
     { tab: "comments" as Tab, labelKey: "navComments" },
@@ -239,6 +241,8 @@
       <RenderJobs />
     {:else if $activeTab === "publish"}
       <Publish />
+    {:else if $activeTab === "publishing"}
+      <Publishing />
     {:else if $activeTab === "works"}
       <Works
         onOpenStudio={openStudio}

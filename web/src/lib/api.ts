@@ -583,3 +583,51 @@ export async function restoreBackup(path: string, overwrite = false): Promise<{ 
 export async function runMigration(dryRun = false): Promise<{ ok?: boolean; migrated?: number; dryRun?: boolean }> {
   return post(`/api/admin/migrate?dryRun=${dryRun ? "true" : "false"}`, {});
 }
+
+// ---------------------------------------------------------------------------
+// Phase 4b: Work-scoped RPA Publishing API
+// ---------------------------------------------------------------------------
+
+export interface PublishRecord {
+  id: number;
+  workId: string;
+  platform: string;
+  status: "pending" | "publishing" | "published" | "failed" | "scheduled" | "fallback";
+  platformPostId?: string;
+  postUrl?: string;
+  error?: string;
+  publishedAt?: string;
+  scheduledAt?: string;
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PublishInput {
+  workId: string;
+  videoPath: string;
+  coverPath?: string;
+  title: string;
+  options?: Record<string, unknown>;
+}
+
+export async function publishWorkToPlatform(
+  workId: string,
+  platform: string,
+  input?: Partial<PublishInput>,
+): Promise<PublishRecord> {
+  return post<PublishRecord>(`/api/works/${encodeURIComponent(workId)}/publish/${encodeURIComponent(platform)}`, input ?? {});
+}
+
+export async function triggerWorkPublishLogin(workId: string, platform: string): Promise<{ success: boolean }> {
+  return post<{ success: boolean }>(`/api/works/${encodeURIComponent(workId)}/publish/${encodeURIComponent(platform)}/login`, {});
+}
+
+export async function fetchWorkPublishRecords(workId: string): Promise<PublishRecord[]> {
+  const data = await request<{ publishRecords: PublishRecord[] }>(`/api/works/${encodeURIComponent(workId)}/publish/records`);
+  return data.publishRecords;
+}
+
+export function getWorkPublishFallbackUrl(workId: string, platform: string): string {
+  return `/api/works/${encodeURIComponent(workId)}/publish/${encodeURIComponent(platform)}/fallback`;
+}
