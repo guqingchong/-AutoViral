@@ -1,4 +1,8 @@
 import { spawn } from "node:child_process";
+import { writeFile, unlink } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { randomUUID } from "node:crypto";
 import { getFFmpegPath } from "./ffmpeg.js";
 import { parseFFmpegProgress } from "./progress.js";
 import { validateTimeline } from "./schema.js";
@@ -34,17 +38,30 @@ export async function renderTimeline(timeline: Timeline, options: RenderOptions)
   const inputs = collectInputs(tl);
   const args = buildFilterComplexArgs(tl, inputs, renderDuration, options.outputPath);
 
+  // If the filter_complex string is very long, write it to a temporary script file to avoid
+  // exceeding command-line argument length limits on Windows.
+  const MAX_ARG_LENGTH = 8000;
+  const filterIndex = args.indexOf("-filter_complex");
+  let filterScriptPath: string | undefined;
+  if (filterIndex >= 0 && args[filterIndex + 1].length > MAX_ARG_LENGTH) {
+    filterScriptPath = join(tmpdir(), `av-filter-${randomUUID()}.txt`);
+    await writeFile(filterScriptPath, args[filterIndex + 1], "utf-8");
+    args[filterIndex] = "-filter_complex_script";
+    args[filterIndex + 1] = filterScriptPath;
+  }
+
   return new Promise((resolve, reject) => {
     const proc = spawn(ffmpeg, args, { stdio: ["ignore", "pipe", "pipe"] });
     let stderr = "";
     let killed = false;
 
-    options.abortSignal?.addEventListener("abort", () => {
+    const abortHandler = () => {
       if (!killed) {
         killed = true;
         proc.kill("SIGTERM");
       }
-    });
+    };
+    options.abortSignal?.addEventListener("abort", abortHandler);
 
     proc.stderr?.on("data", (chunk: Buffer) => {
       const text = chunk.toString();
@@ -58,6 +75,10 @@ export async function renderTimeline(timeline: Timeline, options: RenderOptions)
     });
 
     proc.on("exit", (code) => {
+      options.abortSignal?.removeEventListener("abort", abortHandler);
+      if (filterScriptPath) {
+        unlink(filterScriptPath).catch(() => {});
+      }
       if (code === 0) {
         resolve({ outputPath: options.outputPath, duration: renderDuration });
       } else {
@@ -65,7 +86,13 @@ export async function renderTimeline(timeline: Timeline, options: RenderOptions)
       }
     });
 
-    proc.on("error", reject);
+    proc.on("error", (err) => {
+      options.abortSignal?.removeEventListener("abort", abortHandler);
+      if (filterScriptPath) {
+        unlink(filterScriptPath).catch(() => {});
+      }
+      reject(err);
+    });
   });
 }
 

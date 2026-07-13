@@ -61,26 +61,28 @@ export function getRenderJob(id: string): DbRenderJob | undefined {
 }
 
 export function updateRenderJob(id: string, updates: Partial<DbRenderJob>): DbRenderJob | undefined {
-  const existing = getRenderJob(id);
-  if (!existing) return undefined;
-  const job: DbRenderJob = { ...existing, ...updates, id, updated_at: new Date().toISOString() };
   const db = getDb();
-  db.prepare(
-    `UPDATE render_jobs SET work_id = ?, template_id = ?, output_path = ?, status = ?, progress = ?, duration = ?, current_time = ?, error = ?, updated_at = ?
-     WHERE id = ?`
-  ).run(
-    job.work_id ?? null,
-    job.template_id ?? null,
-    job.output_path ?? null,
-    job.status,
-    job.progress,
-    job.duration ?? null,
-    job.current_time ?? null,
-    job.error ?? null,
-    job.updated_at,
-    id
-  );
-  return job;
+  return db.transaction(() => {
+    const existing = getRenderJob(id);
+    if (!existing) return undefined;
+    const job: DbRenderJob = { ...existing, ...updates, id, updated_at: new Date().toISOString() };
+    db.prepare(
+      `UPDATE render_jobs SET work_id = ?, template_id = ?, output_path = ?, status = ?, progress = ?, duration = ?, current_time = ?, error = ?, updated_at = ?
+       WHERE id = ?`
+    ).run(
+      job.work_id ?? null,
+      job.template_id ?? null,
+      job.output_path ?? null,
+      job.status,
+      job.progress,
+      job.duration ?? null,
+      job.current_time ?? null,
+      job.error ?? null,
+      job.updated_at,
+      id
+    );
+    return job;
+  })();
 }
 
 export function listRenderJobs(status?: RenderJobStatus, workId?: string, limit = 100): DbRenderJob[] {
