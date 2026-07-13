@@ -1,7 +1,7 @@
-import { randomUUID, createCipheriv, createDecipheriv, getCiphers, createHash } from "node:crypto";
+import { randomBytes, createCipheriv, createDecipheriv, getCiphers, createHash } from "node:crypto";
 
 const ALGORITHM = "aes-256-gcm";
-const IV_LENGTH = 16;
+// 12-byte IV (96 bits) as hex — NIST recommendation for AES-GCM
 const AUTH_TAG_LENGTH = 16;
 
 /**
@@ -17,6 +17,13 @@ function getEncryptionKey(): Buffer {
     }
     // Hash to 32 bytes via SHA-256
     return createHash("sha256").update(secret, "utf-8").digest();
+  }
+
+  // In production, the key must be explicitly set — never fall back to a dev default
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "[credential-crypto] PUBLISH_CREDENTIALS_KEY is not set. This is required in production."
+    );
   }
 
   // Dev fallback — deterministic, logged to stderr in non-test environments
@@ -42,7 +49,7 @@ function assertAes256GcmSupported(): void {
 export function encryptCredentials(plain: Record<string, unknown>): string {
   assertAes256GcmSupported();
   const key = getEncryptionKey();
-  const iv = randomUUID().replace(/-/g, "").slice(0, IV_LENGTH);
+  const iv = randomBytes(12).toString("hex");
   const cipher = createCipheriv(ALGORITHM, key, iv);
   const json = JSON.stringify(plain);
   let encrypted = cipher.update(json, "utf-8", "hex");
