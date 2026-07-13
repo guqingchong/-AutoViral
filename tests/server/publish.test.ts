@@ -309,4 +309,113 @@ describe("publish API", () => {
     const json = await res.json();
     expect(json.error).toContain("Invalid banned word ID");
   });
+
+  it("rejects publish with 400 when content is missing", async () => {
+    const app = createTestApp();
+    const res = await app.request("/api/publish/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workId: "w-1", accountIds: ["acc-1"], title: "标题" }),
+    });
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.error).toContain("content");
+  });
+
+  it("returns 400 when creating account with unsupported platform", async () => {
+    const app = createTestApp();
+    const res = await app.request("/api/publish/accounts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ platform: "myspace", displayName: "Test" }),
+    });
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.error).toContain("Unsupported platform");
+  });
+
+  it("returns 404 when updating a non-existent account", async () => {
+    const app = createTestApp();
+    const res = await app.request(`/api/publish/accounts/${randomUUID()}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ displayName: "New Name" }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("returns 400 when updating account with invalid status", async () => {
+    const account = createAccount({
+      id: randomUUID(),
+      platform: "xiaohongshu",
+      display_name: "主号",
+      credentials: {},
+      status: "active",
+      is_default: false,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    const app = createTestApp();
+    const res = await app.request(`/api/publish/accounts/${account.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "banned" }),
+    });
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.error).toContain("Invalid status");
+  });
+
+  it("returns 404 when deleting a non-existent account", async () => {
+    const app = createTestApp();
+    const res = await app.request(`/api/publish/accounts/${randomUUID()}`, { method: "DELETE" });
+    expect(res.status).toBe(404);
+  });
+
+  it("lists jobs with query filters", async () => {
+    const account = createAccount({
+      id: randomUUID(),
+      platform: "xiaohongshu",
+      display_name: "主号",
+      credentials: {},
+      status: "active",
+      is_default: false,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    const work = createWork({
+      id: randomUUID(),
+      title: "标题",
+      type: "short-video",
+      status: "draft",
+      platforms: [],
+      evaluation_mode: false,
+      tags: [],
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }, []);
+
+    const app = createTestApp();
+    // Create a job
+    await app.request("/api/publish/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workId: work.id, accountIds: [account.id], title: "标题", content: "正文" }),
+    });
+
+    // Filter by status
+    const res1 = await app.request("/api/publish/jobs?status=publishing");
+    const json1 = await res1.json();
+    expect(json1.jobs.length).toBeGreaterThanOrEqual(1);
+
+    // Filter by workId
+    const res2 = await app.request(`/api/publish/jobs?workId=${work.id}`);
+    const json2 = await res2.json();
+    expect(json2.jobs.length).toBeGreaterThanOrEqual(1);
+
+    // Pagination
+    const res3 = await app.request("/api/publish/jobs?limit=1&offset=0");
+    const json3 = await res3.json();
+    expect(json3.jobs.length).toBeLessThanOrEqual(1);
+  });
 });

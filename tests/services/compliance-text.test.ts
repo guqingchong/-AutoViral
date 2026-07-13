@@ -33,4 +33,36 @@ describe("compliance-text", () => {
     expect(result.passed).toBe(true);
     expect(result.violations).toHaveLength(0);
   });
+
+  it("extracts context around the matched word", () => {
+    const result = scanBannedWords({ text: "前缀文字赌博后缀文字", platform: "xiaohongshu" });
+    expect(result.passed).toBe(false);
+    const violation = result.violations.find(v => v.word === "赌博");
+    expect(violation).toBeDefined();
+    expect(violation!.context).toContain("赌博");
+    expect(violation!.severity).toBe("high");
+  });
+
+  it("deduplicates when same word exists in 'all' and platform-specific", () => {
+    bannedWordsRepo.createBannedWord({ platform: "xiaohongshu", word: "赌博", severity: "medium" });
+    const result = scanBannedWords({ text: "包含赌博内容", platform: "xiaohongshu" });
+    const gamblingViolations = result.violations.filter(v => v.word === "赌博");
+    expect(gamblingViolations).toHaveLength(1);
+  });
+
+  it("detects multiple different banned words in one text", () => {
+    const result = scanBannedWords({ text: "赌博和毒品都是违禁的", platform: "xiaohongshu" });
+    expect(result.passed).toBe(false);
+    expect(result.violations.length).toBeGreaterThanOrEqual(2);
+    const words = result.violations.map(v => v.word);
+    expect(words).toContain("赌博");
+    expect(words).toContain("毒品");
+  });
+
+  it("handles word at text boundaries without out-of-range errors", () => {
+    const result = scanBannedWords({ text: "赌博", platform: "xiaohongshu" });
+    expect(result.passed).toBe(false);
+    const violation = result.violations.find(v => v.word === "赌博");
+    expect(violation!.context).toBe("赌博");
+  });
 });
