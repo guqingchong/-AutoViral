@@ -9,6 +9,7 @@ export const publishWorkRoutes = new Hono();
 // POST /:platform — 发布到指定平台，body 可为空
 publishWorkRoutes.post("/:platform", async (c) => {
   const workId = c.req.param("id");
+  if (!workId) return c.json({ error: "Missing work ID" }, 400);
   const platform = c.req.param("platform");
   const work = await getWork(workId);
   if (!work) return c.json({ error: "Work not found" }, 404);
@@ -47,6 +48,7 @@ publishWorkRoutes.post("/:platform/login", async (c) => {
 // GET /records — 获取所有发布记录
 publishWorkRoutes.get("/records", async (c) => {
   const workId = c.req.param("id");
+  if (!workId) return c.json({ error: "Missing work ID" }, 400);
   const records = await getPublishingStatus(workId);
   return c.json({ publishRecords: records });
 });
@@ -54,6 +56,7 @@ publishWorkRoutes.get("/records", async (c) => {
 // GET /status — 获取发布状态（兼容 Phase 4a 接口）
 publishWorkRoutes.get("/status", async (c) => {
   const workId = c.req.param("id");
+  if (!workId) return c.json({ error: "Missing work ID" }, 400);
   const records = await getPublishingStatus(workId);
   return c.json({ publishRecords: records });
 });
@@ -61,6 +64,7 @@ publishWorkRoutes.get("/status", async (c) => {
 // GET /:platform/fallback — 下载 fallback 导出包
 publishWorkRoutes.get("/:platform/fallback", async (c) => {
   const workId = c.req.param("id");
+  if (!workId) return c.json({ error: "Missing work ID" }, 400);
   const platform = c.req.param("platform");
   const allRecords = recordsRepo.listPublishRecords({ workId });
   const record = allRecords.find(
