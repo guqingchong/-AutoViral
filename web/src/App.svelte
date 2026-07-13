@@ -14,6 +14,7 @@
   import RenderJobs from "./pages/RenderJobs.svelte";
   import Publish from "./pages/Publish.svelte";
   import Publishing from "./pages/Publishing.svelte";
+  import Accounts from "./pages/Accounts.svelte";
   import NewWorkModal from "./components/NewWorkModal.svelte";
   import { fetchConfig, updateConfig, fetchWorks, createWorkApi, type WorkSummary, type ContentCategory } from "./lib/api";
   import { t, getLanguage, setLanguage, subscribe } from "./lib/i18n";
@@ -178,6 +179,7 @@
     { tab: "jobs" as Tab, labelKey: "renderJobs" },
     { tab: "publish" as Tab, labelKey: "publish" },
     { tab: "publishing" as Tab, labelKey: "publishing" },
+    { tab: "accounts" as Tab, labelKey: "navAccounts" },
     { tab: "explore" as Tab, labelKey: "explore" },
     { tab: "analytics" as Tab, labelKey: "analytics" },
     { tab: "comments" as Tab, labelKey: "navComments" },
@@ -243,6 +245,8 @@
       <Publish />
     {:else if $activeTab === "publishing"}
       <Publishing />
+    {:else if $activeTab === "accounts"}
+      <Accounts />
     {:else if $activeTab === "works"}
       <Works
         onOpenStudio={openStudio}

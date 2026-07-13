@@ -55,6 +55,45 @@ export async function fetchStatus() {
 }
 
 // ---------------------------------------------------------------------------
+// Account types (Phase 7)
+// ---------------------------------------------------------------------------
+
+export interface Account {
+  id: string;
+  name: string;
+  platform: string;
+  tone_profile: Record<string, unknown>;
+  status: "active" | "inactive";
+  created_at: string;
+  updated_at: string;
+}
+
+export async function fetchAccounts(): Promise<Account[]> {
+  const data = await request<{ accounts: Account[] }>("/api/accounts");
+  return data.accounts;
+}
+
+export async function fetchAccount(id: string): Promise<Account> {
+  return request<Account>(`/api/accounts/${encodeURIComponent(id)}`);
+}
+
+export async function createAccountApi(input: { name: string; platform: string; tone_profile?: Record<string, unknown> }): Promise<Account> {
+  return post<Account>("/api/accounts", input);
+}
+
+export async function updateAccountApi(id: string, updates: { name?: string; platform?: string; tone_profile?: Record<string, unknown>; status?: string }): Promise<Account> {
+  return request<Account>(`/api/accounts/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(updates),
+  });
+}
+
+export async function deleteAccountApi(id: string): Promise<void> {
+  await request<{ deleted: boolean }>(`/api/accounts/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+// ---------------------------------------------------------------------------
 // Work types
 // ---------------------------------------------------------------------------
 

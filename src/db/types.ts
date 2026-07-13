@@ -22,6 +22,7 @@ export interface DbWork {
   evaluation_mode: boolean;
   topic_hint?: string;
   cli_session_id?: string;
+  account_id?: string;
   eval_session_ids?: Record<string, string>;
   eval_attempts?: Record<string, number>;
   topic_category?: string;
@@ -151,6 +152,20 @@ export interface DbAsset {
   compliance_status: DbAssetCompliance;
   metadata: Record<string, unknown>;
   usage_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+// ── Account types (Phase 7) ──────────────────────────────────────────────
+
+export type DbAccountStatus = "active" | "inactive";
+
+export interface DbAccount {
+  id: string;
+  name: string;
+  platform: string;
+  tone_profile: Record<string, unknown>;
+  status: DbAccountStatus;
   created_at: string;
   updated_at: string;
 }
