@@ -31,19 +31,21 @@ export interface RenderJobInfo {
 function throttle<T extends (...args: any[]) => void>(fn: T, ms: number): T {
   let last = 0;
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let latestArgs: Parameters<T> | undefined;
   return ((...args: Parameters<T>) => {
+    latestArgs = args;
     const now = Date.now();
     if (now - last >= ms) {
       if (timer) { clearTimeout(timer); timer = null; }
       last = now;
-      fn(...args);
+      fn(...latestArgs);
       return;
     }
     if (timer) return;
     timer = setTimeout(() => {
       last = Date.now();
       timer = null;
-      fn(...args);
+      if (latestArgs) fn(...latestArgs);
     }, ms - (now - last));
   }) as T;
 }
@@ -84,15 +86,17 @@ async function runRenderLoop(jobId: string, template: DbTemplate, req: RenderReq
     console.error("Failed to set work status to assembling:", err);
   }
 
+  let failed = false;
+  let errorMessage: string | undefined;
+  let renderFinished = false;
+
   const updateProgress = throttle((p: { percent?: number; time?: number }) => {
+    if (renderFinished) return;
     updateRenderJob(jobId, {
       progress: p.percent ?? 0,
       current_time: p.time,
     });
   }, 1000);
-
-  let failed = false;
-  let errorMessage: string | undefined;
 
   try {
     const variableValues = validateVariableValues(template.variables, { ...req.assets, ...(req.variables ?? {}) });
@@ -117,6 +121,7 @@ async function runRenderLoop(jobId: string, template: DbTemplate, req: RenderReq
       onProgress: updateProgress,
     });
 
+    renderFinished = true;
     updateRenderJob(jobId, {
       status: "completed",
       progress: 100,
@@ -124,6 +129,7 @@ async function runRenderLoop(jobId: string, template: DbTemplate, req: RenderReq
     });
   } catch (err) {
     failed = true;
+    renderFinished = true;
     errorMessage = err instanceof Error ? err.message : String(err);
     try {
       updateRenderJob(jobId, { status: "failed", error: errorMessage });
