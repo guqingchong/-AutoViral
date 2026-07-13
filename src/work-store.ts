@@ -153,7 +153,7 @@ function dbWorkToWork(w: DbWork, steps?: DbPipelineStep[]): Work {
     cliSessionId: w.cli_session_id,
     coverImage: undefined,
     topicHint: w.topic_hint,
-    accountId: w.account_id,
+    accountId: w.account_id ?? undefined,
     evaluationMode: w.evaluation_mode,
     evalSessionIds: w.eval_session_ids,
     evalAttempts: w.eval_attempts,
@@ -260,6 +260,7 @@ export async function updateWork(id: string, updates: Partial<Work>): Promise<Wo
   if (updates.cliSessionId !== undefined) dbUpdates.cli_session_id = updates.cliSessionId;
   if (updates.evalSessionIds !== undefined) dbUpdates.eval_session_ids = updates.evalSessionIds;
   if (updates.evalAttempts !== undefined) dbUpdates.eval_attempts = updates.evalAttempts;
+  if (updates.accountId !== undefined) dbUpdates.account_id = updates.accountId;
   if (updates.pipeline !== undefined) {
     // Sync steps back to DB
     for (const [key, step] of Object.entries(updates.pipeline)) {

@@ -181,6 +181,7 @@ export interface WorkSummary {
   platforms: string[];
   coverImage?: string;
   coverIsVideo?: boolean;
+  accountId?: string;
   updatedAt: string;
 }
 
@@ -203,6 +204,7 @@ export interface Work {
   cliSessionId?: string;
   coverImage?: string;
   topicHint?: string;
+  accountId?: string;
   createdAt: string;
   updatedAt: string;
 }
