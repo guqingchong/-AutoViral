@@ -431,6 +431,23 @@ CREATE INDEX IF NOT EXISTS idx_rules_type ON evolution_rules(rule_type, enabled)
 CREATE INDEX IF NOT EXISTS idx_baselines_name ON baselines(metric_name, platform);
 `,
   },
+  {
+    version: 7,
+    name: "platform_credentials",
+    sql: `
+CREATE TABLE IF NOT EXISTS platform_credentials (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  platform TEXT NOT NULL,
+  key_type TEXT NOT NULL,
+  value TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(platform, key_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_platform_credentials_platform ON platform_credentials(platform);
+`,
+  },
 ];
 
 export function migrate(): void {

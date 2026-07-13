@@ -56,6 +56,7 @@ import { validateTemplate, TimelineValidationError } from "../video/schema.js";
 import { applyVariables, fillDefaults } from "../video/variables.js";
 import type { Timeline } from "../video/types.js";
 import { publishRoutes } from "./publish-api.js";
+import { publishWorkRoutes } from "./routes/publish.js";
 import {
   listPublishRecords,
 } from "../db/publish-records-repo.js";
@@ -2649,3 +2650,5 @@ apiRoutes.post("/api/admin/migrate", async (c) => {
 
 // ── Publish API ───────────────────────────────────────────────────────────
 apiRoutes.route("/api/publish", publishRoutes);
+// Phase 4b: Work-scoped publish routes (RPA: douyin/xiaohongshu/channels)
+apiRoutes.route("/api/works/:id/publish", publishWorkRoutes);
