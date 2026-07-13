@@ -61,6 +61,9 @@ import { listLatestWorkMetrics } from "../db/platform-metrics-repo.js";
 
 export const apiRoutes = new Hono();
 
+// Health check endpoint
+apiRoutes.get("/api/health", (c) => c.json({ ok: true, version: "0.2.0" }));
+
 // ── Python script runner for real-time trend data ────────────────────────────
 
 const execFileAsync = promisify(execFile);

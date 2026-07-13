@@ -35,7 +35,10 @@ export interface Config {
 
 export type { AnalyticsSource };
 
-const CONFIG_DIR = join(homedir(), ".autoviral");
+const CONFIG_DIR = process.env.AUTOVIRAL_DATA_DIR
+  ? process.env.AUTOVIRAL_DATA_DIR
+  : join(homedir(), ".autoviral");
+
 const CONFIG_PATH = join(CONFIG_DIR, "config.yaml");
 
 /** Base data directory for works, trends, etc. */
