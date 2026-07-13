@@ -467,6 +467,204 @@ describe("publish-service", () => {
     expect(() => retryPublishJob(jobId)).toThrow(/not active/i);
   });
 
+  it("serializes concurrent publishes to the same account", async () => {
+    const work = createWork({
+      id: randomUUID(),
+      title: "标题",
+      type: "short-video",
+      status: "draft",
+      platforms: [],
+      evaluation_mode: false,
+      tags: [],
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }, []);
+    const account = accountsRepo.createAccount({
+      id: randomUUID(),
+      platform: "xiaohongshu",
+      display_name: "主号",
+      credentials: {},
+      status: "active",
+      is_default: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+
+    const executionOrder: string[] = [];
+    let callCount = 0;
+    vi.spyOn(publishFactory, "getDriver").mockReturnValue({
+      platform: "xiaohongshu",
+      async publish() {
+        const seq = ++callCount;
+        executionOrder.push(`start-${seq}`);
+        return new Promise((resolve) => {
+          setTimeout(() => {
+            executionOrder.push(`end-${seq}`);
+            resolve({ postUrl: `https://mock.test/post/${seq}`, publishedAt: new Date().toISOString() });
+          }, 10);
+        });
+      },
+    });
+
+    const result1 = createPublishJobs({
+      workId: work.id,
+      accountIds: [account.id],
+      title: "标题1",
+      content: "内容1",
+    });
+    const result2 = createPublishJobs({
+      workId: work.id,
+      accountIds: [account.id],
+      title: "标题2",
+      content: "内容2",
+    });
+
+    expect(result1.jobs).toHaveLength(1);
+    expect(result2.jobs).toHaveLength(1);
+
+    // Wait for both to settle
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    // The first job must complete before the second starts (serialized per account)
+    expect(executionOrder).toEqual(["start-1", "end-1", "start-2", "end-2"]);
+  });
+
+  it("checks compliance once per unique platform across multiple accounts", async () => {
+    const work = createWork({
+      id: randomUUID(),
+      title: "正常标题",
+      type: "short-video",
+      status: "draft",
+      platforms: [],
+      evaluation_mode: false,
+      tags: [],
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }, []);
+    const account1 = accountsRepo.createAccount({
+      id: randomUUID(),
+      platform: "xiaohongshu",
+      display_name: "号1",
+      credentials: {},
+      status: "active",
+      is_default: false,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    const account2 = accountsRepo.createAccount({
+      id: randomUUID(),
+      platform: "xiaohongshu",
+      display_name: "号2",
+      credentials: {},
+      status: "active",
+      is_default: false,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+
+    const scanSpy = vi.spyOn(await import("../../src/services/compliance-text.js"), "scanBannedWords");
+
+    const result = createPublishJobs({
+      workId: work.id,
+      accountIds: [account1.id, account2.id],
+      title: "正常标题",
+      content: "正常内容",
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.jobs).toHaveLength(2);
+    // scanBannedWords should only be called once for "xiaohongshu"
+    const xhsCalls = scanSpy.mock.calls.filter(c => c[0].platform === "xiaohongshu");
+    expect(xhsCalls).toHaveLength(1);
+  });
+
+  it("handles null work_id gracefully during publish", async () => {
+    const account = accountsRepo.createAccount({
+      id: randomUUID(),
+      platform: "xiaohongshu",
+      display_name: "主号",
+      credentials: {},
+      status: "active",
+      is_default: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+
+    // Create a job directly with null work_id
+    const jobId = randomUUID();
+    jobsRepo.createJob({
+      id: jobId,
+      work_id: null,
+      render_job_id: null,
+      account_id: account.id,
+      platform: "xiaohongshu",
+      title: "标题",
+      content: "内容",
+      media_path: null,
+      status: "publishing",
+      compliance_result: { passed: true, violations: [] },
+      error: null,
+      post_url: null,
+      published_at: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+
+    // Manually trigger runPublishJob via retryPublishJob
+    jobsRepo.updateJob(jobId, { status: "failed", error: "test" });
+    retryPublishJob(jobId);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const job = jobsRepo.getJob(jobId);
+    expect(job?.status).toBe("published");
+  });
+
+  it("throws on retry when job status is publishing (not failed)", () => {
+    const work = createWork({
+      id: randomUUID(),
+      title: "标题",
+      type: "short-video",
+      status: "draft",
+      platforms: [],
+      evaluation_mode: false,
+      tags: [],
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }, []);
+    const account = accountsRepo.createAccount({
+      id: randomUUID(),
+      platform: "xiaohongshu",
+      display_name: "主号",
+      credentials: {},
+      status: "active",
+      is_default: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+
+    const jobId = randomUUID();
+    jobsRepo.createJob({
+      id: jobId,
+      work_id: work.id,
+      render_job_id: null,
+      account_id: account.id,
+      platform: account.platform,
+      title: "标题",
+      content: "内容",
+      media_path: null,
+      status: "publishing",
+      compliance_result: { passed: true, violations: [] },
+      error: null,
+      post_url: null,
+      published_at: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+
+    expect(() => retryPublishJob(jobId)).toThrow("Only failed jobs can be retried");
+  });
+
   it("recovers stuck publishing jobs on startup", () => {
     const work = createWork({
       id: randomUUID(),

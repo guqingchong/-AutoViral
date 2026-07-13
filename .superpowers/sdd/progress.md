@@ -120,5 +120,16 @@ Baseline: 92 tests passing (23 files)
 ## Final Review
 
 - [x] Task review loop clean
-- [ ] Whole-branch review
+- [x] Whole-branch review (final verdict: **Ready to merge** at `463c32c`)
 - [ ] Finish branch
+
+## Final Review Fix Waves
+
+- **Fix wave 1** (`81e8218`): address the five Important issues from the first whole-branch review (nullable `work_id`, empty `accountIds`, POST /jobs validation, Publish target race, async publish test coverage) plus Minor cleanups.
+- **Fix wave 2** (`2c8b551`): data-integrity and robustness fixes (work-status update isolation, `runPublishJob` never rejects, `retryPublishJob` account-active guard, async failure test).
+- **Fix wave 3** (`3dcd22f`): UX and robustness (retry error display, retry missing/inactive account tests, account-delete FK error handling, publish button auto-navigation).
+- **Fix wave 4** (`36a3403`): component lifecycle and safety (Publish.svelte unmount timer guards, `enqueueAccount` cascade safety `.catch()`, loading state, content validation).
+- **Fix wave 5** (`ec8cd96`): production readiness (startup `recoverStuckJobs`, unused `PublishJobStatus` cleanup, banned-words severity validation).
+- **Fix wave 6** (`463c32c`): add missing `DELETE /api/publish/banned-words/:id` endpoint and tests.
+
+Final test evidence: **153/153 tests pass** (31 files), frontend build OK.
