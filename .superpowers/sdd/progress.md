@@ -273,12 +273,22 @@ Base: after Phase 6 merge
 
 - `7ab4e55` feat(phase4b): RPA publishing — Playwright + Yingdao publishers
 - `6f8ac61` fix(phase4b): resolve TypeScript strict null-check errors
+- `a2887c7` fix(phase4b): address Codex review findings — shell injection, type safety, i18n
+
+## Codex Review Fixes Applied (a2887c7)
+
+- [x] IMPORTANT: Shell injection in yingdao-publisher.ts — removed `{ shell: true }`, use explicit `cmd.exe` with `shellEscape` argument sanitization
+- [x] MEDIUM: `global.fetch` restore in douyin-official-publisher.test.ts afterEach
+- [x] MEDIUM: `rel="noopener noreferrer"` on external links in Publishing.svelte
+- [x] MINOR: Simplified redundant null checks in `toPublishRecord`
+- [x] MINOR: Removed `body?.title` unnecessary optional chaining in publish routes
+- [x] MINOR: Added optional `login()` to `Publisher` interface, simplified `triggerLogin`
 
 ## Final Test Evidence
 
 - **298/298 tests pass** (59 files)
 - **TypeScript: 0 errors**
-- **Vite build: 171 modules, 388 kB JS + 132 kB CSS**
+- **Vite build: 171 modules, 389 kB JS + 132 kB CSS**
 
 ## FINAL STATUS: All 7 phases complete
 
