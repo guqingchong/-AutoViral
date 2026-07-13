@@ -268,7 +268,10 @@ export class WsBridge {
 - 生图：脚本工具 python3 ~/.claude/skills/asset-generation/scripts/openrouter_generate.py 或 jimeng_generate.py（详见 asset-generation skill）
 - 生视频：调用 curl http://localhost:${port}/api/generate/video 或使用即梦脚本
 - 合成：使用ffmpeg命令剪辑视频（拼接片段+字幕+配乐+转场）
-- 字幕烧录：**必须**使用 python3 ~/.claude/skills/content-assembly/scripts/subtitle_burn.py（禁止自行用 ffmpeg drawtext 或手写方案）
+- 字幕管线（强制）：
+  1. **生成字幕文件**：使用 python3 ~/.claude/skills/content-assembly/scripts/caption_generate.py 生成 ASS 字幕（支持 douyin-highlight/xhs-soft/funny/minimal 等预设风格 + 逐词高亮 karaoke）。如果你有手动时间戳 JSON，也可以用 --timestamps 模式；否则用 --input 自动语音识别模式
+  2. **烧录字幕到视频**：**必须**使用 python3 ~/.claude/skills/content-assembly/scripts/subtitle_burn.py --subs <上一步生成的.ass> 烧录（禁止自行用 ffmpeg drawtext 或手写 ASS/手写 Pillow 方案）
+  3. **字体**：必须使用 ~/.autoviral/fonts/ 下的高质量字体（如 NotoSansCJKsc-Bold.otf），禁止使用系统字体（PingFang SC、Microsoft YaHei 等）
 - 公共素材：通过 curl http://localhost:${port}/api/shared-assets 查看可用素材
 - 流水线管理：调用 curl -X POST http://localhost:${port}/api/works/${work.id}/pipeline/advance 更新流水线状态
 
