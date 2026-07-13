@@ -310,14 +310,25 @@ Base: after Phase 4b final testing
 ## Commits
 
 - `b142543` feat(phase7): Account Management
+- `ca350ed` fix(phase7): Codex review findings — TOCTOU safety, error decoupling, validation
+
+## Codex Review Fix Wave
+
+- [x] IMPORTANT #2: TOCTOU race — `deleteAccount` wrapped in `db.transaction()`
+- [x] IMPORTANT #3: Error-message coupling — `AccountReferencedError` class with `code`; routes use `instanceof`; frontend uses `ApiError.code`
+- [x] MEDIUM #4: `as any` removed — PUT route uses `Partial<DbAccount>`
+- [x] MEDIUM #5: Subtitle conditional — page header subtitle only shows when no accounts
+- [x] MEDIUM #6: tone_profile update API test added
+- [x] MINOR #7: Server-side name length (max 100) and platform enum validation
+- [x] MINOR #8: 409 response body `code` assertion in API test
 
 ## Final Test Evidence
 
-- **363/363 tests pass** (64 files)
+- **367/367 tests pass** (64 files; 2 pre-existing flaky in trend-research.test.ts)
 - **TypeScript: 0 errors**
 - **Vite build: 397 kB JS + 137 kB CSS**
-- **New tests: 23 (10 repo + 13 API)**
-- **Integration: 8 pass | Functional: 19 pass | Performance: 15 pass | E2E: 8 pass | Unit: 313 pass**
+- **New tests: 27 (10 repo + 17 API)**
+- **Integration: 8 pass | Functional: 19 pass | Performance: 15 pass | E2E: 8 pass | Unit: 317 pass**
 
 ## FINAL STATUS: All 8 phases + comprehensive testing complete 🎉
 

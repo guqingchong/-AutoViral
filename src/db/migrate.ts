@@ -469,6 +469,30 @@ CREATE INDEX IF NOT EXISTS idx_accounts_status ON accounts(status);
 CREATE INDEX IF NOT EXISTS idx_works_account_id ON works(account_id);
 `,
   },
+  {
+    version: 9,
+    name: "content_schedule",
+    sql: `
+CREATE TABLE IF NOT EXISTS content_schedule (
+  id TEXT PRIMARY KEY,
+  work_id TEXT,
+  account_id TEXT,
+  title TEXT NOT NULL,
+  description TEXT DEFAULT '',
+  scheduled_date TEXT NOT NULL,
+  scheduled_time TEXT,
+  platform TEXT NOT NULL DEFAULT '',
+  content_type TEXT NOT NULL DEFAULT 'short-video',
+  status TEXT NOT NULL DEFAULT 'planned',
+  color TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_schedule_date ON content_schedule(scheduled_date);
+CREATE INDEX IF NOT EXISTS idx_schedule_work ON content_schedule(work_id);
+CREATE INDEX IF NOT EXISTS idx_schedule_account ON content_schedule(account_id);
+`,
+  },
 ];
 
 export function migrate(): void {

@@ -309,3 +309,23 @@ export interface DbBaseline {
   sample_count: number;
   computed_at: string;
 }
+
+// ── Phase 8: Content Schedule ──────────────────────────────────────────────
+
+export type DbScheduleStatus = "planned" | "in_progress" | "done" | "cancelled";
+
+export interface DbContentSchedule {
+  id: string;
+  work_id?: string;
+  account_id?: string;
+  title: string;
+  description: string;
+  scheduled_date: string;
+  scheduled_time?: string;
+  platform: string;
+  content_type: DbWorkType;
+  status: DbScheduleStatus;
+  color?: string;
+  created_at: string;
+  updated_at: string;
+}

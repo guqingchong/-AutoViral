@@ -15,6 +15,7 @@
   import Publish from "./pages/Publish.svelte";
   import Publishing from "./pages/Publishing.svelte";
   import Accounts from "./pages/Accounts.svelte";
+  import Calendar from "./pages/Calendar.svelte";
   import NewWorkModal from "./components/NewWorkModal.svelte";
   import { fetchConfig, updateConfig, fetchWorks, createWorkApi, type WorkSummary, type ContentCategory } from "./lib/api";
   import { t, getLanguage, setLanguage, subscribe } from "./lib/i18n";
@@ -180,6 +181,7 @@
     { tab: "publish" as Tab, labelKey: "publish" },
     { tab: "publishing" as Tab, labelKey: "publishing" },
     { tab: "accounts" as Tab, labelKey: "navAccounts" },
+    { tab: "calendar" as Tab, labelKey: "navCalendar" },
     { tab: "explore" as Tab, labelKey: "explore" },
     { tab: "analytics" as Tab, labelKey: "analytics" },
     { tab: "comments" as Tab, labelKey: "navComments" },
@@ -247,6 +249,8 @@
       <Publishing />
     {:else if $activeTab === "accounts"}
       <Accounts />
+    {:else if $activeTab === "calendar"}
+      <Calendar />
     {:else if $activeTab === "works"}
       <Works
         onOpenStudio={openStudio}
