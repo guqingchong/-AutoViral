@@ -167,6 +167,22 @@ export class WsBridge {
   }
 
   /**
+   * Flush all pending incremental saves and clean up timers.
+   * MUST be called before process exit to avoid losing the last
+   * 3 seconds of chat history on graceful shutdown (SIGTERM/SIGINT).
+   */
+  destroy(): void {
+    for (const [workId, timer] of this.chatSaveTimers) {
+      clearTimeout(timer);
+      const session = this.sessions.get(workId);
+      if (session && session.messageHistory.length > 0) {
+        saveWorkChat(workId, { blocks: session.messageHistory }).catch(() => {});
+      }
+    }
+    this.chatSaveTimers.clear();
+  }
+
+  /**
    * Build a system prompt with full context for a given work.
    */
   private async buildSystemPrompt(work: Work): Promise<string> {
