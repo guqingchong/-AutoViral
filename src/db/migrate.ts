@@ -332,6 +332,105 @@ CREATE INDEX IF NOT EXISTS idx_publish_jobs_work_id ON publish_jobs(work_id);
 PRAGMA foreign_keys = ON;
 `,
   },
+  {
+    version: 6,
+    name: "phase5_analytics_evolution",
+    sql: `
+-- publish_records: track each publish event for data recycling
+CREATE TABLE IF NOT EXISTS publish_records (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  work_id TEXT NOT NULL,
+  platform TEXT NOT NULL,
+  platform_post_id TEXT,
+  status TEXT NOT NULL DEFAULT 'published',
+  scheduled_at TEXT,
+  published_at TEXT,
+  error_message TEXT,
+  metadata TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- eval_results: review scores per work (referenced by hit-failure analysis)
+CREATE TABLE IF NOT EXISTS eval_results (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  work_id TEXT NOT NULL UNIQUE,
+  overall_score REAL,
+  dimensions TEXT NOT NULL DEFAULT '{}',
+  summary TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (work_id) REFERENCES works(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS platform_metrics (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  publish_record_id INTEGER,
+  platform TEXT NOT NULL,
+  metric_type TEXT NOT NULL DEFAULT 'work',
+  external_id TEXT,
+  collected_at TEXT NOT NULL,
+  views INTEGER,
+  likes INTEGER,
+  comments INTEGER,
+  shares INTEGER,
+  collects INTEGER,
+  completion_rate REAL,
+  followers INTEGER,
+  raw_data TEXT NOT NULL DEFAULT '{}',
+  FOREIGN KEY (publish_record_id) REFERENCES publish_records(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS comments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  publish_record_id INTEGER NOT NULL,
+  external_comment_id TEXT,
+  author_name TEXT,
+  author_id TEXT,
+  content TEXT NOT NULL,
+  sentiment TEXT,
+  is_reply INTEGER NOT NULL DEFAULT 0,
+  parent_external_id TEXT,
+  replied INTEGER NOT NULL DEFAULT 0,
+  reply_content TEXT,
+  reply_published_at TEXT,
+  collected_at TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (publish_record_id) REFERENCES publish_records(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS evolution_rules (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  rule_type TEXT NOT NULL,
+  target_key TEXT,
+  condition_json TEXT NOT NULL DEFAULT '{}',
+  action TEXT NOT NULL,
+  confidence REAL NOT NULL DEFAULT 0,
+  source TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  applied_count INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS baselines (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  metric_name TEXT NOT NULL,
+  platform TEXT,
+  value_json TEXT NOT NULL,
+  sample_count INTEGER NOT NULL DEFAULT 0,
+  computed_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_publish_records_work_id ON publish_records(work_id);
+CREATE INDEX IF NOT EXISTS idx_publish_records_status ON publish_records(status);
+CREATE INDEX IF NOT EXISTS idx_publish_records_platform ON publish_records(platform);
+CREATE INDEX IF NOT EXISTS idx_metrics_record ON platform_metrics(publish_record_id);
+CREATE INDEX IF NOT EXISTS idx_metrics_platform_collected ON platform_metrics(platform, collected_at);
+CREATE INDEX IF NOT EXISTS idx_comments_record ON comments(publish_record_id);
+CREATE INDEX IF NOT EXISTS idx_rules_type ON evolution_rules(rule_type, enabled);
+CREATE INDEX IF NOT EXISTS idx_baselines_name ON baselines(metric_name, platform);
+`,
+  },
 ];
 
 export function migrate(): void {

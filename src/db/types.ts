@@ -213,3 +213,84 @@ export interface DbBannedWord {
   severity: "low" | "medium" | "high";
   created_at: string;
 }
+
+// ── Phase 5: Data Recycling & Self-Evolution ──────────────────────────────
+
+export type DbPublishRecordStatus = "pending" | "publishing" | "published" | "failed" | "scheduled" | "fallback";
+
+export interface DbPublishRecord {
+  id: number;
+  work_id: string;
+  platform: string;
+  platform_post_id?: string;
+  status: DbPublishRecordStatus;
+  scheduled_at?: string;
+  published_at?: string;
+  error_message?: string;
+  metadata: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export type DbMetricType = "work" | "account";
+
+export interface DbPlatformMetric {
+  id: number;
+  publish_record_id?: number;
+  platform: string;
+  metric_type: DbMetricType;
+  external_id?: string;
+  collected_at: string;
+  views?: number;
+  likes?: number;
+  comments?: number;
+  shares?: number;
+  collects?: number;
+  completion_rate?: number;
+  followers?: number;
+  raw_data: Record<string, unknown>;
+}
+
+export type DbCommentSentiment = "positive" | "negative" | "neutral" | "question";
+
+export interface DbComment {
+  id: number;
+  publish_record_id: number;
+  external_comment_id?: string;
+  author_name?: string;
+  author_id?: string;
+  content: string;
+  sentiment?: DbCommentSentiment;
+  is_reply: boolean;
+  parent_external_id?: string;
+  replied: boolean;
+  reply_content?: string;
+  reply_published_at?: string;
+  collected_at: string;
+  created_at: string;
+}
+
+export type DbRuleType = "topic" | "template" | "prompt" | "publish_time" | "platform";
+
+export interface DbEvolutionRule {
+  id: number;
+  rule_type: DbRuleType;
+  target_key?: string;
+  condition_json: Record<string, unknown>;
+  action: string;
+  confidence: number;
+  source: string;
+  enabled: boolean;
+  applied_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DbBaseline {
+  id: number;
+  metric_name: string;
+  platform?: string;
+  value_json: Record<string, unknown>;
+  sample_count: number;
+  computed_at: string;
+}

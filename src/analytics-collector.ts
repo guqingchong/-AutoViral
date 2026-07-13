@@ -1,117 +1,146 @@
-import cron from "node-cron"
-import { execFile } from "node:child_process"
-import { promisify } from "node:util"
-import { readFile, writeFile, mkdir, readdir } from "node:fs/promises"
-import { join } from "node:path"
-import { homedir } from "node:os"
-import { loadConfig } from "./config.js"
+/**
+ * Phase 5 analytics collector.
+ *
+ * Orchestrates registered platform adapters to collect:
+ * - account-level metrics
+ * - post-level metrics for published works
+ * - comments for published works
+ *
+ * This replaces the previous Python-script-based collector.
+ */
 
-const execFileAsync = promisify(execFile)
-const ANALYTICS_DIR = join(homedir(), ".autoviral", "analytics", "douyin")
-const LATEST_FILE = join(ANALYTICS_DIR, "latest.json")
+import { getAdapter, listAdapters } from "./services/platform-adapters/registry.js";
+import { listPublishRecords } from "./db/publish-records-repo.js";
+import { createMetric, getLatestAccountMetric } from "./db/platform-metrics-repo.js";
+import { createComment, listComments } from "./db/comments-repo.js";
+import { classifySentiment } from "./services/sentiment-helper.js";
+import type { DbPlatformMetric } from "./db/types.js";
 
-let task: cron.ScheduledTask | null = null
-
-export interface CreatorData {
-  platform: string
-  collected_at: string
-  account: {
-    nickname: string
-    follower_count: number
-    following_count: number
-    total_favorited: number
-    aweme_count: number
-    [key: string]: unknown
-  }
-  works: Array<{
-    aweme_id: string
-    desc: string
-    create_time: number
-    play_count: number
-    digg_count: number
-    comment_count: number
-    share_count: number
-    collect_count: number
-    [key: string]: unknown
-  }>
-  summary: {
-    total_works_collected: number
-    avg_play: number
-    avg_digg: number
-    avg_comment: number
-    avg_share: number
-    avg_collect: number
-    engagement_rate: number
-  }
+export interface CollectorResult {
+  metricsCollected: number;
+  commentsCollected: number;
+  accountMetricsCollected: number;
+  errors: string[];
 }
 
-async function collectData(douyinUrl: string): Promise<CreatorData | null> {
-  const scriptPath = join(homedir(), ".claude", "skills", "trend-research", "scripts", "creator-analytics", "collect.py")
-  try {
-    await mkdir(ANALYTICS_DIR, { recursive: true })
-    const { stdout } = await execFileAsync("python3", [
-      scriptPath, "--platform", "douyin", "--url", douyinUrl
-    ], { timeout: 120000 })
+/**
+ * Collect metrics and comments for all registered adapters, or a subset of platforms.
+ * If `platforms` is omitted, every registered adapter is used.
+ */
+export async function collectAll(platforms?: string[]): Promise<CollectorResult> {
+  const result: CollectorResult = {
+    metricsCollected: 0,
+    commentsCollected: 0,
+    accountMetricsCollected: 0,
+    errors: [],
+  };
 
-    const data = JSON.parse(stdout.trim()) as CreatorData
-    await writeFile(LATEST_FILE, JSON.stringify(data, null, 2), "utf-8")
+  const adapters = platforms
+    ? platforms.map((p) => ({ adapter: getAdapter(p), platform: p }))
+    : listAdapters().map((a) => ({ adapter: a, platform: a.platform }));
 
-    const dateStr = new Date().toISOString().slice(0, 10)
-    await writeFile(join(ANALYTICS_DIR, `${dateStr}.json`), JSON.stringify(data, null, 2), "utf-8")
-
-    console.log(`[analytics] Collected data for ${data.account?.nickname ?? "unknown"}: ${data.summary?.total_works_collected ?? 0} works`)
-    return data
-  } catch (err) {
-    console.error("[analytics] Collection failed:", err instanceof Error ? err.message : err)
-    return null
-  }
-}
-
-export async function getLatestCreatorData(): Promise<CreatorData | null> {
-  try {
-    const raw = await readFile(LATEST_FILE, "utf-8")
-    return JSON.parse(raw) as CreatorData
-  } catch {
-    return null
-  }
-}
-
-export async function getCreatorHistory(days: number = 30): Promise<Array<{ date: string; data: CreatorData }>> {
-  try {
-    const files = await readdir(ANALYTICS_DIR)
-    const jsonFiles = files.filter(f => /^\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort().reverse().slice(0, days)
-    const results = []
-    for (const f of jsonFiles) {
-      try {
-        const raw = await readFile(join(ANALYTICS_DIR, f), "utf-8")
-        results.push({ date: f.replace(".json", ""), data: JSON.parse(raw) })
-      } catch { /* skip */ }
+  for (const { adapter, platform } of adapters) {
+    if (!adapter) {
+      result.errors.push(`No adapter registered for ${platform}`);
+      continue;
     }
-    return results
-  } catch {
-    return []
+    // Account metrics
+    try {
+      const accountMetrics = await adapter.collectAccountMetrics();
+      createMetric({
+        platform,
+        metric_type: "account",
+        collected_at: accountMetrics.collectedAt,
+        followers: accountMetrics.followers,
+        raw_data: accountMetrics.rawData,
+      });
+      result.accountMetricsCollected++;
+    } catch (err) {
+      result.errors.push(`Account ${platform}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    // Post metrics + comments for published records on this platform
+    const records = listPublishRecords({ platform, status: "published" });
+    for (const record of records) {
+      if (!record.platform_post_id) continue;
+
+      try {
+        const metric = await adapter.collectPostMetrics(record.platform_post_id);
+        createMetric({
+          publish_record_id: record.id,
+          platform,
+          metric_type: "work",
+          external_id: record.platform_post_id,
+          collected_at: metric.collectedAt,
+          views: metric.views,
+          likes: metric.likes,
+          comments: metric.comments,
+          shares: metric.shares,
+          collects: metric.collects,
+          completion_rate: metric.completionRate,
+          raw_data: metric.rawData,
+        });
+        result.metricsCollected++;
+      } catch (err) {
+        result.errors.push(`Metric ${platform}/${record.id}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+
+      try {
+        const existingIds = new Set(
+          listComments({ publishRecordId: record.id, limit: 500 })
+            .map((c) => c.external_comment_id)
+            .filter((id): id is string => !!id)
+        );
+        let cursor: string | undefined;
+        do {
+          const page = await adapter.collectComments(record.platform_post_id, cursor);
+          for (const c of page.comments) {
+            if (c.externalCommentId && existingIds.has(c.externalCommentId)) continue;
+            createComment({
+              publish_record_id: record.id,
+              external_comment_id: c.externalCommentId,
+              author_name: c.authorName,
+              author_id: c.authorId,
+              content: c.content,
+              sentiment: classifySentiment(c.content),
+              is_reply: c.isReply,
+              parent_external_id: c.parentExternalId,
+              replied: false,
+              collected_at: c.collectedAt,
+            });
+            result.commentsCollected++;
+          }
+          cursor = page.nextCursor;
+        } while (cursor);
+      } catch (err) {
+        result.errors.push(`Comments ${platform}/${record.id}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
   }
+
+  return result;
 }
 
-export async function startAnalyticsCollector(): Promise<void> {
-  const config = await loadConfig()
-  const analytics = config.analytics
-  if (!analytics?.enabled || !analytics?.douyinUrl) {
-    console.log("[analytics] Disabled or no URL configured, skipping")
-    return
-  }
-  collectData(analytics.douyinUrl).catch(() => {})
-  const intervalMinutes = analytics.collectInterval || 60
-  const cronExpr = `*/${intervalMinutes} * * * *`
-  task = cron.schedule(cronExpr, () => {
-    loadConfig().then(cfg => {
-      if (cfg.analytics?.douyinUrl) collectData(cfg.analytics.douyinUrl).catch(() => {})
-    })
-  })
-  console.log(`[analytics] Scheduled every ${intervalMinutes} minutes for ${analytics.douyinUrl}`)
+export { getLatestAccountMetric };
+
+/**
+ * Backward-compatible accessor for the latest creator account data.
+ */
+export function getLatestCreatorData(platform: string): DbPlatformMetric | undefined {
+  return getLatestAccountMetric(platform);
 }
 
+/**
+ * No-op: the new adapter-based collection is driven by the analytics scheduler.
+ * Kept for callers that may still import it; does not start the legacy Python collector.
+ */
+export function startAnalyticsCollector(): void {
+  console.log("[analytics-collector] legacy collector disabled; use analytics-scheduler instead");
+}
+
+/**
+ * No-op companion for startAnalyticsCollector.
+ */
 export function stopAnalyticsCollector(): void {
-  task?.stop()
-  task = null
+  // nothing to stop
 }

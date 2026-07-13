@@ -21,7 +21,22 @@ export interface Config {
     douyinUrl: string;
     collectInterval: number;
     enabled: boolean;
+    /** Phase 5: per-platform data collection sources */
+    sources?: AnalyticsSource[];
   };
+  /** Phase 5: self-evolution configuration */
+  evolution?: {
+    enabled: boolean;
+    autoApply: boolean;
+    minConfidence: number;
+  };
+}
+
+export interface AnalyticsSource {
+  platform: string;
+  enabled: boolean;
+  accountId?: string;
+  credentials?: Record<string, string>;
 }
 
 const CONFIG_DIR = join(homedir(), ".autoviral");
