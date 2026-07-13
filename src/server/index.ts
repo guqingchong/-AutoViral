@@ -1,7 +1,7 @@
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { serveStatic } from "@hono/node-server/serve-static";
-import { readFile, mkdir } from "node:fs/promises";
+import { readFile, mkdir, appendFile } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
@@ -51,7 +51,44 @@ function setFfmpegEnv(): void {
   }
 }
 
+// ── Crash protection (BUG-3) ──────────────────────────────────────────────────
+// Global error handlers prevent silent process death. uncaughtException still
+// exits (process state may be corrupt) but logs the fault so it is diagnosable.
+// unhandledRejection only logs — forgotten promises should not kill the server.
+
+function installCrashHandlers(): void {
+  const crashLog = join(dataDir, "crash.log");
+
+  async function writeCrashLog(line: string): Promise<void> {
+    try {
+      await appendFile(crashLog, `${new Date().toISOString()} ${line}\n`, "utf-8");
+    } catch {
+      // Last-resort: if even crash log fails, write to stderr
+      process.stderr.write(`${new Date().toISOString()} ${line}\n`);
+    }
+  }
+
+  process.on("uncaughtException", (err) => {
+    const msg = `[FATAL] uncaughtException: ${err.message}\n${err.stack ?? "(no stack)"}`;
+    process.stderr.write(`${new Date().toISOString()} ${msg}\n`);
+    writeCrashLog(msg);
+    // Give logs a moment to flush, then exit so a process manager can restart
+    setTimeout(() => process.exit(1), 1000);
+  });
+
+  process.on("unhandledRejection", (reason) => {
+    const detail = reason instanceof Error
+      ? `${reason.message}\n${reason.stack ?? ""}`
+      : String(reason);
+    const msg = `[WARN] unhandledRejection: ${detail}`;
+    process.stderr.write(`${new Date().toISOString()} ${msg}\n`);
+    writeCrashLog(msg);
+  });
+}
+
 export async function startServer(port: number): Promise<{ server: Server }> {
+  // 0.0. Install crash protection before anything else
+  installCrashHandlers();
   // 0. Ensure database schema
   migrate();
 
