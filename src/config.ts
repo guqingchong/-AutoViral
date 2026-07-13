@@ -139,5 +139,7 @@ export async function saveConfig(config: Config): Promise<void> {
 }
 
 export function getConfigDir(): string {
-  return CONFIG_DIR;
+  return process.env.AUTOVIRAL_DATA_DIR
+    ? process.env.AUTOVIRAL_DATA_DIR
+    : join(homedir(), ".autoviral");
 }

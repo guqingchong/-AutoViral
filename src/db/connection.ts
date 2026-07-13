@@ -1,17 +1,19 @@
 import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { getConfigDir } from "../config.js";
 
-const DB_DIR = join(homedir(), ".autoviral");
-const DB_PATH = join(DB_DIR, "autoviral.db");
+function getDbPath(): string {
+  return join(getConfigDir(), "autoviral.db");
+}
 
 let db: Database.Database | null = null;
 
 export function getDb(): Database.Database {
   if (!db) {
-    mkdirSync(DB_DIR, { recursive: true });
-    db = new Database(DB_PATH);
+    const dbPath = getDbPath();
+    mkdirSync(getConfigDir(), { recursive: true });
+    db = new Database(dbPath);
     db.pragma("journal_mode = WAL");
     db.pragma("foreign_keys = ON");
   }
