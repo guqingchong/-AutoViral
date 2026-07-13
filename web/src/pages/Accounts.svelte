@@ -6,6 +6,7 @@
     createAccountApi,
     updateAccountApi,
     deleteAccountApi,
+    ApiError,
     type Account,
   } from "../lib/api.js";
 
@@ -76,7 +77,7 @@
 
   async function handleSave() {
     formError = "";
-    if (!formName.trim()) { formError = t("accountName") + " " + t("required"); return; }
+    if (!formName.trim()) { formError = t("accountName") + " " + t("fieldRequired"); return; }
 
     let toneProfile: Record<string, unknown> = {};
     try {
@@ -104,7 +105,7 @@
           platform: formPlatform,
           tone_profile: toneProfile,
         });
-        showMessage("success", t("created"));
+        showMessage("success", t("accountCreated"));
       }
       resetForm();
       await load();
@@ -119,12 +120,12 @@
     if (!confirm(t("accountDeleteConfirm"))) return;
     try {
       await deleteAccountApi(account.id);
-      showMessage("success", t("deleted"));
+      showMessage("success", t("accountDeleted"));
       await load();
     } catch (err: any) {
-      showMessage("error", err.message?.includes("reference")
+      showMessage("error", err instanceof ApiError && err.code === "ACCOUNT_REFERENCED"
         ? t("accountDeleteRejected")
-        : String(err));
+        : err.message || String(err));
     }
   }
 
@@ -143,7 +144,9 @@
   <div class="page-header">
     <div>
       <h1>{t("accountsTitle")}</h1>
-      <p class="subtitle">{t("accountCreateFirst")}</p>
+      {#if !loading && accounts.length === 0}
+        <p class="subtitle">{t("accountCreateFirst")}</p>
+      {/if}
     </div>
     <button class="btn-new" onclick={startCreate}>
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>

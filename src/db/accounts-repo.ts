@@ -2,6 +2,15 @@ import { getDb } from "./connection.js";
 import { fromJson, toJson } from "./json.js";
 import type { DbAccount } from "./types.js";
 
+/** Thrown when attempting to delete an account that is still referenced by works. */
+export class AccountReferencedError extends Error {
+  public readonly code = "ACCOUNT_REFERENCED";
+  constructor(public readonly workCount: number) {
+    super(`Cannot delete account: ${workCount} work(s) still reference it`);
+    this.name = "AccountReferencedError";
+  }
+}
+
 function rowToAccount(row: Record<string, unknown>): DbAccount {
   return {
     id: row.id as string,
@@ -66,12 +75,16 @@ export function updateAccount(id: string, updates: Partial<DbAccount>): DbAccoun
 
 export function deleteAccount(id: string): boolean {
   const db = getDb();
-  const refCount = db.prepare("SELECT COUNT(*) AS cnt FROM works WHERE account_id = ?").get(id) as { cnt: number };
-  if (refCount.cnt > 0) {
-    throw new Error(`Cannot delete account: ${refCount.cnt} work(s) still reference it`);
-  }
-  const result = db.prepare("DELETE FROM accounts WHERE id = ?").run(id);
-  return result.changes > 0;
+  const tx = db.transaction(() => {
+    const refCount = db.prepare(
+      "SELECT COUNT(*) AS cnt FROM works WHERE account_id = ?"
+    ).get(id) as { cnt: number };
+    if (refCount.cnt > 0) {
+      throw new AccountReferencedError(refCount.cnt);
+    }
+    return db.prepare("DELETE FROM accounts WHERE id = ?").run(id);
+  });
+  return tx().changes > 0;
 }
 
 export function getWorksByAccount(accountId: string): Array<{ id: string; title: string }> {
