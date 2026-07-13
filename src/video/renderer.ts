@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { getFFmpegPath } from "./ffmpeg.js";
 import { parseFFmpegProgress } from "./progress.js";
 import { validateTimeline } from "./schema.js";
-import type { Timeline, TimelineLayer, TimelinePosition, TimelineAnimation, AudioTrack } from "./types.js";
+import type { Timeline, TimelineLayer, TimelinePosition, TimelineAnimation } from "./types.js";
 
 export interface RenderOptions {
   outputPath: string;
@@ -117,10 +117,6 @@ export function collectInputs(tl: Timeline): InputSlot[] {
 }
 
 export function buildFilterComplexArgs(tl: Timeline, inputs: InputSlot[], duration: number, outputPath: string): string[] {
-  if (tl.transitions && tl.transitions.length > 0) {
-    console.warn(`[renderer] transitions are declared but not yet implemented (${tl.transitions.length} transition(s) ignored)`);
-  }
-
   const args: string[] = [];
 
   // Input declarations
@@ -135,12 +131,12 @@ export function buildFilterComplexArgs(tl: Timeline, inputs: InputSlot[], durati
   const videoFilterParts: string[] = [];
   const audioFilterParts: string[] = [];
 
-  // Categorize visual layers
+  // Categorize layers
+  const mediaLayers = tl.layers.filter(l => l.type === "video" || l.type === "image");
   const visualLayers = tl.layers.filter(l => l.type === "video" || l.type === "image" || l.type === "text" || l.type === "shape");
   const hasVisual = visualLayers.length > 0;
 
-  // Determine if we need an additional lavfi color background (when the first visual layer
-  // is text/shape, or when there are no visual layers at all)
+  // Determine if we need an additional lavfi color background
   const firstIsMedia = hasVisual && (visualLayers[0].type === "video" || visualLayers[0].type === "image");
   const needsCanvasBg = !hasVisual || !firstIsMedia;
   let canvasBgIdx = -1;
@@ -150,79 +146,92 @@ export function buildFilterComplexArgs(tl: Timeline, inputs: InputSlot[], durati
     args.push("-f", "lavfi", "-i", `color=c=${tl.canvas.backgroundColor ?? "black"}:s=${tl.canvas.width}x${tl.canvas.height}:r=${tl.canvas.fps}:d=${duration}`);
   }
 
+  // ── Determine whether to use xfade transitions ──────────────────────────
+  const hasTransitions = tl.transitions && tl.transitions.length > 0;
+
+  // Sequential media layers that can be xfade-chained:
+  // layers must be non-overlapping and ordered by start time.
+  const xfadeMediaLayers = hasTransitions && mediaLayers.length >= 2
+    ? mediaLayers.slice().sort((a, b) => a.start - b.start)
+    : [];
+  const useXfade = xfadeMediaLayers.length >= 2;
+  let xfadeBaseLabel = "";
+
+  // Compute which layers are handled by the xfade chain (the first N sequential media layers)
+  const xfadeLayerIds = new Set(xfadeMediaLayers.map(l => l.id));
+  const remainingVisual = visualLayers.filter(l => !xfadeLayerIds.has(l.id));
+
+  if (useXfade) {
+    const xfadeResult = buildXfadeChain(xfadeMediaLayers, tl.transitions!, inputs, tl.canvas, tl.canvas.fps);
+    videoFilterParts.push(...xfadeResult.parts);
+    xfadeBaseLabel = xfadeResult.baseLabel;
+  }
+
   if (!hasVisual) {
     // Audio-only: use the color background as base
     videoFilterParts.push(`[${canvasBgIdx}:v]format=yuv420p[base]`);
+  } else if (useXfade) {
+    // xfade chain output is the base; format it
+    videoFilterParts.push(`[${xfadeBaseLabel}]format=yuv420p[base]`);
   } else {
     // Start [base] from the first visual layer
     const first = visualLayers[0];
 
     if (first.type === "video" || first.type === "image") {
-      // Real media: trim/scale source into [base]
       const srcIdx = getInputIndex(first, inputs);
       const chain = buildLayerVideoChain(first, srcIdx, tl.canvas, duration);
       videoFilterParts.push(`${chain}[base]`);
     } else {
-      // Text or shape first: apply drawtext/drawbox on the color background
       const chain = buildLayerVideoChain(first, canvasBgIdx, tl.canvas, duration);
       videoFilterParts.push(`${chain}[base]`);
     }
+  }
 
-    // Remaining layers
-    for (let i = 1; i < visualLayers.length; i++) {
-      const layer = visualLayers[i];
-      const pos = resolvePosition(layer.position, layer.size, tl.canvas);
-      const opacity = layer.opacity ?? 1;
-      const start = layer.start;
-      const end = start + layer.duration;
+  // ── Composite remaining visual layers on top of [base] ──────────────────
+  const layersToComposite = useXfade ? remainingVisual : visualLayers.slice(1);
+  for (const layer of layersToComposite) {
+    const pos = resolvePosition(layer.position, layer.size, tl.canvas);
+    const opacity = layer.opacity ?? 1;
+    const start = layer.start;
+    const end = start + layer.duration;
 
-      if (layer.type === "text" || layer.type === "shape") {
-        // Text/shape layers chain drawtext/drawbox directly on [base] (no overlay).
-        // This avoids needing transparent lavfi inputs for the overlay filter.
-        let filter = `[base]`;
+    if (layer.type === "text" || layer.type === "shape") {
+      let filter = `[base]`;
 
-        if (layer.type === "text") {
-          const text = layer.content.replace(/'/g, "'\\''");
-          const fontSize = layer.fontSize ?? 48;
-          const textColor = layer.color ?? "#FFFFFF";
-          // Map user-friendly alignment to FFmpeg drawtext values
-          const alignMap: Record<string, string> = { left: "L", center: "C", right: "R" };
-          const ffAlign = alignMap[layer.align ?? "center"] ?? "C";
-          const x = String(pos.x);
-          const y = String(pos.y);
-          filter += `drawtext=text='${text}':fontsize=${fontSize}:fontcolor=${textColor}:x=${x}:y=${y}:align=${ffAlign}:enable='between(t\\,${start}\\,${end})'`;
-          if (layer.stroke) {
-            filter += `:borderw=${layer.stroke.width}:bordercolor=${layer.stroke.color}`;
-          }
-        } else {
-          // shape
-          const size = layer.size!;
-          const fill = layer.fill ?? "#FFFFFF";
-          filter += `drawbox=x=${pos.x}:y=${pos.y}:w=${size.width}:h=${size.height}:color=${fill}:t=fill:enable='between(t\\,${start}\\,${end})'`;
+      if (layer.type === "text") {
+        const text = layer.content.replace(/'/g, "'\\''");
+        const fontSize = layer.fontSize ?? 48;
+        const textColor = layer.color ?? "#FFFFFF";
+        const alignMap: Record<string, string> = { left: "L", center: "C", right: "R" };
+        const ffAlign = alignMap[layer.align ?? "center"] ?? "C";
+        filter += `drawtext=text='${text}':fontsize=${fontSize}:fontcolor=${textColor}:x=${pos.x}:y=${pos.y}:align=${ffAlign}:enable='between(t\\,${start}\\,${end})'`;
+        if (layer.stroke) {
+          filter += `:borderw=${layer.stroke.width}:bordercolor=${layer.stroke.color}`;
         }
-
-        if (opacity < 1) {
-          filter += `,format=rgba,colorchannelmixer=aa=${opacity}`;
-        }
-
-        // Fade animations for text/shape (applied to entire frame)
-        const fade = buildFadeFilter(layer);
-        if (fade) {
-          // Remove leading colon and optional format= prefix, keep the fade filter chain
-          const cleanFade = fade.replace(/^:([^,]+,\s*)?/, ",");
-          filter += `,format=yuva420p${cleanFade}`;
-        }
-
-        filter += `[base]`;
-        videoFilterParts.push(filter);
       } else {
-        // Video/image layers: normal overlay compositing
-        const srcIdx = getInputIndex(layer, inputs);
-        const chain = buildLayerVideoChain(layer, srcIdx, tl.canvas, duration);
-        const fade = buildFadeFilter(layer);
-        const cleanFade = fade.replace(/^:([^,]+,\s*)?/, ",");
-        videoFilterParts.push(`[base]${chain},overlay=${pos.x}:${pos.y}:enable='between(t\\,${start}\\,${end})'${cleanFade}[base]`);
+        const size = layer.size!;
+        const fill = layer.fill ?? "#FFFFFF";
+        filter += `drawbox=x=${pos.x}:y=${pos.y}:w=${size.width}:h=${size.height}:color=${fill}:t=fill:enable='between(t\\,${start}\\,${end})'`;
       }
+
+      if (opacity < 1) {
+        filter += `,format=rgba,colorchannelmixer=aa=${opacity}`;
+      }
+
+      const animFilters = buildAnimationFilters(layer, pos, layer.size ?? { width: 0, height: 0 });
+      if (animFilters) filter += `,${animFilters}`;
+
+      filter += `[base]`;
+      videoFilterParts.push(filter);
+    } else {
+      // Video/image layers: overlay compositing with optional slide animations
+      const srcIdx = getInputIndex(layer, inputs);
+      const chain = buildLayerVideoChain(layer, srcIdx, tl.canvas, duration);
+      const animFilters = buildAnimationFilters(layer, pos, layer.size!);
+      const overlayExpr = buildOverlayExpr(layer, pos);
+      videoFilterParts.push(
+        `[base]${chain}${overlayExpr}:enable='between(t\\,${start}\\,${end})'${animFilters ? "," + animFilters : ""}[base]`
+      );
     }
   }
 
@@ -274,6 +283,159 @@ export function buildFilterComplexArgs(tl: Timeline, inputs: InputSlot[], durati
   return args;
 }
 
+// ── xfade Transition Chain ─────────────────────────────────────────────────
+
+function buildXfadeChain(
+  layers: TimelineLayer[],
+  transitions: { type: string; duration: number }[],
+  inputs: InputSlot[],
+  canvas: { width: number; height: number },
+  _fps: number,
+): { parts: string[]; baseLabel: string } {
+  const parts: string[] = [];
+  let prevLabel = "";
+
+  for (let i = 0; i < layers.length; i++) {
+    const layer = layers[i];
+    const srcIdx = getInputIndex(layer, inputs);
+    const layerDur = layer.duration;
+    const label = `v${i}`;
+
+    // Prepare this layer as a full-frame stream (normalised to start at t=0)
+    let chain = `[${srcIdx}:v]`;
+    if (layer.type === "image") {
+      chain += `loop=1:1:1,trim=duration=${layerDur},setpts=PTS-STARTPTS`;
+    } else {
+      chain += `trim=${layer.start}:${layer.start + layerDur},setpts=PTS-STARTPTS`;
+    }
+    // Scale to fill canvas preserving aspect ratio (centered)
+    chain += `,scale=${canvas.width}:${canvas.height}:force_original_aspect_ratio=decrease,pad=${canvas.width}:${canvas.height}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p`;
+    chain += `[${label}]`;
+    parts.push(chain);
+
+    if (i === 0) {
+      prevLabel = label;
+      continue;
+    }
+
+    const prevLayer = layers[i - 1];
+    const t = transitions[Math.min(i - 1, transitions.length - 1)];
+    const xfadeDur = Math.min(t.duration, prevLayer.duration, layer.duration);
+    const xfadeType = t.type === "fade" ? "fade"
+      : t.type === "slide" ? "slideright"
+      : t.type === "wipe" ? "wipeleft"
+      : "fade";
+    // Offset: time in the first (previous) stream where the transition begins.
+    // Both streams are normalised to start at 0, so offset = previous duration - xfade duration.
+    const offset = Math.max(0, prevLayer.duration - xfadeDur);
+
+    const xlabel = `xf${i - 1}`;
+    parts.push(`[${prevLabel}][${label}]xfade=transition=${xfadeType}:duration=${xfadeDur}:offset=${offset}[${xlabel}]`);
+    prevLabel = xlabel;
+  }
+
+  return { parts, baseLabel: prevLabel };
+}
+
+// ── Animated Overlay Expression ─────────────────────────────────────────────
+
+/**
+ * Build an overlay string with optional slide-in / slide-out animation.
+ * Returns a complete overlay filter fragment like:
+ *   ,overlay=x='…':y='…'
+ */
+function buildOverlayExpr(layer: TimelineLayer, pos: TimelinePosition): string {
+  if (!layer.animations || layer.animations.length === 0) {
+    return `,overlay=${pos.x}:${pos.y}`;
+  }
+
+  const size = layer.size!;
+  let xExpr = String(pos.x);
+  let yExpr = String(pos.y);
+  const st = layer.start;
+  const end = st + layer.duration;
+
+  for (const anim of layer.animations) {
+    const d = anim.duration;
+    const dir = anim.direction ?? "left";
+
+    if (anim.type === "slidein") {
+      if (dir === "left" || dir === "right") {
+        const fromX = dir === "left" ? -size.width : 99999; // 99999 ≈ canvas right edge proxy
+        xExpr = `if(between(t\\,${st}\\,${st + d})\\,${fromX}+(${pos.x - fromX})*(t-${st})/${d}\\,${pos.x})`;
+      } else {
+        const fromY = dir === "top" ? -size.height : 99999;
+        yExpr = `if(between(t\\,${st}\\,${st + d})\\,${fromY}+(${pos.y - fromY})*(t-${st})/${d}\\,${pos.y})`;
+      }
+    } else if (anim.type === "slideout") {
+      if (dir === "left" || dir === "right") {
+        const toX = dir === "left" ? -size.width : 99999;
+        xExpr = `if(between(t\\,${end - d}\\,${end})\\,${pos.x}+(${toX - pos.x})*(t-(${end - d}))/${d}\\,${pos.x})`;
+      } else {
+        const toY = dir === "top" ? -size.height : 99999;
+        yExpr = `if(between(t\\,${end - d}\\,${end})\\,${pos.y}+(${toY - pos.y})*(t-(${end - d}))/${d}\\,${pos.y})`;
+      }
+    }
+  }
+
+  return `,overlay=x='${xExpr}':y='${yExpr}'`;
+}
+
+// ── Animation Filters ───────────────────────────────────────────────────────
+
+/**
+ * Build filter chain for all animation types on a layer.
+ * fadein/fadeout → fade filter
+ * slidein/slideout → handled in buildOverlayExpr (position animation)
+ * scale → scale filter with animated width
+ * rotate → rotate filter with animated angle
+ */
+function buildAnimationFilters(
+  layer: TimelineLayer,
+  _pos: TimelinePosition,
+  size: { width: number; height: number },
+): string {
+  if (!layer.animations || layer.animations.length === 0) return "";
+  const filters: string[] = [];
+  const st = layer.start;
+  const end = st + layer.duration;
+
+  for (const anim of layer.animations) {
+    const d = anim.duration;
+    switch (anim.type) {
+      case "fadein":
+        filters.push(`format=yuva420p,fade=t=in:st=${st}:d=${d}`);
+        break;
+      case "fadeout":
+        filters.push(`format=yuva420p,fade=t=out:st=${end - d}:d=${d}`);
+        break;
+      case "slidein":
+      case "slideout":
+        // Handled in buildOverlayExpr — no extra filter needed here.
+        break;
+      case "scale": {
+        const from = anim.from ?? 0.5;
+        const to = anim.to ?? 1;
+        filters.push(
+          `scale=w='if(between(t\\,${st}\\,${st + d})\\,${size.width}*(${from}+(${to - from})*(t-${st})/${d})\\,${size.width}*${to})':h='if(between(t\\,${st}\\,${st + d})\\,${size.height}*(${from}+(${to - from})*(t-${st})/${d})\\,${size.height}*${to})':eval=frame`
+        );
+        break;
+      }
+      case "rotate": {
+        const from = anim.from ?? 0;
+        const to = anim.to ?? 0;
+        filters.push(
+          `rotate=a='if(between(t\\,${st}\\,${st + d})\\,${from}+(${to - from})*(t-${st})/${d}\\,${to})*PI/180':c=none`
+        );
+        break;
+      }
+    }
+  }
+  return filters.join(",");
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
 function getInputIndex(layer: TimelineLayer, inputs: InputSlot[]): number {
   if ((layer.type === "video" || layer.type === "image") && "source" in layer) {
     const slot = inputs.find(i => i.path === layer.source && i.type === layer.type);
@@ -290,8 +452,6 @@ function buildLayerVideoChain(
 ): string {
   const start = layer.start;
   const end = start + layer.duration;
-  const pos = resolvePosition(layer.position, layer.size, canvas);
-  const opacity = layer.opacity ?? 1;
 
   let chain = `[${inputIndex}:v]`;
 
@@ -307,20 +467,16 @@ function buildLayerVideoChain(
     const color = layer.color ?? "#FFFFFF";
     const alignMap: Record<string, string> = { left: "L", center: "C", right: "R" };
     const ffAlign = alignMap[layer.align ?? "center"] ?? "C";
-    const x = String(pos.x);
-    const y = String(pos.y);
-    chain = `[${inputIndex}:v]drawtext=text='${text}':fontsize=${fontSize}:fontcolor=${color}:x=${x}:y=${y}:align=${ffAlign}:enable='between(t\\,${start}\\,${end})'`;
+    const pos = resolvePosition(layer.position, layer.size, canvas);
+    chain = `[${inputIndex}:v]drawtext=text='${text}':fontsize=${fontSize}:fontcolor=${color}:x=${pos.x}:y=${pos.y}:align=${ffAlign}:enable='between(t\\,${start}\\,${end})'`;
     if (layer.stroke) {
       chain += `:borderw=${layer.stroke.width}:bordercolor=${layer.stroke.color}`;
     }
   } else if (layer.type === "shape") {
     const size = layer.size!;
     const fill = layer.fill ?? "#FFFFFF";
+    const pos = resolvePosition(layer.position, layer.size, canvas);
     chain = `[${inputIndex}:v]drawbox=x=${pos.x}:y=${pos.y}:w=${size.width}:h=${size.height}:color=${fill}:t=fill:enable='between(t\\,${start}\\,${end})'`;
-  }
-
-  if (opacity < 1) {
-    chain += `,format=rgba,colorchannelmixer=aa=${opacity}`;
   }
 
   return chain;
@@ -341,19 +497,6 @@ function resolvePosition(
     case "right": return { x: canvas.width - s.width - 60, y: Math.round((canvas.height - s.height) / 2) };
     default: return { x: 0, y: 0 };
   }
-}
-
-function buildFadeFilter(layer: TimelineLayer): string {
-  if (!layer.animations || layer.animations.length === 0) return "";
-  const filters: string[] = [];
-  for (const anim of layer.animations) {
-    if (anim.type === "fadein") {
-      filters.push(`:format=yuva420p,fade=t=in:st=${layer.start}:d=${anim.duration}`);
-    } else if (anim.type === "fadeout") {
-      filters.push(`:format=yuva420p,fade=t=out:st=${layer.start + layer.duration - anim.duration}:d=${anim.duration}`);
-    }
-  }
-  return filters.join("");
 }
 
 export { validateTimeline };

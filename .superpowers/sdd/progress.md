@@ -571,4 +571,50 @@ Commit: `99f23a5`
 
 **Phase 10 complete. Project is feature-complete and stable.**
 
+---
+
+## Phase 11: Phase 5 Integration Bug Fixes
+
+Commit: `c5db1ed`
+
+Phase 5 审计（2026-07-14）发现后端代码完整但前后端之间存在 7 个集成 bug：
+
+### Two Analytics Route Sets
+
+系统存在两套独立 analytics 路由：
+- `/api/analytics/v2/*` (`analytics-api.ts`) — 返回原始 DB 数据
+- `/api/analytics/*` (`routes/analytics.ts`) — 返回富数据（join metrics + analyze）
+
+Phase 10 将前端 5 个函数全部指向 v2 路由，但 Analytics.svelte 模板期望富数据（含 `latestMetric`, `workTitle`, `insights` 分析结果），导致数据显示不完整。
+
+### Fixes Applied
+
+| # | Bug | Fix |
+|---|-----|-----|
+| 1 | `getAnalyticsInsights` 调 v2/metrics/latest（返回原始 metrics），前端期望 `{hits, failures, insights}` | → 改回 `/api/analytics/insights`（旧路由，含 `analyzeWorks()`） |
+| 2 | `recomputeBaselines` POST v2/baselines/compute 空 body，端点要求 `{platform}` | → 改回 `/api/analytics/recompute-baselines`（旧路由，自动读配置） |
+| 3 | `getAnalyticsRecords` 无 `v2/` 前缀，调用不存在的路由 | → 改为 `/api/analytics/v2/records` |
+| 4 | Analytics.svelte 显示 `r.work_id` (UUID) 而非标题 | → `/api/analytics/works` 路由新增 `workTitle` 字段（join works 表） |
+| 5 | `getAnalyticsWorks` 返回原始 works（无 metrics join） | → 改回 `/api/analytics/works`（旧路由，含 `latestMetric` + `workTitle`） |
+| 6 | Playwright scraper 动态 import 竞态 | → `registerAllAdapters()` 改为 `async`，返回 `Promise<void>` |
+| 7 | `startServer` 不等待 adapter 注册 | → `await registerAllAdapters()` |
+
+### Final Analytics Path Map
+
+| Frontend Function | Resolved Route | Reason |
+|-------------------|---------------|--------|
+| `getAnalyticsRecords` | `/api/analytics/v2/records` | v2 路由实现更完整 |
+| `getAnalyticsWorks` | `/api/analytics/works` | 旧路由 join metrics + work titles |
+| `getAnalyticsInsights` | `/api/analytics/insights` | 旧路由运行 `analyzeWorks()` |
+| `triggerCollect` | `/api/analytics/v2/collect` | v2 `collectAllOnce()` 实现更好 |
+| `recomputeBaselines` | `/api/analytics/recompute-baselines` | 旧路由自动读配置，无需 body |
+
+### Verification
+
+- `npx tsc --noEmit` — ✅ 0 errors
+- `npx vitest run` — ✅ 411/411 pass
+- `npx vite build` — ✅
+
+**Phase 11 complete. All known integration bugs resolved.**
+
 
