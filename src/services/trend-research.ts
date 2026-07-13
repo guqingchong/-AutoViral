@@ -67,12 +67,13 @@ function analyzeTrendsWithAgent(platform: string, rawData: string, interests: st
         ].join("\n")
       : "";
     // BUGFIX: 搜索关键词必须包含用户关注领域
+    const year = new Date().getFullYear();
     const interestSearchTerms = interests.length
-      ? interests.map(i => `"${platformLabel} ${i} 最新 2026"`).join(" ")
+      ? interests.map(i => `"${platformLabel} ${i} 最新 ${year}"`).join(" ")
       : "";
     const dataClause = rawData
       ? `\n以下是通过 API 获取的 ${platformLabel} 实时热搜数据。请筛选其中与用户关注领域相关的条目，同时补充领域专属搜索：\n\`\`\`json\n${rawData.slice(0, 4000)}\n\`\`\`\n`
-      : `\n无法通过 API 获取实时数据。请使用 WebSearch 按以下关键词搜索（每条搜索一个独立搜索）：\n${interestSearchTerms || `"${platformLabel} 爆款内容 趋势 2026" "${platformLabel} 热门话题 最新"`}\n${interests.length ? `\n**注意**：搜索结果必须围绕用户关注领域展开。不要返回与用户领域无关的泛热门内容。` : ""}\n`;
+      : `\n无法通过 API 获取实时数据。请使用 WebSearch 按以下关键词搜索（每条搜索一个独立搜索）：\n${interestSearchTerms || `"${platformLabel} 爆款内容 趋势 ${year}" "${platformLabel} 热门话题 最新 ${year}"`}\n${interests.length ? `\n**注意**：搜索结果必须围绕用户关注领域展开。不要返回与用户领域无关的泛热门内容。` : ""}\n`;
     const tonePrefix = buildTonePrompt(toneProfile);
     const prompt = [
       `你是一个专业的社交媒体趋势研究员。请分析 ${platformLabel} 平台上用户关注领域的最新内容趋势。`,

@@ -769,12 +769,13 @@ async function researchTrends(platforms: string[]): Promise<{ collected: string[
     // Run script for real-time data
     const scriptData = await runTrendScript(platform);
     // BUGFIX: search keywords must include user interests
+    const year = new Date().getFullYear();
     const interestSearchTerms = interests.length
-      ? interests.map(i => `"${platformLabel} ${i} 最新 2026"`).join(" ")
+      ? interests.map(i => `"${platformLabel} ${i} 最新 ${year}"`).join(" ")
       : "";
     const dataClause = scriptData
       ? `\n以下是通过 API 获取的 ${platformLabel} 实时热搜数据。请筛选其中与用户关注领域相关的条目：\n\`\`\`json\n${scriptData.slice(0, 4000)}\n\`\`\`\n`
-      : `\n无法通过 API 获取实时数据。请使用 WebSearch 按以下关键词搜索：\n${interestSearchTerms || `"${platformLabel} 爆款内容 趋势 2026" "${platformLabel} 热门话题 最新"`}\n${interests.length ? `\n**注意**：搜索结果必须围绕用户关注领域展开。不要返回与用户领域无关的泛热门内容。` : ""}\n`;
+      : `\n无法通过 API 获取实时数据。请使用 WebSearch 按以下关键词搜索：\n${interestSearchTerms || `"${platformLabel} 爆款内容 趋势 ${year}" "${platformLabel} 热门话题 最新 ${year}"`}\n${interests.length ? `\n**注意**：搜索结果必须围绕用户关注领域展开。不要返回与用户领域无关的泛热门内容。` : ""}\n`;
 
     const prompt = [
       `你是一个专业的社交媒体趋势研究员。请分析 ${platformLabel} 平台上用户关注领域的最新内容趋势。`,
@@ -787,6 +788,15 @@ async function researchTrends(platforms: string[]): Promise<{ collected: string[
       `2. **信息价值**：是否能给目标观众带来新知或启发？（教程、科普、行业洞察优先于纯娱乐）`,
       `3. **创作可行性**：用户能否基于这个话题做出有差异化的内容？`,
       `4. **传播潜力**（辅助参考）：话题本身是否自带传播属性？`,
+      ``,
+      `## 情绪适配（自然优先 — 不强制套用）`,
+      ``,
+      `当话题自然契合以下情绪时标注对应 emotionType。如果话题不适合任何情绪框架（如知识科普），emotionType 填 "信息价值"：`,
+      `- **焦虑**：落后焦虑/错过焦虑/被替代焦虑 — 仅当话题自带紧迫感时使用`,
+      `- **愤怒**：不公/双标/价值观冲突 — 仅当话题涉及争议时使用`,
+      `- **搞笑**：反转/共鸣/错位 — 仅当话题有幽默元素时使用`,
+      `- **羡慕**：想成为/想拥有 — 仅当话题展示理想生活/成就时使用`,
+      `- **信息价值**：教程/科普/行业分析/深度解读 — 知识类话题的默认类型`,
       ``,
       `输出严格 JSON（不要 Markdown，只输出 JSON 对象）：`,
       `{"topics":[{`,
@@ -913,8 +923,9 @@ apiRoutes.post("/api/trends/refresh-stream", async (c) => {
     // 1. Get user interests and competitors
     const config = await loadConfig();
     const reqInterests = (body as any).interests ?? config.interests ?? [];
-    const interests = reqInterests as string[];
-    const competitors = ((body as any).competitors ?? []) as string[];
+    const interests = Array.isArray(reqInterests) ? reqInterests : [];
+    const rawCompetitors = ((body as any).competitors ?? []) as string[];
+    const competitors = Array.isArray(rawCompetitors) ? rawCompetitors : [];
     // BUGFIX: user interests are the PRIMARY driver, emotion constraint is secondary
     const interestClause = interests.length > 0
       ? [
@@ -937,12 +948,13 @@ apiRoutes.post("/api/trends/refresh-stream", async (c) => {
     // 2. Run script for real-time data
     const scriptData = await runTrendScript(platform);
     // BUGFIX: search keywords must include user interests
+    const year = new Date().getFullYear();
     const interestSearchTerms = interests.length
-      ? interests.map(i => `"${platformLabel} ${i} 最新 2026"`).join(" ")
+      ? interests.map(i => `"${platformLabel} ${i} 最新 ${year}"`).join(" ")
       : "";
     const dataClause = scriptData
       ? `\n以下是通过 API 获取的 ${platformLabel} 实时热搜数据。请筛选其中与用户关注领域相关的条目：\n\`\`\`json\n${scriptData.slice(0, 4000)}\n\`\`\`\n`
-      : `\n无法通过 API 获取实时数据。请使用 WebSearch 按以下关键词搜索：\n${interestSearchTerms || `"${platformLabel} 爆款内容 趋势 2026" "${platformLabel} 热门话题 最新"`}\n${interests.length ? `\n**注意**：搜索结果必须围绕用户关注领域展开。` : ""}\n`;
+      : `\n无法通过 API 获取实时数据。请使用 WebSearch 按以下关键词搜索：\n${interestSearchTerms || `"${platformLabel} 爆款内容 趋势 ${year}" "${platformLabel} 热门话题 最新 ${year}"`}\n${interests.length ? `\n**注意**：搜索结果必须围绕用户关注领域展开。` : ""}\n`;
 
     // 3. Build enhanced prompt — agent writes files to trends output dir
     const outputDir = join(homedir(), ".autoviral", "trends", platform);
@@ -2321,7 +2333,8 @@ apiRoutes.post("/api/trends/collect", async (c) => {
   const config = await loadConfig();
   const body = await c.req.json<{ platform?: string; interests?: string[]; accountId?: string }>().catch(() => ({}));
   const platform = (body as any).platform ?? config.research?.platforms?.[0] ?? "douyin";
-  const interests = (body as any).interests ?? config.interests ?? [];
+  const reqInterests = (body as any).interests ?? config.interests ?? [];
+  const interests = Array.isArray(reqInterests) ? reqInterests : [];
   const accountId = (body as any).accountId as string | undefined;
   const account = accountId ? getAccount(accountId) : undefined;
   const results = await collectTrends([platform], interests, account?.tone_profile);
