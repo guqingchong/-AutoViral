@@ -177,19 +177,19 @@ analyticsApi.post("/scheduler/stop", (c) => {
  * Register all available platform adapters.
  * Called once at server startup.
  */
-export function registerAllAdapters(): void {
+export function registerAllAdapters(): Promise<void> {
   try { registerAdapter(new KuaishouAdapter()); } catch { /* already registered */ }
   try { registerAdapter(new BilibiliAdapter()); } catch { /* already registered */ }
   try { registerAdapter(new ZhihuAdapter()); } catch { /* already registered */ }
   try { registerAdapter(new WechatAdapter()); } catch { /* already registered */ }
-  // Playwright-based scrapers require a browser — register only if Playwright is available
-  try {
-    // Dynamic import so it doesn't break if playwright isn't installed
+  // Playwright-based scrapers require a browser — register only if Playwright is available.
+  // Dynamic import so it doesn't break if playwright isn't installed.
+  return Promise.allSettled([
     import("../services/platform-adapters/douyin-scraper.js").then(({ DouyinScraper }) => {
       try { registerAdapter(new DouyinScraper()); } catch { /* ignore */ }
-    }).catch(() => {});
+    }).catch(() => {}),
     import("../services/platform-adapters/xiaohongshu-scraper.js").then(({ XiaohongshuScraper }) => {
       try { registerAdapter(new XiaohongshuScraper()); } catch { /* ignore */ }
-    }).catch(() => {});
-  } catch { /* Playwright not available */ }
+    }).catch(() => {}),
+  ]).then(() => {});
 }
