@@ -768,12 +768,17 @@ All 12 SDD phases complete (418 tests). Remaining work from `docs/desigen/issues
 | `fdb5110` | test: further relax Windows perf thresholds |
 | `90c6fba` | test: Windows PERF_FACTOR (3x) for all perf thresholds |
 | `2bfe047` | fix: BUG-5 — enforce full subtitle pipeline in system prompt |
+| `b2835ae` | fix: BUG-2 — custom category input for "other" option |
 
 ## Final Test Evidence
 
 - **444/444 tests pass** (69 files)
 - **TypeScript: 0 errors**
-- **Vite build: ✅**
+- **Vite build: ✅ (427 kB JS + 154 kB CSS)**
+
+## Phase 13 Complete 🎉
+
+All 5 bugs resolved. All tests passing. 11 commits total.
 
 ## Resolved Backlog
 
@@ -783,12 +788,12 @@ All 12 SDD phases complete (418 tests). Remaining work from `docs/desigen/issues
 | BUG-3 | HIGH | `fe86e57` | ✅ Works page + AssetPanel error states |
 | BUG-4 | MEDIUM | `846ef4e` | ✅ Incremental messageHistory persistence |
 | BUG-5 | MEDIUM | `2bfe047` | ✅ Full subtitle pipeline in system prompt (caption_generate.py → subtitle_burn.py → project fonts) |
+| BUG-2 | MEDIUM | `b2835ae` | ✅ Custom category text input when "other" selected |
 
 ## Remaining Backlog
 
 | Issue | Severity | Notes |
 |-------|----------|-------|
-| BUG-2 | MEDIUM | Content category "other" added (P5 audit), but frontend still has 4 hardcoded emotion buttons |
 | ARCH-1 | — | Content-type adaptation layer (architectural) |
 | ARCH-2 | — | Agent degradation strategy (skill-level, `fallback-strategy.md` exists) |
 | ARCH-4 | — | Pre-flight environment detection (skill-level) |
