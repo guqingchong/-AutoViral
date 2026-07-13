@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { getAnalyticsWorks, getAnalyticsInsights, triggerCollect, recomputeBaselines } from "$lib/api.js";
 
   // ── Types ──────────────────────────────────────────────────────────────────
   interface AccountInfo {
@@ -49,8 +50,31 @@
     delta?: Delta;
   }
 
+  // ── Phase 5: Data Collection state ─────────────────────────────────────────
+  let ph5Records: any[] = $state([]);
+  let ph5Insights: any = $state(null);
+  let ph5Loading = $state(false);
+
+  async function loadPh5() {
+    try {
+      ph5Records = await getAnalyticsWorks();
+      ph5Insights = await getAnalyticsInsights();
+    } catch { /* API may not be available yet */ }
+  }
+
+  async function handleCollect() {
+    ph5Loading = true;
+    try {
+      await triggerCollect();
+      await recomputeBaselines();
+      await loadPh5();
+    } finally {
+      ph5Loading = false;
+    }
+  }
+
   // ── Top-level view toggle ──────────────────────────────────────────────────
-  type AnalyticsView = "dashboard" | "memory";
+  type AnalyticsView = "dashboard" | "memory" | "phase5";
   let activeView: AnalyticsView = $state("dashboard");
 
   // ── Memory state ──────────────────────────────────────────────────────────
@@ -134,7 +158,6 @@
 
   function fmtDate(ts: number | string): string {
     if (!ts) return "-";
-    // Handle both unix timestamp (number) and date string ("2026-02-27 16:21:44")
     const d = typeof ts === "string" ? new Date(ts.replace(" ", "T")) : new Date(ts * 1000);
     if (isNaN(d.getTime())) return "-";
     return `${d.getMonth() + 1}/${d.getDate()}`;
@@ -231,6 +254,10 @@
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2a7 7 0 0 1 7 7c0 3-2 5.5-4 7.5S12 20 12 22c0-2-1-2.5-3-4.5S5 12 5 9a7 7 0 0 1 7-7z"/></svg>
     AI 记忆
   </button>
+  <button class="view-tab" class:active={activeView === "phase5"} onclick={() => { activeView = "phase5"; if (ph5Records.length === 0 && !ph5Insights) loadPh5(); }}>
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+    数据回收
+  </button>
 </div>
 
 {#if activeView === "memory"}
@@ -316,6 +343,89 @@
         <p class="mem-empty" style="margin-top: 0.5rem">未找到相关记忆。尝试其他关键词。</p>
       {/if}
     </div>
+  </div>
+
+{:else if activeView === "phase5"}
+  <!-- ── Phase 5: Data Collection & Insights ───────────────────────────── -->
+  <div class="phase5-view">
+    <header class="page-header">
+      <h1>数据回收与洞察</h1>
+      <button class="btn-primary" onclick={handleCollect} disabled={ph5Loading}>
+        {ph5Loading ? "采集中…" : "手动采集"}
+      </button>
+    </header>
+
+    {#if ph5Insights}
+      <section class="summary-cards">
+        <div class="card">
+          <span class="card-val">{ph5Insights.hits?.length ?? 0}</span>
+          <span class="card-label">爆款命中</span>
+        </div>
+        <div class="card">
+          <span class="card-val">{ph5Insights.failures?.length ?? 0}</span>
+          <span class="card-label">失败分析</span>
+        </div>
+        <div class="card">
+          <span class="card-val">{ph5Insights.insights?.length ?? 0}</span>
+          <span class="card-label">洞察结论</span>
+        </div>
+      </section>
+
+      {#if ph5Insights.insights?.length > 0}
+        <section class="insights-section">
+          <h2>洞察</h2>
+          <div class="insights-list">
+            {#each ph5Insights.insights as i}
+              <div class="insight-item">
+                <div class="insight-head">
+                  <strong>{i.dimension} / {i.value}</strong>
+                  <span class="badge">爆款率 {(i.hitRate * 100).toFixed(0)}%</span>
+                </div>
+                <p class="insight-suggestion">{i.suggestion}</p>
+              </div>
+            {/each}
+          </div>
+        </section>
+      {:else}
+        <p class="empty-msg">数据不足，暂无洞察。采集更多发布数据后自动生成。</p>
+      {/if}
+    {/if}
+
+    <section class="records-section">
+      <h2>发布记录</h2>
+      {#if ph5Records.length === 0}
+        <p class="empty-msg">暂无发布记录</p>
+      {:else}
+        <div class="table-wrap">
+          <table class="works-table">
+            <thead>
+              <tr>
+                <th>平台</th>
+                <th>标题</th>
+                <th>播放</th>
+                <th>点赞</th>
+                <th>评论</th>
+                <th>分享</th>
+                <th>收藏</th>
+              </tr>
+            </thead>
+            <tbody>
+              {#each ph5Records as r}
+                <tr>
+                  <td>{r.platform}</td>
+                  <td class="col-title">{r.work_id ?? "-"}</td>
+                  <td class="col-num">{r.latestMetric?.views?.toLocaleString() ?? "-"}</td>
+                  <td class="col-num">{r.latestMetric?.likes?.toLocaleString() ?? "-"}</td>
+                  <td class="col-num">{r.latestMetric?.comments?.toLocaleString() ?? "-"}</td>
+                  <td class="col-num">{r.latestMetric?.shares?.toLocaleString() ?? "-"}</td>
+                  <td class="col-num">{r.latestMetric?.collects?.toLocaleString() ?? "-"}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      {/if}
+    </section>
   </div>
 
 {:else if loading}
@@ -616,6 +726,120 @@
     gap: 1rem;
   }
 
+  /* ── Phase 5 View ───────────────────────────────────────────────────────── */
+  .phase5-view {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+  }
+
+  .page-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .page-header h1 {
+    font-size: 1.2rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    margin: 0;
+  }
+
+  .summary-cards {
+    display: flex;
+    gap: 1rem;
+  }
+
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 6px;
+    padding: 1rem 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    min-width: 120px;
+  }
+
+  .card-val {
+    font-size: 1.5rem;
+    font-weight: 750;
+    letter-spacing: -0.03em;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .card-label {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    font-weight: 550;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .insights-section h2,
+  .records-section h2 {
+    font-size: 0.92rem;
+    font-weight: 700;
+    margin: 0 0 0.75rem;
+    letter-spacing: -0.015em;
+  }
+
+  .insights-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .insight-item {
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 6px;
+    padding: 1rem;
+  }
+
+  .insight-head {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.4rem;
+  }
+
+  .badge {
+    font-size: 0.7rem;
+    background: var(--accent-gradient);
+    color: var(--accent-text);
+    padding: 0.12rem 0.45rem;
+    border-radius: 4px;
+    font-weight: 650;
+  }
+
+  .insight-suggestion {
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+    margin: 0;
+    line-height: 1.5;
+  }
+
+  .btn-primary {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.5rem 1rem;
+    background: var(--accent-gradient);
+    color: var(--accent-text);
+    border: none;
+    border-radius: 4px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: opacity 0.12s;
+  }
+
+  .btn-primary:hover:not(:disabled) { opacity: 0.85; }
+  .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
   /* ── Loading / Empty ────────────────────────────────────────────────────── */
   .center-state {
     display: flex;
@@ -856,7 +1080,6 @@
   }
 
   /* ── Account Header Bar ─────────────────────────────────────────────────── */
-  /* Change account button & URL edit bar */
   .change-acct-btn {
     display: flex;
     align-items: center;
@@ -1415,7 +1638,7 @@
     margin: 0;
   }
 
-  /* ── View Tabs (数据看板 / AI 记忆) ──────────────────────────────────────── */
+  /* ── View Tabs (数据看板 / AI 记忆 / 数据回收) ──────────────────────────── */
   .view-tabs {
     display: flex;
     gap: 0.25rem;
