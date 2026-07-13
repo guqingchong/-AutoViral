@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { Hono } from "hono";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { apiRoutes } from "../../src/server/api.js";
@@ -11,9 +11,10 @@ const ORIGINAL_ENV = process.env.AUTOVIRAL_DATA_DIR;
 
 describe("admin endpoints", () => {
   let app: Hono;
+  let testDir: string;
 
   beforeEach(async () => {
-    const testDir = await mkdtemp(join(tmpdir(), "av-admin-"));
+    testDir = await mkdtemp(join(tmpdir(), "av-admin-"));
     process.env.AUTOVIRAL_DATA_DIR = testDir;
     resetInMemoryDb();
     migrate();
@@ -24,10 +25,10 @@ describe("admin endpoints", () => {
   afterEach(async () => {
     closeDb();
     process.env.AUTOVIRAL_DATA_DIR = ORIGINAL_ENV;
+    await rm(testDir, { recursive: true, force: true });
   });
 
   it("POST /api/admin/backup creates a zip", async () => {
-    const testDir = process.env.AUTOVIRAL_DATA_DIR!;
     const zipPath = join(testDir, "out.zip");
     const res = await app.request("/api/admin/backup", {
       method: "POST",
@@ -75,7 +76,6 @@ describe("admin endpoints", () => {
   });
 
   it("POST /api/admin/restore recovers from a valid backup zip", async () => {
-    const testDir = process.env.AUTOVIRAL_DATA_DIR!;
     // First create a backup
     const zipPath = join(testDir, "backup.zip");
     await app.request("/api/admin/backup", {

@@ -92,18 +92,21 @@ export async function importBackup(sourceZip: string, opts: RestoreOptions = {})
     }
   }
 
-  if (zip.getEntry("skills/")) {
-    await restoreFolder(zip, "skills/", paths.skills, opts.overwrite);
+  // addLocalFolder does not create directory entries, so scan by prefix
+  const entries = zip.getEntries();
+
+  if (entries.some(e => e.entryName.startsWith("skills/"))) {
+    await restoreFolder(zip, entries, "skills/", paths.skills, opts.overwrite);
     restored.push("skills/");
   }
 
-  if (zip.getEntry("shared-assets/")) {
-    await restoreFolder(zip, "shared-assets/", paths.assets, opts.overwrite);
+  if (entries.some(e => e.entryName.startsWith("shared-assets/"))) {
+    await restoreFolder(zip, entries, "shared-assets/", paths.assets, opts.overwrite);
     restored.push("shared-assets/");
   }
 
-  if (zip.getEntry("works/")) {
-    await restoreFolder(zip, "works/", paths.works, opts.overwrite);
+  if (entries.some(e => e.entryName.startsWith("works/"))) {
+    await restoreFolder(zip, entries, "works/", paths.works, opts.overwrite);
     restored.push("works/");
   }
 
@@ -113,6 +116,7 @@ export async function importBackup(sourceZip: string, opts: RestoreOptions = {})
 
 async function restoreFolder(
   zip: AdmZip,
+  entries: AdmZip.IZipEntry[],
   entryPrefix: string,
   targetDir: string,
   overwrite?: boolean
@@ -121,5 +125,9 @@ async function restoreFolder(
     await rm(targetDir, { recursive: true, force: true });
   }
   await mkdir(targetDir, { recursive: true });
-  zip.extractEntryTo(zip.getEntry(entryPrefix)!, targetDir, false, true);
+  for (const entry of entries) {
+    if (entry.entryName.startsWith(entryPrefix)) {
+      zip.extractEntryTo(entry, targetDir, false, true);
+    }
+  }
 }
