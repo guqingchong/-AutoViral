@@ -46,6 +46,7 @@ export interface Work {
   title: string;
   type: WorkType;
   contentCategory?: ContentCategory;
+  contentForm?: string;
   videoSource?: VideoSource;
   videoSearchQuery?: string;
   status: WorkStatus;
@@ -54,10 +55,17 @@ export interface Work {
   cliSessionId?: string;
   coverImage?: string;
   topicHint?: string;
+  topicId?: number;
+  articleId?: number;
+  scriptId?: number;
+  digitalHumanId?: string;
+  templateId?: string;
   accountId?: string;
   evaluationMode?: boolean;
   evalSessionIds?: Record<string, string>;
   evalAttempts?: Record<string, number>;
+  estimatedCost?: number;
+  actualCost?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -68,8 +76,11 @@ export interface WorkSummary {
   title: string;
   type: WorkType;
   contentCategory?: ContentCategory;
+  contentForm?: string;
   platforms?: string[];
   status: WorkStatus;
+  topicId?: number;
+  templateId?: string;
   updatedAt: string;
 }
 
@@ -145,6 +156,7 @@ function dbWorkToWork(w: DbWork, steps?: DbPipelineStep[]): Work {
     title: w.title,
     type: w.type,
     contentCategory: w.content_category as ContentCategory | undefined,
+    contentForm: w.content_form,
     videoSource: w.video_source as VideoSource | undefined,
     videoSearchQuery: w.video_search_query,
     status: w.status,
@@ -153,10 +165,17 @@ function dbWorkToWork(w: DbWork, steps?: DbPipelineStep[]): Work {
     cliSessionId: w.cli_session_id,
     coverImage: undefined,
     topicHint: w.topic_hint,
+    topicId: w.topic_id,
+    articleId: w.article_id,
+    scriptId: w.script_id,
+    digitalHumanId: w.digital_human_id,
+    templateId: w.template_id,
     accountId: w.account_id ?? undefined,
     evaluationMode: w.evaluation_mode,
     evalSessionIds: w.eval_session_ids,
     evalAttempts: w.eval_attempts,
+    estimatedCost: w.estimated_cost,
+    actualCost: w.actual_cost,
     createdAt: w.created_at,
     updatedAt: w.updated_at,
   };
@@ -179,8 +198,11 @@ export async function listWorks(): Promise<WorkSummary[]> {
     title: w.title,
     type: w.type,
     contentCategory: w.content_category as ContentCategory | undefined,
+    contentForm: w.content_form,
     platforms: w.platforms,
     status: w.status,
+    topicId: w.topic_id,
+    templateId: w.template_id,
     updatedAt: w.updated_at,
   }));
 }
@@ -196,10 +218,12 @@ export async function createWork(input: {
   title: string;
   type: WorkType;
   contentCategory?: ContentCategory;
+  contentForm?: string;
   videoSource?: VideoSource;
   videoSearchQuery?: string;
   platforms: string[];
   topicHint?: string;
+  topicId?: number;
   accountId?: string;
 }): Promise<Work> {
   await maybeMigrateLegacy();
@@ -210,12 +234,14 @@ export async function createWork(input: {
     title: input.title,
     type: input.type,
     content_category: input.contentCategory,
+    content_form: input.contentForm,
     video_source: input.videoSource,
     video_search_query: input.videoSearchQuery,
     status: input.videoSource === "search" ? "researching" : "draft",
     platforms: input.platforms,
     evaluation_mode: false,
     topic_hint: input.topicHint,
+    topic_id: input.topicId,
     account_id: input.accountId,
     tags: [],
     created_at: now,
@@ -251,16 +277,24 @@ export async function updateWork(id: string, updates: Partial<Work>): Promise<Wo
   if (updates.title !== undefined) dbUpdates.title = updates.title;
   if (updates.type !== undefined) dbUpdates.type = updates.type;
   if (updates.contentCategory !== undefined) dbUpdates.content_category = updates.contentCategory;
+  if (updates.contentForm !== undefined) dbUpdates.content_form = updates.contentForm;
   if (updates.videoSource !== undefined) dbUpdates.video_source = updates.videoSource;
   if (updates.videoSearchQuery !== undefined) dbUpdates.video_search_query = updates.videoSearchQuery;
   if (updates.status !== undefined) dbUpdates.status = updates.status;
   if (updates.platforms !== undefined) dbUpdates.platforms = updates.platforms;
   if (updates.evaluationMode !== undefined) dbUpdates.evaluation_mode = updates.evaluationMode;
   if (updates.topicHint !== undefined) dbUpdates.topic_hint = updates.topicHint;
+  if (updates.topicId !== undefined) dbUpdates.topic_id = updates.topicId;
+  if (updates.articleId !== undefined) dbUpdates.article_id = updates.articleId;
+  if (updates.scriptId !== undefined) dbUpdates.script_id = updates.scriptId;
+  if (updates.digitalHumanId !== undefined) dbUpdates.digital_human_id = updates.digitalHumanId;
+  if (updates.templateId !== undefined) dbUpdates.template_id = updates.templateId;
   if (updates.cliSessionId !== undefined) dbUpdates.cli_session_id = updates.cliSessionId;
   if (updates.evalSessionIds !== undefined) dbUpdates.eval_session_ids = updates.evalSessionIds;
   if (updates.evalAttempts !== undefined) dbUpdates.eval_attempts = updates.evalAttempts;
   if (updates.accountId !== undefined) dbUpdates.account_id = updates.accountId;
+  if (updates.estimatedCost !== undefined) dbUpdates.estimated_cost = updates.estimatedCost;
+  if (updates.actualCost !== undefined) dbUpdates.actual_cost = updates.actualCost;
   if (updates.pipeline !== undefined) {
     // Sync steps back to DB
     for (const [key, step] of Object.entries(updates.pipeline)) {

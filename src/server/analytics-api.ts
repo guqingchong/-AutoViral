@@ -16,8 +16,11 @@ import {
   listLatestWorkMetrics,
   getLatestAccountMetric,
 } from "../db/platform-metrics-repo.js";
+import { listWorks } from "../db/works-repo.js";
+import { listTopics } from "../services/trend-research.js";
+import { listTemplates } from "../db/templates-repo.js";
 import { analyzeWork, computeBaseline } from "../services/hit-failure-analysis.js";
-import { createBaseline } from "../db/baselines-repo.js";
+import { createBaseline, listBaselines } from "../db/baselines-repo.js";
 import { collectAllOnce, startScheduler, stopScheduler } from "../services/analytics-scheduler.js";
 import { registerAdapter } from "../services/platform-adapters/registry.js";
 import { KuaishouAdapter } from "../services/platform-adapters/kuaishou-api.js";
@@ -91,6 +94,37 @@ analyticsApi.get("/metrics/latest", (c) => {
   const limit = parseInt(c.req.query("limit") ?? "50", 10);
   const metrics = listLatestWorkMetrics({ platform, limit });
   return c.json({ metrics });
+});
+
+// GET /api/analytics/v2/works — list all works with analytics data
+analyticsApi.get("/works", (c) => {
+  const platform = c.req.query("platform");
+  const works = listWorks();
+  const filtered = platform ? works.filter((w: any) => w.platforms?.includes(platform)) : works;
+  return c.json({ works: filtered });
+});
+
+// GET /api/analytics/v2/overview — aggregated counts for dashboard
+analyticsApi.get("/overview", (c) => {
+  const works = listWorks();
+  const topics = listTopics(undefined, 200);
+  const templates = listTemplates();
+  return c.json({
+    totalWorks: works.length,
+    totalTopics: topics.length,
+    activeTemplates: templates.filter((t: any) => t.status === "published").length,
+    draftsCount: works.filter((w: any) => w.status === "draft").length,
+    inProgressCount: works.filter((w: any) => !["draft", "published", "failed"].includes(w.status)).length,
+    publishedCount: works.filter((w: any) => w.status === "published").length,
+    failedCount: works.filter((w: any) => w.status === "failed").length,
+  });
+});
+
+// GET /api/analytics/v2/baselines — list all computed baselines
+analyticsApi.get("/baselines", (c) => {
+  const limit = parseInt(c.req.query("limit") ?? "20", 10);
+  const baselines = listBaselines(limit);
+  return c.json({ baselines });
 });
 
 // ── Hit/Failure Analysis ───────────────────────────────────────────────────

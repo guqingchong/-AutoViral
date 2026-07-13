@@ -177,11 +177,14 @@ export interface WorkSummary {
   title: string;
   type: WorkType;
   contentCategory?: ContentCategory;
+  contentForm?: string;
   status: WorkStatus;
   platforms: string[];
   coverImage?: string;
   coverIsVideo?: boolean;
   accountId?: string;
+  topicId?: number;
+  templateId?: string;
   updatedAt: string;
 }
 
@@ -198,13 +201,21 @@ export interface Work {
   title: string;
   type: WorkType;
   contentCategory?: ContentCategory;
+  contentForm?: string;
   status: WorkStatus;
   platforms: string[];
   pipeline: Record<string, PipelineStep>;
   cliSessionId?: string;
   coverImage?: string;
   topicHint?: string;
+  topicId?: number;
+  articleId?: number;
+  scriptId?: number;
+  digitalHumanId?: string;
+  templateId?: string;
   accountId?: string;
+  estimatedCost?: number;
+  actualCost?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -544,23 +555,23 @@ export async function recheckAssetCompliance(id: number): Promise<AssetLibraryIt
 // ---------------------------------------------------------------------------
 
 export function getAnalyticsRecords(): Promise<{ records: unknown[] }> {
-  return request<{ records: unknown[] }>("/api/analytics/records");
+  return request<{ records: unknown[] }>("/api/analytics/v2/records");
 }
 
 export function getAnalyticsWorks(platform?: string): Promise<unknown[]> {
-  return request<unknown[]>(`/api/analytics/works${platform ? `?platform=${encodeURIComponent(platform)}` : ""}`);
+  return request<unknown[]>(`/api/analytics/v2/works${platform ? `?platform=${encodeURIComponent(platform)}` : ""}`);
 }
 
 export function getAnalyticsInsights(platform?: string): Promise<Record<string, unknown>> {
-  return request<Record<string, unknown>>(`/api/analytics/insights${platform ? `?platform=${encodeURIComponent(platform)}` : ""}`);
+  return request<Record<string, unknown>>(`/api/analytics/v2/metrics/latest${platform ? `?platform=${encodeURIComponent(platform)}` : ""}`);
 }
 
 export function triggerCollect(): Promise<Record<string, unknown>> {
-  return post<Record<string, unknown>>("/api/analytics/collect", {});
+  return post<Record<string, unknown>>("/api/analytics/v2/collect", {});
 }
 
 export function recomputeBaselines(): Promise<{ ok: boolean }> {
-  return post<{ ok: boolean }>("/api/analytics/recompute-baselines", {});
+  return post<{ ok: boolean }>("/api/analytics/v2/baselines/compute", {});
 }
 
 export interface CommentFilter {
