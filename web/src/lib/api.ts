@@ -109,6 +109,62 @@ export async function deleteAccountApi(id: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Schedule / Calendar types (Phase 8)
+// ---------------------------------------------------------------------------
+
+export interface ScheduleEntry {
+  id: string;
+  work_id?: string;
+  account_id?: string;
+  title: string;
+  description: string;
+  scheduled_date: string;
+  scheduled_time?: string;
+  platform: string;
+  content_type: string;
+  status: string;
+  color?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function fetchCalendarRange(from: string, to: string): Promise<ScheduleEntry[]> {
+  const data = await request<{ entries: ScheduleEntry[] }>(`/api/calendar?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+  return data.entries;
+}
+
+export async function fetchCalendarMonth(yearMonth: string): Promise<{ entries: ScheduleEntry[]; counts: Record<string, number> }> {
+  return request<{ entries: ScheduleEntry[]; counts: Record<string, number> }>(`/api/calendar/month/${yearMonth}`);
+}
+
+export async function createScheduleEntry(input: {
+  title: string;
+  scheduled_date: string;
+  work_id?: string;
+  account_id?: string;
+  description?: string;
+  scheduled_time?: string;
+  platform?: string;
+  content_type?: string;
+  status?: string;
+  color?: string;
+}): Promise<ScheduleEntry> {
+  return post<ScheduleEntry>("/api/calendar", input);
+}
+
+export async function updateScheduleEntry(id: string, updates: Partial<ScheduleEntry>): Promise<ScheduleEntry> {
+  return request<ScheduleEntry>(`/api/calendar/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(updates),
+  });
+}
+
+export async function deleteScheduleEntry(id: string): Promise<void> {
+  await request<{ deleted: boolean }>(`/api/calendar/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+// ---------------------------------------------------------------------------
 // Work types
 // ---------------------------------------------------------------------------
 
