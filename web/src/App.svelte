@@ -2,6 +2,8 @@
   import { onMount } from "svelte";
   import Explore from "./pages/Explore.svelte";
   import Analytics from "./pages/Analytics.svelte";
+  import Comments from "./pages/Comments.svelte";
+  import Evolution from "./pages/Evolution.svelte";
   import Studio from "./pages/Studio.svelte";
   import Works from "./pages/Works.svelte";
   import Topics from "./pages/Topics.svelte";
@@ -175,6 +177,8 @@
     { tab: "publish" as Tab, labelKey: "publish" },
     { tab: "explore" as Tab, labelKey: "explore" },
     { tab: "analytics" as Tab, labelKey: "analytics" },
+    { tab: "comments" as Tab, labelKey: "navComments" },
+    { tab: "evolution" as Tab, labelKey: "navEvolution" },
   ];
 </script>
 
@@ -217,6 +221,10 @@
       <Topics />
     {:else if $activeTab === "analytics"}
       <Analytics />
+    {:else if $activeTab === "comments"}
+      <Comments />
+    {:else if $activeTab === "evolution"}
+      <Evolution />
     {:else if $activeTab === "digital-humans"}
       <DigitalHumans />
     {:else if $activeTab === "assets"}

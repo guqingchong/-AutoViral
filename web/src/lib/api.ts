@@ -419,6 +419,76 @@ export async function recheckAssetCompliance(id: number): Promise<AssetLibraryIt
 // Template & Render API
 // ---------------------------------------------------------------------------
 
+export function getAnalyticsRecords(): Promise<unknown[]> {
+  return request<unknown[]>("/api/analytics/records");
+}
+
+export function getAnalyticsWorks(platform?: string): Promise<unknown[]> {
+  return request<unknown[]>(`/api/analytics/works${platform ? `?platform=${encodeURIComponent(platform)}` : ""}`);
+}
+
+export function getAnalyticsInsights(platform?: string): Promise<Record<string, unknown>> {
+  return request<Record<string, unknown>>(`/api/analytics/insights${platform ? `?platform=${encodeURIComponent(platform)}` : ""}`);
+}
+
+export function triggerCollect(): Promise<Record<string, unknown>> {
+  return post<Record<string, unknown>>("/api/analytics/collect", {});
+}
+
+export function recomputeBaselines(): Promise<{ ok: boolean }> {
+  return post<{ ok: boolean }>("/api/analytics/recompute-baselines", {});
+}
+
+export interface CommentFilter {
+  publishRecordId?: number;
+  sentiment?: string;
+  replied?: boolean;
+  keyword?: string;
+  limit?: number;
+}
+
+export function getComments(filter: CommentFilter = {}): Promise<Record<string, unknown>[]> {
+  const qs = new URLSearchParams();
+  if (filter.publishRecordId) qs.set("publishRecordId", String(filter.publishRecordId));
+  if (filter.sentiment) qs.set("sentiment", filter.sentiment);
+  if (filter.replied !== undefined) qs.set("replied", String(filter.replied));
+  if (filter.keyword) qs.set("keyword", filter.keyword);
+  if (filter.limit) qs.set("limit", String(filter.limit));
+  return request<Record<string, unknown>[]>(`/api/comments?${qs.toString()}`);
+}
+
+export function suggestReply(commentId: number): Promise<{ tone: string; replies: string[] }> {
+  return post(`/api/comments/${commentId}/reply-suggest`, {});
+}
+
+export function postReply(commentId: number, content: string): Promise<{ ok: boolean }> {
+  return post(`/api/comments/${commentId}/reply`, { content });
+}
+
+export function classifyComments(): Promise<{ classified: number }> {
+  return post("/api/comments/classify", {});
+}
+
+export function listEvolutionRules(ruleType?: string): Promise<Record<string, unknown>[]> {
+  return request<Record<string, unknown>[]>(`/api/evolution/rules${ruleType ? `?ruleType=${encodeURIComponent(ruleType)}` : ""}`);
+}
+
+export function updateEvolutionRule(id: number, updates: Record<string, unknown>): Promise<Record<string, unknown>> {
+  return request<Record<string, unknown>>(`/api/evolution/rules/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(updates),
+  });
+}
+
+export function deleteEvolutionRule(id: number): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>(`/api/evolution/rules/${id}`, { method: "DELETE" });
+}
+
+export function generateEvolutionRules(insights: unknown[]): Promise<Record<string, unknown>[]> {
+  return post<Record<string, unknown>[]>("/api/evolution/generate", { insights });
+}
+
 export interface Template {
   id: string;
   name: string;
