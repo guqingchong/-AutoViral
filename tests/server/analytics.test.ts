@@ -42,14 +42,14 @@ describe("analytics routes", () => {
     const res = await setupApp().request("/api/analytics/records");
     expect(res.status).toBe(200);
     const data = await res.json();
-    expect(data.length).toBe(1);
+    expect(data.records.length).toBe(1);
   });
 
   it("lists records empty when no records exist", async () => {
     const res = await setupApp().request("/api/analytics/records");
     expect(res.status).toBe(200);
     const data = await res.json();
-    expect(data).toEqual([]);
+    expect(data).toEqual({ records: [] });
   });
 
   it("returns insights", async () => {
