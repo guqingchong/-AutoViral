@@ -156,31 +156,48 @@ describe("E2E Journey 2: 数据分析看板", () => {
   it("Analytics records → 200", async () => {
     const res = await app.request("/api/analytics/v2/records");
     expect(res.status).toBe(200);
+    const body = await res.json() as Record<string, unknown>;
+    expect(body).toBeTruthy();
+    expect(body.records).toBeDefined();
   });
 
   it("Analytics metrics/latest → 200", async () => {
     const res = await app.request("/api/analytics/v2/metrics/latest");
     expect(res.status).toBe(200);
+    const body = await res.json() as Record<string, unknown>;
+    expect(body).toBeTruthy();
+    expect(body.metrics).toBeDefined();
   });
 
   it("Analytics baselines → 200", async () => {
     const res = await app.request("/api/analytics/v2/baselines");
     expect(res.status).toBe(200);
+    const body = await res.json() as Record<string, unknown>;
+    expect(body).toBeTruthy();
+    expect(body.baselines).toBeDefined();
   });
 
   it("Comments 列表 → 200", async () => {
     const res = await app.request("/api/comments");
     expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toBeTruthy();
   });
 
   it("Evolution rules → 200", async () => {
     const res = await app.request("/api/evolution/rules");
     expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toBeTruthy();
   });
 
   it("Logs → 200 或 503", async () => {
     const res = await app.request("/api/logs");
     expect([200, 503]).toContain(res.status);
+    if (res.status === 200) {
+      const body = await res.json();
+      expect(body).toBeTruthy();
+    }
   });
 });
 
@@ -190,11 +207,17 @@ describe("E2E Journey 3: 选题与内容流水线", () => {
   it("话题列表 → 200", async () => {
     const res = await app.request("/api/topics");
     expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toBeTruthy();
   });
 
   it("话题趋势报告 → 200 或 404 (无数据)", async () => {
     const res = await app.request("/api/trends/douyin/report");
     expect([200, 404]).toContain(res.status);
+    if (res.status === 200) {
+      const body = await res.json();
+      expect(body).toBeTruthy();
+    }
   });
 
   it("生成提供商列表 → 200 + 数组", async () => {
@@ -223,6 +246,8 @@ describe("E2E Journey 4: 错误处理与边界条件", () => {
     });
     // Should not crash; may return 201 (with defaults) or 400
     expect([201, 400]).toContain(res.status);
+    const body = await res.json() as Record<string, unknown>;
+    expect(body).toBeTruthy();
   });
 
   it("无效 JSON body → 4xx 而非 500", async () => {
@@ -232,6 +257,9 @@ describe("E2E Journey 4: 错误处理与边界条件", () => {
       body: "not valid json",
     });
     expect(res.status).toBeLessThan(500);
+    // Body should be JSON even on error
+    const body = await res.json() as Record<string, unknown>;
+    expect(body).toBeTruthy();
   });
 
   it("缺失必填字段 → 400", async () => {
@@ -241,16 +269,22 @@ describe("E2E Journey 4: 错误处理与边界条件", () => {
       body: "{}",
     });
     expect(res.status).toBe(400);
+    const body = await res.json() as Record<string, unknown>;
+    expect(body.error).toBeTruthy();
   });
 
   it("不存在的 Analytics 记录 → 404", async () => {
     const res = await app.request("/api/analytics/v2/records/99999");
     expect(res.status).toBe(404);
+    const body = await res.json() as Record<string, unknown>;
+    expect(body.error).toBeTruthy();
   });
 
   it("不存在的平台 metrics → 404", async () => {
     const res = await app.request("/api/analytics/v2/metrics/account/__nonexistent__");
     expect(res.status).toBe(404);
+    const body = await res.json() as Record<string, unknown>;
+    expect(body.error).toBeTruthy();
   });
 });
 

@@ -21,6 +21,7 @@ import { registerAllAdapters } from "./analytics-api.js";
 import { startTrendScheduler } from "../services/scheduler.js";
 import { startMetricsScheduler } from "../services/analytics-scheduler.js";
 import { migrate } from "../db/migrate.js";
+import { closeDb } from "../db/connection.js";
 import { migrateLegacyWorks } from "../db/migrate-legacy.js";
 import { recoverStuckJobs, startPublishCron } from "../services/publish-service.js";
 import { recoverStuckRenderJobs } from "../services/video-factory.js";
@@ -188,6 +189,16 @@ export async function startServer(port: number): Promise<{ server: Server }> {
   await startTrendScheduler();
   await registerAllAdapters();
   startMetricsScheduler(config.analytics);
+
+  // 8. Graceful shutdown: drain pending chat saves on SIGTERM/SIGINT
+  const shutdown = async (signal: string) => {
+    console.log(`\n[server] Received ${signal}, draining pending saves...`);
+    wsBridge.destroy();
+    closeDb();
+    process.exit(0);
+  };
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
 
   return { server: httpServer };
 }
