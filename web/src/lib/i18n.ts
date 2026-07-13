@@ -284,6 +284,52 @@ const translations: Record<Language, Record<string, string>> = {
     publishGoToPublish: "Publish",
     publishFailed: "Publish failed",
     publishLoadError: "Failed to load data. Check your connection.",
+
+    // Navigation (Phase 5)
+    navAnalytics: "Analytics",
+    navComments: "Comments",
+    navEvolution: "Evolution",
+    navAdmin: "Admin",
+    navSettings: "Settings",
+
+    // Analytics (Phase 5)
+    analyticsTitle: "Analytics Dashboard",
+    analyticsCollect: "Collect",
+    analyticsCollecting: "Collecting...",
+    analyticsRecords: "Records",
+    analyticsInsights: "Insights",
+    analyticsHits: "Hits",
+    analyticsFailures: "Failures",
+    analyticsPlatform: "Platform",
+    analyticsViews: "Views",
+    analyticsLikes: "Likes",
+    analyticsComments: "Comments",
+    analyticsShares: "Shares",
+    analyticsCollects: "Collects",
+    analyticsEmpty: "Not enough data for insights yet.",
+
+    // Comments (Phase 5)
+    commentsTitle: "Comment Inbox",
+    commentsFilterByKeyword: "Filter by keyword",
+    commentsOnlyUnreplied: "Only unreplied",
+    commentsSuggestReply: "Suggest Reply",
+    commentsSendReply: "Send Reply",
+    commentsSentimentPositive: "Positive",
+    commentsSentimentNegative: "Negative",
+    commentsSentimentNeutral: "Neutral",
+    commentsSentimentQuestion: "Question",
+    commentsReplied: "Replied",
+    commentsUnreplied: "Unreplied",
+    commentsClassify: "Classify",
+
+    // Evolution (Phase 5)
+    evolutionTitle: "Evolution Rules",
+    evolutionGenerate: "Generate Rules",
+    evolutionEnabled: "Enabled",
+    evolutionConfidence: "Confidence",
+    evolutionAppliedCount: "Applied",
+    evolutionSource: "Source",
+    evolutionGenerating: "Generating...",
   },
   zh: {
     // Navigation
@@ -568,6 +614,52 @@ const translations: Record<Language, Record<string, string>> = {
     publishGoToPublish: "去发布",
     publishFailed: "发布失败",
     publishLoadError: "加载数据失败，请检查网络连接",
+
+    // 导航（Phase 5）
+    navAnalytics: "数据",
+    navComments: "评论",
+    navEvolution: "进化",
+    navAdmin: "运维",
+    navSettings: "设置",
+
+    // 数据看板（Phase 5）
+    analyticsTitle: "数据看板",
+    analyticsCollect: "手动采集",
+    analyticsCollecting: "采集中...",
+    analyticsRecords: "发布记录",
+    analyticsInsights: "洞察",
+    analyticsHits: "爆款",
+    analyticsFailures: "失败",
+    analyticsPlatform: "平台",
+    analyticsViews: "播放",
+    analyticsLikes: "点赞",
+    analyticsComments: "评论",
+    analyticsShares: "分享",
+    analyticsCollects: "收藏",
+    analyticsEmpty: "数据不足，暂无洞察。",
+
+    // 评论收件箱（Phase 5）
+    commentsTitle: "评论收件箱",
+    commentsFilterByKeyword: "关键词筛选",
+    commentsOnlyUnreplied: "只看未回复",
+    commentsSuggestReply: "回复建议",
+    commentsSendReply: "发送回复",
+    commentsSentimentPositive: "正面",
+    commentsSentimentNegative: "负面",
+    commentsSentimentNeutral: "中性",
+    commentsSentimentQuestion: "提问",
+    commentsReplied: "已回复",
+    commentsUnreplied: "未回复",
+    commentsClassify: "分类情感",
+
+    // 进化规则（Phase 5）
+    evolutionTitle: "进化规则",
+    evolutionGenerate: "生成规则",
+    evolutionEnabled: "启用",
+    evolutionConfidence: "置信度",
+    evolutionAppliedCount: "应用次数",
+    evolutionSource: "来源",
+    evolutionGenerating: "生成中...",
   },
 };
 

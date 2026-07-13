@@ -4,6 +4,7 @@
   import Analytics from "./pages/Analytics.svelte";
   import Comments from "./pages/Comments.svelte";
   import Evolution from "./pages/Evolution.svelte";
+  import Admin from "./pages/Admin.svelte";
   import Studio from "./pages/Studio.svelte";
   import Works from "./pages/Works.svelte";
   import Topics from "./pages/Topics.svelte";
@@ -179,6 +180,7 @@
     { tab: "analytics" as Tab, labelKey: "analytics" },
     { tab: "comments" as Tab, labelKey: "navComments" },
     { tab: "evolution" as Tab, labelKey: "navEvolution" },
+    { tab: "admin" as Tab, labelKey: "navAdmin" },
   ];
 </script>
 
@@ -225,6 +227,8 @@
       <Comments />
     {:else if $activeTab === "evolution"}
       <Evolution />
+    {:else if $activeTab === "admin"}
+      <Admin />
     {:else if $activeTab === "digital-humans"}
       <DigitalHumans />
     {:else if $activeTab === "assets"}

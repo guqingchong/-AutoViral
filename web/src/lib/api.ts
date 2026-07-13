@@ -567,3 +567,19 @@ export async function startWorkRender(workId: string, opts: {
 }) {
   return post<{ jobId: string; outputPath: string; status: string }>(`/api/works/${encodeURIComponent(workId)}/render`, opts);
 }
+
+// ---------------------------------------------------------------------------
+// Admin — backup, restore, migration
+// ---------------------------------------------------------------------------
+
+export async function exportBackup(path?: string): Promise<{ ok: boolean; path: string }> {
+  return post("/api/admin/backup", { path });
+}
+
+export async function restoreBackup(path: string, overwrite = false): Promise<{ ok: boolean; restored: string[] }> {
+  return post("/api/admin/restore", { path, overwrite });
+}
+
+export async function runMigration(dryRun = false): Promise<{ ok?: boolean; migrated?: number; dryRun?: boolean }> {
+  return post(`/api/admin/migrate?dryRun=${dryRun ? "true" : "false"}`, {});
+}
