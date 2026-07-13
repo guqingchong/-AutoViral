@@ -465,3 +465,26 @@ Base: after Topics trend pipeline fix
 
 All V2 roadmap items from the redesign PRD are now implemented. No remaining backlog.
 
+## Phase 9 Codex Review — All Findings Resolved
+
+Branch: `main`  
+Commit: `f013849` — fix: apply all Codex review findings for Phase 9 tone-profile injection
+
+| # | Severity | Finding | Resolution |
+|---|----------|---------|------------|
+| 1 | HIGH | `updateWork` missing `accountId` mapping | Added `if (updates.accountId !== undefined) dbUpdates.account_id = updates.accountId;` in `src/work-store.ts:263` |
+| 2 | HIGH | `Work`/`WorkSummary` interfaces missing `accountId` in frontend | Added `accountId?: string;` to both interfaces in `web/src/lib/api.ts` |
+| 3 | MEDIUM | Inline `JSON.stringify` in session endpoint instead of `buildTonePrompt()` | Replaced with `buildTonePrompt()` call, kept account name/platform header |
+| 4 | MEDIUM | Nested object values render as `[object Object]` in `buildTonePrompt` | Fixed with `typeof v === "object" ? JSON.stringify(v) : v` in nested flattening |
+| 5 | LOW | False boolean filtering behavior undocumented | Added comment explaining why `value === false` is filtered |
+| 6 | LOW | `w.account_id` not null-normalized in `dbWorkToWork` | Changed to `w.account_id ?? undefined` |
+| 7 | LOW | Topic-account independence not documented | Added comment on `POST /api/topics/:id/convert` explaining global topic collection vs account association |
+
+**Verification:**
+- `npx tsc --noEmit` — 0 errors
+- `npx vitest run` — 408/411 pass (3 pre-existing flaky performance benchmarks)
+- `npx vite build` — ✅ built in 8.26s
+- 5 files changed, 63 insertions, 6 deletions
+
+**Final Status:** Phase 9 complete. All 9 phases done. V2 roadmap fully resolved.
+
