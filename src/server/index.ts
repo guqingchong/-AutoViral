@@ -186,7 +186,7 @@ export async function startServer(port: number): Promise<{ server: Server }> {
 
   // 7. Start background services
   await startTrendScheduler();
-  registerAllAdapters();
+  await registerAllAdapters();
   startMetricsScheduler(config.analytics);
 
   return { server: httpServer };

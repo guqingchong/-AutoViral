@@ -555,15 +555,15 @@ export async function recheckAssetCompliance(id: number): Promise<AssetLibraryIt
 // ---------------------------------------------------------------------------
 
 export function getAnalyticsRecords(): Promise<{ records: unknown[] }> {
-  return request<{ records: unknown[] }>("/api/analytics/v2/records");
+  return request<{ records: unknown[] }>("/api/analytics/records");
 }
 
 export function getAnalyticsWorks(platform?: string): Promise<unknown[]> {
-  return request<unknown[]>(`/api/analytics/v2/works${platform ? `?platform=${encodeURIComponent(platform)}` : ""}`);
+  return request<unknown[]>(`/api/analytics/works${platform ? `?platform=${encodeURIComponent(platform)}` : ""}`);
 }
 
 export function getAnalyticsInsights(platform?: string): Promise<Record<string, unknown>> {
-  return request<Record<string, unknown>>(`/api/analytics/v2/metrics/latest${platform ? `?platform=${encodeURIComponent(platform)}` : ""}`);
+  return request<Record<string, unknown>>(`/api/analytics/insights${platform ? `?platform=${encodeURIComponent(platform)}` : ""}`);
 }
 
 export function triggerCollect(): Promise<Record<string, unknown>> {
@@ -571,7 +571,7 @@ export function triggerCollect(): Promise<Record<string, unknown>> {
 }
 
 export function recomputeBaselines(): Promise<{ ok: boolean }> {
-  return post<{ ok: boolean }>("/api/analytics/v2/baselines/compute", {});
+  return post<{ ok: boolean }>("/api/analytics/recompute-baselines", {});
 }
 
 export interface CommentFilter {

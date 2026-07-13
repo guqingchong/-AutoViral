@@ -413,7 +413,7 @@
               {#each ph5Records as r}
                 <tr>
                   <td>{r.platform}</td>
-                  <td class="col-title">{r.work_id ?? "-"}</td>
+                  <td class="col-title">{r.workTitle ?? r.work_id ?? "-"}</td>
                   <td class="col-num">{r.latestMetric?.views?.toLocaleString() ?? "-"}</td>
                   <td class="col-num">{r.latestMetric?.likes?.toLocaleString() ?? "-"}</td>
                   <td class="col-num">{r.latestMetric?.comments?.toLocaleString() ?? "-"}</td>

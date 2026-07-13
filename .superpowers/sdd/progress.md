@@ -537,6 +537,38 @@ All 9 planned phases + 3 V2 roadmap items + critical stability fixes delivered:
 | Phase 9 | Tone Profile Injection (V2#3) | 179e130, f013849 |
 | Stability | BUG-3 crash protection | 05a0647 |
 
-**No remaining roadmap items. Project is feature-complete and stable.**
+## Phase 10: PRD Compliance — Data Model & API Completeness
+
+Commit: `99f23a5`
+
+| # | Task | Status |
+|---|------|--------|
+| 1 | Migration v10 — works 表新增 6 PRD 列 | ✅ |
+| 2 | DbWork 类型 + works-repo.ts INSERT/UPDATE 全列 | ✅ |
+| 3 | work-store.ts 域类型 + 映射补全 | ✅ |
+| 4 | web/src/lib/api.ts 前端类型 + analytics 路径修复 (v2/) | ✅ |
+| 5 | analytics-api.ts: GET /works, /overview, /baselines | ✅ |
+| 6 | DELETE /api/topics/:id + POST /api/topics | ✅ |
+| 7 | GET /api/works/:id/articles + GET /api/works/:id/scripts | ✅ |
+| 8 | topics-repo.ts: deleteTopic; scripts-repo.ts: listScriptsByWork; baselines-repo.ts: listBaselines | ✅ |
+
+### Verification
+
+- `npx tsc --noEmit` — ✅ 0 errors
+- `npx vitest run` — ✅ 410/411 pass (1 pre-existing perf flake)
+- `npx vite build` — ✅
+
+### What Was Fixed
+
+| Gap | Fix |
+|-----|-----|
+| Work 实体缺 contentForm/topicId/articleId/scriptId/digitalHumanId/estimatedCost/actualCost | 7 新字段从 DB → TypeScript → API → 前端全链路 |
+| Analytics 前端 5/5 路径缺 `v2/` 前缀 | 全部修正 |
+| DELETE /api/topics/:id 404 | 新增路由 + deleteTopic |
+| POST /api/topics 404 | 新增手动创建选题路由 |
+| Articles/Scripts 表无 API | 新增 GET /api/works/:id/articles, GET /api/works/:id/scripts |
+| Analytics overview/works/baselines 缺失 | 3 个新路由 |
+
+**Phase 10 complete. Project is feature-complete and stable.**
 
 

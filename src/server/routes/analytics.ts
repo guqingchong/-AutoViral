@@ -40,9 +40,13 @@ analyticsRoutes.get("/works", (c) => {
   const metricByRecord = new Map(
     listLatestWorkMetrics({ platform }).map((m) => [m.publish_record_id!, m])
   );
+  const workTitles = new Map(
+    listWorks().map((w) => [w.id, w.title])
+  );
   const enriched = records.map((r) => ({
     ...r,
     latestMetric: metricByRecord.get(r.id) ?? null,
+    workTitle: workTitles.get(r.work_id) ?? r.work_id,
   }));
   return c.json(enriched);
 });
