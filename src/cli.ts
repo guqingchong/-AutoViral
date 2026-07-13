@@ -1,9 +1,12 @@
 import { Command } from "commander";
 import { loadConfig, saveConfig, type Config, getConfigDir } from "./config.js";
 import { readFile, writeFile, unlink, mkdir } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { exec, spawn } from "node:child_process";
+import { migrateLegacyWorks } from "./db/migrate-legacy.js";
+import { exportBackup, importBackup } from "./db/backup.js";
 
 const PID_FILE = join(homedir(), ".autoviral", "daemon.pid");
 const LOG_FILE = join(homedir(), ".autoviral", "daemon.log");
@@ -205,6 +208,51 @@ export function runCLI(): void {
       }
       await saveConfig(config);
       console.log(`${key}: ${typedConfig[key]}`);
+    });
+
+  program
+    .command("migrate")
+    .description("Migrate legacy YAML works to SQLite (one-time)")
+    .option("--dry-run", "Print how many works would be migrated without writing")
+    .action(async (opts: { dryRun?: boolean }) => {
+      if (opts.dryRun) {
+        console.log("Dry run: would migrate legacy YAML works to SQLite.");
+        console.log("Config directory:", getConfigDir());
+        return;
+      }
+      const migrated = await migrateLegacyWorks();
+      console.log(`Migrated ${migrated} legacy works to SQLite.`);
+      console.log(`Config directory: ${getConfigDir()}`);
+    });
+
+  program
+    .command("backup")
+    .description("Export a backup zip of the AutoViral database and data")
+    .argument("[path]", "Destination zip path")
+    .option("--dry-run", "Print the destination path without writing")
+    .action(async (pathArg?: string, opts?: { dryRun?: boolean }) => {
+      const dest = pathArg ?? join(getConfigDir(), `autoviral-backup-${Date.now()}.zip`);
+      if (opts?.dryRun) {
+        console.log("Would write backup to:", dest);
+        return;
+      }
+      await exportBackup(dest);
+      console.log(`Backup written to: ${dest}`);
+    });
+
+  program
+    .command("restore")
+    .description("Restore AutoViral database and data from a backup zip")
+    .argument("<path>", "Source zip path")
+    .option("--overwrite", "Overwrite existing files")
+    .action(async (pathArg: string, opts?: { overwrite?: boolean }) => {
+      if (!existsSync(pathArg)) {
+        console.error(`Backup file not found: ${pathArg}`);
+        process.exit(1);
+      }
+      const restored = await importBackup(pathArg, { overwrite: opts?.overwrite ?? false });
+      console.log("Restored:", restored.join(", "));
+      console.log("Restart AutoViral for changes to take full effect.");
     });
 
   program.parseAsync();

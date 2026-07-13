@@ -133,3 +133,115 @@ Baseline: 92 tests passing (23 files)
 - **Fix wave 6** (`463c32c`): add missing `DELETE /api/publish/banned-words/:id` endpoint and tests.
 
 Final test evidence: **153/153 tests pass** (31 files), frontend build OK.
+
+---
+
+# AutoViral Phase 5 — 数据回收与自进化引擎
+
+Plan: `docs/superpowers/plans/2026-07-08-autoviral-mcn-redesign-phase5.md`
+Branch: `autoviral-phase5-data-recycling`
+Base commit: `463c32c`
+Baseline: 222 tests passing (43 files)
+
+## Global Constraints (from plan)
+
+- ESM imports must use `.js` extension; no `require`.
+- Use `getDb` from `src/db/connection.js`; use `toJson`/`fromJson` from `src/db/json.js`.
+- All structured data in SQLite via `src/db/<entity>-repo.ts`; services never write SQL directly.
+- Use better-sqlite3 prepared statements for all DB operations.
+- Frontend navigation tabs accumulate; never delete old tabs.
+- Use Svelte 5 runes (`$state`, `$props`) for components.
+- New API routes must be testable via in-memory DB.
+
+## Batch 1: 数据库层 (Tasks 1-5) — Complete
+
+- [x] Task 1: Migration v5 — Analytics & Evolution Tables
+- [x] Task 2: DB Types — analytics, evolution, comments types
+- [x] Task 3: publish-records-repo, platform-metrics-repo, baselines-repo
+- [x] Task 4: comments-repo
+- [x] Task 5: evolution-rules-repo
+
+## Batch 2: 平台适配器与服务层 (Tasks 6-14) — Complete
+
+- [x] Task 6: Platform adapter interface extensions (collectMetrics, collectComments, publishReply)
+- [x] Task 7: Analytics collector service
+- [x] Task 8: Hit/failure analysis service
+- [x] Task 9: Comment service (classify, suggest, reply)
+- [x] Task 10: Self-evolution engine
+- [x] Task 11: Evolution applier
+- [x] Task 12: Analytics scheduler
+- [x] Task 13: Mock driver analytics extensions
+- [x] Task 14: Platform adapters registry update
+
+## Batch 3: 配置/API/路由 (Tasks 15-19) — Complete
+
+- [x] Task 15: Config schema extensions (analytics, evolution sections)
+- [x] Task 16: Analytics routes
+- [x] Task 17: Comments routes
+- [x] Task 18: Evolution routes
+- [x] Task 19: API route registration
+
+## Batch 4: 前端页面 (Tasks 20-24) — Complete
+
+- [x] Task 20: API wrappers and i18n keys
+- [x] Task 21: Analytics.svelte — Phase 5 data collection tab
+- [x] Task 22: Comments.svelte — comment inbox
+- [x] Task 23: Evolution.svelte — evolution rules management
+- [x] Task 24: App.svelte and navigation.ts — add Comments/Evolution tabs
+
+## Batch 5: 测试与构建验证 (Tasks 25-28) — Complete
+
+- [x] Task 25: API route integration tests (analytics, comments, evolution)
+- [x] Task 26: TypeScript type check + backend build + frontend build (all passed)
+- [x] Task 27: Full test suite regression
+
+## Final Status
+
+Phase 5 implementation complete. Branch `autoviral-phase5-data-recycling`.
+Final test evidence: **244/244 tests pass** (46 files), backend build OK, frontend build OK.
+
+---
+
+# Phase 6: Windows Installer, Migration & Documentation — Complete
+
+## Tasks 1-4: Electron Infrastructure
+
+- [x] Task 1: package.json — Electron entry point, dependencies (electron, electron-builder, adm-zip)
+- [x] Task 2: electron/main.cjs + electron/preload.cjs + health endpoint
+- [x] Task 3: electron-builder.yml (NSIS + portable), build-resources/ placeholder
+- [x] Task 4: Launcher scripts (AutoViral.cmd, AutoViral.ps1, start-portable.bat, start-portable.ps1)
+
+## Tasks 5-7: FFmpeg Detection + Migration + Backup
+
+- [x] Task 5: Bundled FFmpeg detection in src/server/index.ts, config portable mode
+- [x] Task 6: CLI migrate command (--dry-run)
+- [x] Task 7: Backup/restore module (src/db/backup.ts) with adm-zip
+
+## Tasks 8-9: Admin API + CLI Commands
+
+- [x] Task 8: POST /api/admin/backup, /api/admin/restore, /api/admin/migrate + tests/admin.test.ts (7 tests)
+- [x] Task 9: CLI backup and restore commands (completed in earlier batch)
+
+## Task 10: Admin UI
+
+- [x] Task 10: Admin.svelte page, App.svelte tab, api.ts wrappers, navigation.ts + i18n keys
+
+## Tasks 11-16: Scripts, Docs, Smoke Tests
+
+- [x] Task 11: scripts/download-ffmpeg.ps1
+- [x] Task 12: scripts/build-installer.ps1 + scripts/build-installer.sh
+- [x] Task 13: docs/setup-guide.md
+- [x] Task 14: docs/troubleshooting.md
+- [x] Task 15: docs/ops/windows-installer.md + docs/ops/claude-code-model-setup.md
+- [x] Task 16: tests/installer/installer-smoke.test.ts (5 tests)
+
+## Tasks 17-18: Build + Final Verification
+
+- [x] Task 17: Full build (tsc + vite) passed
+- [x] Task 18: Self-review — all spec coverage items checked
+
+## Final Status
+
+Phase 6 implementation complete. Branch `autoviral-phase5-data-recycling`.
+Final test evidence: **256/256 tests pass** (48 files), backend build OK, frontend build OK.
+Notable fixes: connection.ts now respects AUTOVIRAL_DATA_DIR for portable mode; getConfigDir() evaluates env var dynamically.
