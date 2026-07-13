@@ -22,6 +22,7 @@
   let title = $state("");
   let selectedType = $state("short-video");
   let selectedCategory = $state("anxiety");
+  let customCategory = $state("");
   let videoSource = $state("search");
   let videoSearchQuery = $state("");
   let topicHint = $state("");
@@ -41,7 +42,9 @@
     onCreate({
       title,
       type: selectedType,
-      contentCategory: selectedCategory,
+      contentCategory: selectedCategory === "other" && customCategory.trim()
+        ? customCategory.trim()
+        : selectedCategory,
       videoSource: selectedType === "short-video" ? videoSource : "",
       videoSearchQuery: videoSource === "search" ? videoSearchQuery : "",
       topicHint,
@@ -49,6 +52,7 @@
     title = "";
     selectedType = "short-video";
     selectedCategory = "anxiety";
+    customCategory = "";
     videoSource = "search";
     videoSearchQuery = "";
     topicHint = "";
@@ -209,6 +213,14 @@
             <span class="category-desc">{tt("categoryOtherDesc")}</span>
           </button>
         </div>
+        {#if selectedCategory === "other"}
+          <input
+            type="text"
+            class="form-input category-custom-input"
+            bind:value={customCategory}
+            placeholder={tt("categoryOtherPlaceholder")}
+          />
+        {/if}
       </div>
 
       <!-- Title -->
@@ -468,6 +480,10 @@
 
   .category-card.selected .category-name { color: var(--text); }
   .category-card.selected .category-desc { color: var(--text-muted); }
+
+  .category-custom-input {
+    margin-top: 0.5rem;
+  }
 
   .form-input {
     width: 100%;

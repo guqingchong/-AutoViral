@@ -767,6 +767,7 @@ All 12 SDD phases complete (418 tests). Remaining work from `docs/desigen/issues
 | `fe86e57` | fix: API error state on Works landing page (BUG-3) |
 | `fdb5110` | test: further relax Windows perf thresholds |
 | `90c6fba` | test: Windows PERF_FACTOR (3x) for all perf thresholds |
+| `2bfe047` | fix: BUG-5 — enforce full subtitle pipeline in system prompt |
 
 ## Final Test Evidence
 
@@ -781,13 +782,13 @@ All 12 SDD phases complete (418 tests). Remaining work from `docs/desigen/issues
 | BUG-1 | HIGH | `34b0342` | ✅ topicHint priority in emotion-category research |
 | BUG-3 | HIGH | `fe86e57` | ✅ Works page + AssetPanel error states |
 | BUG-4 | MEDIUM | `846ef4e` | ✅ Incremental messageHistory persistence |
+| BUG-5 | MEDIUM | `2bfe047` | ✅ Full subtitle pipeline in system prompt (caption_generate.py → subtitle_burn.py → project fonts) |
 
 ## Remaining Backlog
 
 | Issue | Severity | Notes |
 |-------|----------|-------|
 | BUG-2 | MEDIUM | Content category "other" added (P5 audit), but frontend still has 4 hardcoded emotion buttons |
-| BUG-5 | MEDIUM | Video subtitle quality — agent doesn't call `caption_generate.py`; ffmpeg lacks libass |
 | ARCH-1 | — | Content-type adaptation layer (architectural) |
 | ARCH-2 | — | Agent degradation strategy (skill-level, `fallback-strategy.md` exists) |
 | ARCH-4 | — | Pre-flight environment detection (skill-level) |
