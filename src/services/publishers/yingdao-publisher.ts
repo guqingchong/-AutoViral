@@ -7,6 +7,15 @@ export interface YingdaoOptions {
   timeoutMs?: number;
 }
 
+/**
+ * Escape a string for safe use as a cmd.exe argument.
+ * Wraps in double quotes and escapes internal double quotes.
+ */
+function shellEscape(arg: string): string {
+  if (!/[&|<>\^"%\s]/.test(arg)) return arg;
+  return `"${arg.replace(/"/g, '\\"')}"`;
+}
+
 export abstract class YingdaoRPAPublisher implements Publisher {
   protected options: YingdaoOptions;
 
@@ -32,14 +41,20 @@ export abstract class YingdaoRPAPublisher implements Publisher {
       return { success: false, error: `影刀机器人文件不存在：${botPath}` };
     }
     const args = this.buildBotArgs(input);
-    return this.runBot(botPath, args);
+    // Escape user-supplied arguments to prevent shell injection via cmd metacharacters
+    const escaped = args.map(shellEscape);
+    return this.runBot(botPath, escaped);
   }
 
   protected abstract buildBotArgs(input: PublishInput): string[];
 
   protected runBot(botPath: string, args: string[]): Promise<PublishOutput> {
     return new Promise((resolve) => {
-      const proc: ChildProcess = spawn(botPath, args, { shell: true });
+      // On Windows, .bot files require cmd.exe for file association
+      // Use explicit cmd.exe with escaped args — no { shell: true } implicit concatenation
+      const proc: ChildProcess = process.platform === "win32"
+        ? spawn("cmd.exe", ["/d", "/c", `"${botPath}"`, ...args], { shell: false })
+        : spawn(botPath, args, { shell: false });
       const timeout = setTimeout(() => {
         proc.kill();
         resolve({ success: false, error: `影刀机器人执行超时 (${this.options.timeoutMs ?? 300000}ms)` });

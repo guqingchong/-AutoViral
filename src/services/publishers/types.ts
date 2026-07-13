@@ -33,4 +33,7 @@ export interface Publisher {
 
   /** Execute the publish flow. */
   publish(input: PublishInput): Promise<PublishOutput>;
+
+  /** Open a browser window for interactive login (optional). */
+  login?(): Promise<boolean>;
 }
