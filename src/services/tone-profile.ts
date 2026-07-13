@@ -49,6 +49,8 @@ export function buildTonePrompt(toneProfile: Record<string, unknown> | null | un
   const lines: string[] = [];
   lines.push("## 账号风格要求（请严格遵循）");
   for (const [key, value] of entries) {
+    // Skip null/undefined/empty/false — false booleans are filtered because
+    // rendering "- 标签：false" in a prompt is not useful to the AI.
     if (value === null || value === undefined) continue;
     if (value === "" || value === false) continue;
     const label = KEY_LABELS[key] ?? key;
@@ -62,7 +64,7 @@ export function buildTonePrompt(toneProfile: Record<string, unknown> | null | un
       // Nested object — flatten to key: value pairs
       const nested = Object.entries(value as Record<string, unknown>)
         .filter(([, v]) => v !== null && v !== undefined && v !== "")
-        .map(([k, v]) => `${k}: ${v}`)
+        .map(([k, v]) => `${k}: ${typeof v === "object" ? JSON.stringify(v) : v}`)
         .join("，");
       if (nested) lines.push(`- ${label}：${nested}`);
     }

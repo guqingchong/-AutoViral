@@ -397,7 +397,7 @@ Base: after Phase 7 Codex fix wave
 - **Vite build: 413 kB JS + 145 kB CSS**
 - **New tests: 34 (12 repo + 22 API)**
 
-## FINAL STATUS: All 8 phases + Codex review complete 🎉
+## FINAL STATUS: All 8 phases + Phase 9 complete 🎉
 
 | Phase | Plan | Status | Tests |
 |-------|------|--------|-------|
@@ -410,10 +410,58 @@ Base: after Phase 7 Codex fix wave
 | Phase 6 | Windows Installer + Docs | ✅ Merged | 15 |
 | Phase 7 | Account Management | ✅ Reviewed | 27 |
 | Phase 8 | Content Calendar & Scheduling | ✅ Reviewed | 34 |
+| Phase 9 | Tone Profile → AI Pipeline | ✅ Completed | 10 |
 | Integration | Cross-module workflows | ✅ | 8 |
 | Functional | API contracts / error handling | ✅ | 19 |
 | Performance | Benchmarks / latency | ✅ | 15 |
 | E2E | Full-system scenarios | ✅ | 8 |
-| Unit | All module-level tests | ✅ | 342 |
-| **TOTAL** | | ✅ | **400** |
+| Unit | All module-level tests | ✅ | 352 |
+| **TOTAL** | | ✅ | **411**
+
+---
+
+# Phase 9: Account Tone Profile → AI Content Pipeline
+
+Branch: `main` (committed directly)
+Base: after Topics trend pipeline fix
+
+## Tasks
+
+- [x] Task 1: src/services/tone-profile.ts — buildTonePrompt() utility
+- [x] Task 2: Inject toneProfile into content-generator.ts + trend-research.ts
+- [x] Task 3: Wire account tone_profile through API routes (collect, convert, session)
+- [x] Task 4: Tests (10 tone-profile) + tsc + vite build
+
+## Commits
+
+- `179e130` feat(phase9): Account tone_profile injection into AI content generation pipeline
+
+## Injection Points
+
+| Service | Function | Injection Method |
+|---------|----------|-----------------|
+| content-generator.ts | generateArticleFromTopic() | toneProfile → ContentGenOptions → buildTonePrompt() as prompt prefix |
+| content-generator.ts | generateScriptFromArticle() | same pattern |
+| trend-research.ts | collectTrends() → analyzeTrendsWithAgent() | toneProfile → buildTonePrompt() as prompt prefix |
+| api.ts | POST /api/works/:id/session | account.tone_profile formatted with name/platform injected into work chat prompt |
+| api.ts | POST /api/topics/:id/convert | accountId → getAccount() → genOpts for article+script generators |
+| api.ts | POST /api/trends/collect | accountId → getAccount() → collectTrends(..., tone_profile) |
+
+## Final Test Evidence
+
+- **411/413 tests pass** (67 files; 2 pre-existing flaky perf benchmarks)
+- **TypeScript: 0 errors**
+- **Vite build: 426 kB JS + 154 kB CSS**
+- **New tests: 10 (tone-profile unit)**
+- **New files: 2 (tone-profile.ts + test)**
+
+## V2 Roadmap Items — All Resolved
+
+| V2 Item | Status |
+|---------|--------|
+| Account / Channel management | ✅ Phase 7 |
+| Content calendar / scheduling | ✅ Phase 8 |
+| Account tone / style configuration | ✅ Phase 9 |
+
+All V2 roadmap items from the redesign PRD are now implemented. No remaining backlog.
 

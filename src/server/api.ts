@@ -45,6 +45,7 @@ import { evaluateWork } from "../test-evaluator.js";
 import { collectTrends, listTopics, getTopic } from "../services/trend-research.js";
 import { updateTopic } from "../db/topics-repo.js";
 import { getAccount } from "../db/accounts-repo.js";
+import { buildTonePrompt } from "../services/tone-profile.js";
 import { createArticle } from "../db/articles-repo.js";
 import { createScript } from "../db/scripts-repo.js";
 import { generateArticleFromTopic, generateScriptFromArticle } from "../services/content-generator.js";
@@ -996,7 +997,7 @@ apiRoutes.post("/api/works/:id/session", async (c) => {
     // Look up account tone profile for style injection
     const account = work.accountId ? getAccount(work.accountId) : undefined;
     const toneInjection = account
-      ? `\n## 账号风格要求（请严格遵循）\n账号名称：${account.name}\n平台：${account.platform === "douyin" ? "抖音" : account.platform === "xiaohongshu" ? "小红书" : account.platform}\n这是该账号的风格配置，请据此调整你的创作输出：\n${JSON.stringify(account.tone_profile, null, 2)}\n`
+      ? `\n账号名称：${account.name}\n平台：${account.platform === "douyin" ? "抖音" : account.platform === "xiaohongshu" ? "小红书" : account.platform}\n${buildTonePrompt(account.tone_profile)}`
       : "";
 
     const steps = Object.entries(work.pipeline);
@@ -2158,6 +2159,9 @@ apiRoutes.get("/api/topics/:id", async (c) => {
   return c.json(topic);
 });
 
+// Topics are collected globally (independent of accounts) during trend research.
+// Account association only happens here — when a topic is converted to a work,
+// the optional accountId links it to a specific account's tone_profile for AI generation.
 apiRoutes.post("/api/topics/:id/convert", async (c) => {
   const id = parseInt(c.req.param("id"), 10);
   if (Number.isNaN(id)) return c.json({ error: "Invalid id" }, 400);
