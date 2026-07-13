@@ -10,6 +10,7 @@
 import { createRule, listRules } from "../db/evolution-rules-repo.js";
 import { runJsonPrompt } from "./llm-json.js";
 import type { WorkAnalysis } from "./hit-failure-analysis.js";
+import type { AnalysisInsight } from "./hit-failure-analysis.js";
 import type { DbEvolutionRule } from "../db/types.js";
 
 export interface EvolutionInput {
@@ -101,4 +102,53 @@ function normalizeRuleType(raw: string): DbEvolutionRule["rule_type"] {
  */
 export function getActiveRules(type?: DbEvolutionRule["rule_type"]): DbEvolutionRule[] {
   return listRules({ enabled: true, ...(type ? { ruleType: type } : {}) });
+}
+
+export interface EvolutionFromInsightsInput {
+  insights: AnalysisInsight[];
+  reviewWeaknesses?: string[];
+}
+
+interface LlmRule {
+  rule_type: string;
+  target_key?: string;
+  condition?: Record<string, unknown>;
+  action: string;
+  confidence: number;
+}
+
+/**
+ * Generate evolution rules from a batch of hit/failure insights.
+ */
+export async function generateEvolutionRules(input: EvolutionFromInsightsInput): Promise<DbEvolutionRule[]> {
+  const prompt = [
+    "你是 AutoViral 自进化引擎。根据爆款/失败分析洞察与评审弱点，生成可执行的进化规则。输出 JSON 数组，每个元素包含 rule_type、target_key、condition、action、confidence。rule_type 只能是 topic、template、prompt、publish_time、platform。",
+    `洞察：\n${JSON.stringify(input.insights.slice(0, 20), null, 2)}`,
+    `评审弱点：\n${(input.reviewWeaknesses ?? []).join("\n")}`,
+    "要求：\n1. 规则要具体且可执行\n2. confidence 取值 0-1\n3. 只输出 JSON 数组",
+  ].join("\n\n");
+
+  const result = await runJsonPrompt<{ rules: LlmRule[] }>(prompt, { timeoutMs: 120_000 });
+  const created: DbEvolutionRule[] = [];
+  for (const r of result.rules ?? []) {
+    const rule = createRule({
+      rule_type: normalizeRuleType(r.rule_type),
+      target_key: r.target_key,
+      condition_json: r.condition ?? {},
+      action: r.action,
+      confidence: Math.max(0, Math.min(1, r.confidence ?? 0.5)),
+      source: "self_evolution",
+      enabled: true,
+    });
+    created.push(rule);
+  }
+  return created;
+}
+
+/**
+ * Convenience wrapper: generate rules from insights only.
+ */
+export async function generateRulesFromInsights(insights: AnalysisInsight[]): Promise<DbEvolutionRule[]> {
+  const weaknesses = insights.filter((i) => i.failureRate > 0.3).map((i) => `${i.dimension}:${i.value}`);
+  return generateEvolutionRules({ insights, reviewWeaknesses: weaknesses });
 }

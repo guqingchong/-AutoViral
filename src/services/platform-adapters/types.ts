@@ -1,4 +1,15 @@
 /**
+ * Analytics source configuration for a platform.
+ * Stored in config.analytics.sources and used to drive collection.
+ */
+export interface AnalyticsSource {
+  platform: string;
+  authType: "api" | "cookie" | "rpa";
+  accountUrl?: string;
+  credentials: Record<string, string>;
+}
+
+/**
  * Collected metrics from a platform for a specific post or account.
  */
 export interface CollectedMetrics {

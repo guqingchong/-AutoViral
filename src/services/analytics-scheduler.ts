@@ -16,6 +16,7 @@ import { createBaseline as createBaselineRecord } from "../db/baselines-repo.js"
 import { getWork } from "../work-store.js";
 import { collectAll } from "../analytics-collector.js";
 import cron from "node-cron";
+import type { Config } from "../config.js";
 
 let accountJob: cron.ScheduledTask | null = null;
 let metricsJob: cron.ScheduledTask | null = null;
@@ -150,6 +151,17 @@ export function stopScheduler(): void {
 }
 
 /**
+ * Start the analytics scheduler only when analytics is enabled in config.
+ */
+export function startMetricsScheduler(analytics: Config["analytics"]): void {
+  if (!analytics.enabled) {
+    console.log("[analytics-scheduler] disabled");
+    return;
+  }
+  startScheduler();
+}
+
+/**
  * Run a one-shot collection of all metrics (useful for manual trigger / testing).
  */
 export async function collectAllOnce(): Promise<{ accounts: number; posts: number; errors: string[] }> {
@@ -157,6 +169,23 @@ export async function collectAllOnce(): Promise<{ accounts: number; posts: numbe
   return {
     accounts: result.accountMetricsCollected,
     posts: result.metricsCollected,
+    errors: result.errors,
+  };
+}
+
+export async function triggerManualCollection(
+  analytics: Config["analytics"]
+): Promise<{ collected: boolean; accounts: number; posts: number; comments: number; errors: string[] }> {
+  if (!analytics.enabled) {
+    return { collected: false, accounts: 0, posts: 0, comments: 0, errors: [] };
+  }
+  const platforms = analytics.sources.map((s) => s.platform).filter(Boolean);
+  const result = await collectAll(platforms.length ? platforms : undefined);
+  return {
+    collected: true,
+    accounts: result.accountMetricsCollected,
+    posts: result.metricsCollected,
+    comments: result.commentsCollected,
     errors: result.errors,
   };
 }
