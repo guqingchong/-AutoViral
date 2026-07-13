@@ -260,9 +260,17 @@ export class WsBridge {
 
 每个 skill 下还有以下子目录，请按需阅读：
 - **references/** — 平台专属知识。根据目标平台阅读 references/douyin.md 或 references/xiaohongshu.md
-- **genres/** — 垂类专项指南。如果作品有明确的内容品类（如 comedy 搞笑/抽象），阅读 genres/<type>.md 获取该品类在该阶段的专项规则（结构公式、视觉风格、剪辑节奏等），这些规则覆盖 SKILL.md 中的通用指导
-- **modules/** — 扩展能力模块。如需达人数据采集等能力，阅读 modules/ 下对应的文件
-
+- **genres/** — 内容类型专项指南。**在开始每个流水线步骤前，根据作品的内容类型阅读对应的 genres/<type>.md**。现有内容类型：
+    - \`comedy.md\` — 搞笑/抽象类（情绪驱动模板：观点输出型、对话截图型、反差跃迁型、清单盘点型）
+    - \`narrative.md\` — 叙事类（科幻短片、微电影、剧情类 — 用故事结构而非情绪模板）
+    - \`knowledge.md\` — 知识类（教程、测评、科普 — 用教学逻辑而非情绪模板）
+    - \`showcase.md\` — 展示类（Vlog、旅行、美食制作 — 用场景流程而非情绪模板）
+    - \`rhythm.md\` — 节奏类（卡点视频、舞蹈、音乐可视化 — 用节拍映射而非情绪模板）
+    **注意**：如果用户选的是"other"自定义类别（如"科幻"），应优先根据主题判断内容类型（科幻→narrative），然后阅读对应 genres/ 文件，而不是套用默认的焦虑类情绪模板
+  - **modules/** — 扩展能力模块。关键模块：
+    - \`modules/fallback-strategy.md\` — 受阻降级策略（含决策树、重试配额、停止条件）
+    - \`modules/quality-gate.md\` — 生成质量自检清单
+    - \`modules/emotional-hooks.md\` — 情绪驱动内容公式（仅 comedy 类适用）
 ## 你的能力
 - 调研：使用WebSearch搜索 + 数据获取脚本（详见 trend-research skill）
 - 生图：脚本工具 python3 ~/.claude/skills/asset-generation/scripts/openrouter_generate.py 或 jimeng_generate.py（详见 asset-generation skill）
@@ -274,6 +282,14 @@ export class WsBridge {
   3. **字体**：必须使用 ~/.autoviral/fonts/ 下的高质量字体（如 NotoSansCJKsc-Bold.otf），禁止使用系统字体（PingFang SC、Microsoft YaHei 等）
 - 公共素材：通过 curl http://localhost:${port}/api/shared-assets 查看可用素材
 - 流水线管理：调用 curl -X POST http://localhost:${port}/api/works/${work.id}/pipeline/advance 更新流水线状态
+
+## 前置检测（必做）
+
+**素材生成阶段第一步**：在任何生图/生视频操作前，必须先运行环境检测：
+\`\`\`
+python3 ~/.claude/skills/asset-generation/scripts/check_environment.py --format summary
+\`\`\`
+根据检测结果选择合适的工具和降级策略。**禁止跳过此步骤**——否则会导致用不存在的工具反复尝试失败、浪费积分和时间。
 
 ## 受阻降级策略
 
