@@ -83,6 +83,7 @@ export async function publishToPlatform(workId: string, platform: string, input:
       work_id: workId,
       platform,
       status: "publishing",
+      metadata: "",
     });
     recordId = created.id;
   }
@@ -101,7 +102,7 @@ export async function publishToPlatform(workId: string, platform: string, input:
   if (result.success) {
     recordsRepo.updatePublishRecord(recordId, {
       status: "published",
-      platform_post_id: result.platformPostId ?? null,
+      platform_post_id: result.platformPostId ?? undefined,
       metadata: JSON.stringify({ postUrl: result.postUrl }),
       published_at: new Date().toISOString(),
     });
@@ -110,13 +111,13 @@ export async function publishToPlatform(workId: string, platform: string, input:
     const packagePath = await generateFallbackPackage(platform, input, join(dataDir, "fallback-packages"));
     recordsRepo.updatePublishRecord(recordId, {
       status: "fallback",
-      error_message: result.error ?? null,
+      error_message: result.error ?? undefined,
       metadata: JSON.stringify({ fallbackPackagePath: packagePath }),
     });
   } else {
     recordsRepo.updatePublishRecord(recordId, {
       status: "failed",
-      error_message: result.error ?? null,
+      error_message: result.error ?? undefined,
     });
   }
 
