@@ -199,7 +199,7 @@ export function buildFilterComplexArgs(tl: Timeline, inputs: InputSlot[], durati
       let filter = `[base]`;
 
       if (layer.type === "text") {
-        const text = layer.content.replace(/'/g, "'\\''");
+        const text = layer.content.replace(/'/g, "'\\''").replace(/:/g, "\\:");
         const fontSize = layer.fontSize ?? 48;
         const textColor = layer.color ?? "#FFFFFF";
         const alignMap: Record<string, string> = { left: "L", center: "C", right: "R" };
@@ -226,9 +226,12 @@ export function buildFilterComplexArgs(tl: Timeline, inputs: InputSlot[], durati
     } else {
       // Video/image layers: overlay compositing with optional slide animations
       const srcIdx = getInputIndex(layer, inputs);
-      const chain = buildLayerVideoChain(layer, srcIdx, tl.canvas, duration);
+      let chain = buildLayerVideoChain(layer, srcIdx, tl.canvas, duration);
+      if (opacity < 1) {
+        chain += `,format=rgba,colorchannelmixer=aa=${opacity}`;
+      }
       const animFilters = buildAnimationFilters(layer, pos, layer.size!);
-      const overlayExpr = buildOverlayExpr(layer, pos);
+      const overlayExpr = buildOverlayExpr(layer, pos, tl.canvas);
       videoFilterParts.push(
         `[base]${chain}${overlayExpr}:enable='between(t\\,${start}\\,${end})'${animFilters ? "," + animFilters : ""}[base]`
       );
@@ -341,42 +344,77 @@ function buildXfadeChain(
 
 /**
  * Build an overlay string with optional slide-in / slide-out animation.
+ * Multiple slide animations on the same axis are composed (nested conditions)
+ * rather than overwritten. Off-screen positions are computed relative to
+ * actual canvas dimensions instead of a hardcoded sentinel.
+ *
  * Returns a complete overlay filter fragment like:
  *   ,overlay=x='…':y='…'
  */
-function buildOverlayExpr(layer: TimelineLayer, pos: TimelinePosition): string {
+function buildOverlayExpr(
+  layer: TimelineLayer,
+  pos: TimelinePosition,
+  canvas: { width: number; height: number },
+): string {
   if (!layer.animations || layer.animations.length === 0) {
     return `,overlay=${pos.x}:${pos.y}`;
   }
 
   const size = layer.size!;
-  let xExpr = String(pos.x);
-  let yExpr = String(pos.y);
   const st = layer.start;
   const end = st + layer.duration;
 
+  // Partition slide animations by the axis they affect
+  const xAnims: TimelineAnimation[] = [];
+  const yAnims: TimelineAnimation[] = [];
   for (const anim of layer.animations) {
-    const d = anim.duration;
+    if (anim.type !== "slidein" && anim.type !== "slideout") continue;
     const dir = anim.direction ?? "left";
-
-    if (anim.type === "slidein") {
-      if (dir === "left" || dir === "right") {
-        const fromX = dir === "left" ? -size.width : 99999; // 99999 ≈ canvas right edge proxy
-        xExpr = `if(between(t\\,${st}\\,${st + d})\\,${fromX}+(${pos.x - fromX})*(t-${st})/${d}\\,${pos.x})`;
-      } else {
-        const fromY = dir === "top" ? -size.height : 99999;
-        yExpr = `if(between(t\\,${st}\\,${st + d})\\,${fromY}+(${pos.y - fromY})*(t-${st})/${d}\\,${pos.y})`;
-      }
-    } else if (anim.type === "slideout") {
-      if (dir === "left" || dir === "right") {
-        const toX = dir === "left" ? -size.width : 99999;
-        xExpr = `if(between(t\\,${end - d}\\,${end})\\,${pos.x}+(${toX - pos.x})*(t-(${end - d}))/${d}\\,${pos.x})`;
-      } else {
-        const toY = dir === "top" ? -size.height : 99999;
-        yExpr = `if(between(t\\,${end - d}\\,${end})\\,${pos.y}+(${toY - pos.y})*(t-(${end - d}))/${d}\\,${pos.y})`;
-      }
+    if (dir === "left" || dir === "right") {
+      xAnims.push(anim);
+    } else {
+      yAnims.push(anim);
     }
   }
+
+  function buildAxisExpr(
+    resting: number,
+    anims: TimelineAnimation[],
+    dim: "x" | "y",
+  ): string {
+    if (anims.length === 0) return String(resting);
+
+    const edge = dim === "x" ? canvas.width : canvas.height;
+    const dimSize = dim === "x" ? size.width : size.height;
+
+    // Sort earliest first so we can wrap inside-out (latest wraps earliest)
+    const sorted = [...anims].sort((a, b) => {
+      const aStart = a.type === "slidein" ? st : end - a.duration;
+      const bStart = b.type === "slidein" ? st : end - b.duration;
+      return aStart - bStart;
+    });
+
+    let expr = String(resting);
+    // Reverse: apply latest-in-time first so it becomes the outermost condition
+    for (const anim of sorted.reverse()) {
+      const d = anim.duration;
+      const dir = anim.direction ?? (dim === "x" ? "left" : "top");
+      const toLeftOrTop = dir === "left" || dir === "top";
+
+      if (anim.type === "slidein") {
+        const from = toLeftOrTop ? -dimSize : edge + dimSize;
+        expr = `if(between(t\\,${st}\\,${st + d})\\,${from}+(${resting - from})*(t-${st})/${d}\\,${expr})`;
+      } else {
+        // slideout
+        const to = toLeftOrTop ? -dimSize : edge + dimSize;
+        expr = `if(between(t\\,${end - d}\\,${end})\\,${resting}+(${to - resting})*(t-(${end - d}))/${d}\\,${expr})`;
+      }
+    }
+    return expr;
+  }
+
+  const xExpr = buildAxisExpr(pos.x, xAnims, "x");
+  const yExpr = buildAxisExpr(pos.y, yAnims, "y");
 
   return `,overlay=x='${xExpr}':y='${yExpr}'`;
 }
@@ -462,7 +500,7 @@ function buildLayerVideoChain(
       chain += `,format=yuv420p`;
     }
   } else if (layer.type === "text") {
-    const text = layer.content.replace(/'/g, "'\\''");
+    const text = layer.content.replace(/'/g, "'\\''").replace(/:/g, "\\:");
     const fontSize = layer.fontSize ?? 48;
     const color = layer.color ?? "#FFFFFF";
     const alignMap: Record<string, string> = { left: "L", center: "C", right: "R" };
