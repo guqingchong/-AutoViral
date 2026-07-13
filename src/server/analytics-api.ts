@@ -180,8 +180,8 @@ analyticsApi.post("/scheduler/stop", (c) => {
  */
 export function registerAllAdapters(): Promise<void> {
   // Resolve credentials: DB-stored > env vars > empty string
-  const ka = getCredential("kuaishou", "app_id") ?? process.env["KUASHOU_APP_ID"];
-  const ks = getCredential("kuaishou", "app_secret") ?? process.env["KUASHOU_APP_SECRET"];
+  const ka = getCredential("kuaishou", "app_id") ?? process.env["KUAISHOU_APP_ID"];
+  const ks = getCredential("kuaishou", "app_secret") ?? process.env["KUAISHOU_APP_SECRET"];
   const bc = getCredential("bilibili", "client_id") ?? process.env["BILIBILI_CLIENT_ID"];
   const bs = getCredential("bilibili", "client_secret") ?? process.env["BILIBILI_CLIENT_SECRET"];
   const zc = getCredential("zhihu", "client_id") ?? process.env["ZHIHU_CLIENT_ID"];

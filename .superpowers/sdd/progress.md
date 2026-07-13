@@ -617,4 +617,67 @@ Phase 10 将前端 5 个函数全部指向 v2 路由，但 Analytics.svelte 模�
 
 **Phase 11 complete. All known integration bugs resolved.**
 
+## Phase 12: Phase 3/5/6 Gap Closure (commit `927b8f1`)
+
+### Motivation
+Review of Phase 3 (Video Rendering), Phase 5 (Analytics API), and Phase 6 (Polish) identified 7 remaining gaps despite 411 tests passing.
+
+### Tasks
+
+- [x] **Task 109: Bilibili AID/BVID dual format support** (`src/services/platform-adapters/bilibili-api.ts`)
+  - Added `BVID_RE = /^BV[0-9A-Za-z]{10}$/` and `AID_RE = /^(?:av)?(\d+)$/i` regex detection
+  - Added `detectIdParam()` — auto-routes to `aid=` or `bvid=` query parameter
+  - Previously only used `?aid=${externalId}`, which failed for BVID inputs
+
+- [x] **Task 110: DB credentials for platform adapters** (`src/server/analytics-api.ts`)
+  - `registerAllAdapters()` now reads from `getCredential(platform, keyType)` with env var fallback
+  - Priority: DB `platform_credentials` table > `process.env` > empty string
+  - Supports: kuaishou, bilibili, zhihu, wechat (app_id/app_secret or client_id/client_secret)
+
+- [x] **Task 111: Transition rendering via FFmpeg xfade** (`src/video/renderer.ts`)
+  - Replaced "not yet implemented" warning with `buildXfadeChain()` function
+  - Sequential media layers chained through xfade filter with correct offsets
+  - Supports: fade (crossfade), slide (slideright), wipe (wipeleft)
+  - Each layer: normalize with setpts, scale to canvas, pad to fit, chain through xfade
+
+- [x] **Task 112: Animation support** (`src/video/renderer.ts`)
+  - `buildAnimationFilters()` — unified handler for all 6 animation types
+  - `fadein`/`fadeout`: `format=yuva420p,fade=t=in/out:st=...:d=...`
+  - `slidein`/`slideout`: via `buildOverlayExpr()` with `if(between(t,start,end),animated,static)` expressions
+  - `scale`: animated width/height with `eval=frame`
+  - `rotate`: animated angle via `rotate=a='...*PI/180':c=none`
+
+- [x] **Task 113: Phase 6 polish** 
+  - `build-resources/icon.ico`: 32×32 RGBA ICO with AutoViral brand color #FE2C55
+  - `build-resources/installer.nsh`: NSIS customInstall/customUnInstall macros (Start Menu shortcut + registry)
+  - `tests/db/backup.test.ts`: 7 tests for exportBackup/importBackup/getBackupPaths with per-test temp dirs and closeDb() cleanup
+
+### Files Changed
+| File | Δ |
+|------|---|
+| `src/video/renderer.ts` | +309/-105 |
+| `tests/db/backup.test.ts` | +150 (new) |
+| `.superpowers/sdd/progress.md` | +80 |
+| `src/server/analytics-api.ts` | +33 |
+| `src/services/platform-adapters/bilibili-api.ts` | +31 |
+| `build-resources/installer.nsh` | +18 (new) |
+| `web/src/lib/api.ts` | +8 |
+| `src/video/types.ts` | +4 |
+| `src/server/routes/analytics.ts` | +4 |
+| `web/src/pages/Analytics.svelte` | +2 |
+| `src/server/index.ts` | +2 |
+| `build-resources/icon.ico` | binary (new) |
+| **Total** | **+536/-105 across 12 files** |
+
+### Verification
+- `npx tsc --noEmit` — ✅ 0 errors
+- `npx vitest run` — ✅ **418/418 pass** (68 test files)
+- `npx vite build` — ✅
+- Integration tests: ✅ 8/8
+- Functional tests: ✅ 17/17
+- Performance tests: ✅ 17/17
+
+### Review Status
+- Codex review: ⏳ in progress (agent `a937745bdacc785b1`)
+
 

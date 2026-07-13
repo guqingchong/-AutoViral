@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { exportBackup, importBackup, getBackupPaths } from "../../src/db/backup.js";
-import { closeDb } from "../../src/db/connection.js";
+import { closeDb, getDb } from "../../src/db/connection.js";
 
 /**
  * Create a unique test data directory with minimal file structure.
@@ -50,7 +50,6 @@ describe("exportBackup", () => {
     const dir = await setupDataDir();
     try {
       const dest = join(dir, "backup.zip");
-      const { getDb } = await import("../../src/db/connection.js");
       getDb();
 
       await exportBackup(dest);
@@ -66,7 +65,6 @@ describe("exportBackup", () => {
     const dir = await setupDataDir();
     try {
       const dest = join(dir, "backup2.zip");
-      const { getDb } = await import("../../src/db/connection.js");
       getDb();
 
       await exportBackup(dest);
@@ -84,7 +82,6 @@ describe("exportBackup", () => {
     const dir = await setupDataDir();
     try {
       const dest = join(dir, "backup3.zip");
-      const { getDb } = await import("../../src/db/connection.js");
       getDb();
 
       await exportBackup(dest);
