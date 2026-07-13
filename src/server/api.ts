@@ -19,7 +19,6 @@ import type { WsBridge } from "../ws-bridge.js";
 import { resolveClaudeCommand } from "../ws-bridge.js";
 import { getProvider, getDefaultProvider, listProviders } from "../providers/registry.js";
 import { listSharedAssetsWithMeta, getSharedAssetPath, validateCategory, sanitizeFilename, saveSharedAsset, deleteSharedAsset, moveSharedAsset } from "../shared-assets.js";
-import { getLatestCreatorData, getCreatorHistory } from "../analytics-collector.js";
 import * as avatarsRepo from "../db/avatars-repo.js";
 import * as dhJobsRepo from "../db/digital-human-jobs-repo.js";
 import * as assetsRepo from "../db/assets-repo.js";
@@ -55,6 +54,9 @@ import { validateTemplate, TimelineValidationError } from "../video/schema.js";
 import { applyVariables, fillDefaults } from "../video/variables.js";
 import type { Timeline } from "../video/types.js";
 import { publishRoutes } from "./publish-api.js";
+import { analyticsApi } from "./analytics-api.js";
+import { commentsApi } from "./comments-api.js";
+import { evolutionApi } from "./evolution-api.js";
 
 export const apiRoutes = new Hono();
 
@@ -405,28 +407,6 @@ apiRoutes.get("/api/analytics", async (c) => {
     return c.json({ totalWorks: 0, totalViews: 0, totalLikes: 0, totalComments: 0 });
   }
 });
-
-// GET /api/analytics/creator — latest creator data + trend delta
-apiRoutes.get("/api/analytics/creator", async (c) => {
-  const latest = await getLatestCreatorData()
-  if (!latest) return c.json({ configured: false, data: null })
-  const history = await getCreatorHistory(7)
-  const yesterday = history.find(h => h.date !== new Date().toISOString().slice(0, 10))
-  let delta: Record<string, number> | null = null
-  if (yesterday?.data?.account && latest.account) {
-    delta = {
-      followers: latest.account.follower_count - yesterday.data.account.follower_count,
-      favorited: latest.account.total_favorited - yesterday.data.account.total_favorited,
-    }
-  }
-  return c.json({ configured: true, data: latest, delta })
-})
-
-// GET /api/analytics/creator/history — daily snapshots for charts
-apiRoutes.get("/api/analytics/creator/history", async (c) => {
-  const history = await getCreatorHistory(30)
-  return c.json({ history })
-})
 
 // ---------------------------------------------------------------------------
 // Generate API (Provider-based image/video generation)
@@ -2610,3 +2590,6 @@ apiRoutes.post("/api/works/:id/render", async (c) => {
 
 // ── Publish API ───────────────────────────────────────────────────────────
 apiRoutes.route("/api/publish", publishRoutes);
+apiRoutes.route("/api/analytics/v2", analyticsApi);
+apiRoutes.route("/api/comments", commentsApi);
+apiRoutes.route("/api/evolution", evolutionApi);

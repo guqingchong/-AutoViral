@@ -85,4 +85,18 @@ describe("migrate", () => {
       .get() as string;
     expect(fks).toContain("FOREIGN KEY (render_job_id) REFERENCES render_jobs(id) ON DELETE SET NULL");
   });
+
+  it("creates phase 5 tables", () => {
+    const db = resetInMemoryDb();
+    migrate();
+    const tables = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+      .pluck()
+      .all() as string[];
+    expect(tables).toContain("publish_records");
+    expect(tables).toContain("platform_metrics");
+    expect(tables).toContain("comments");
+    expect(tables).toContain("evolution_rules");
+    expect(tables).toContain("baselines");
+  });
 });
