@@ -29,30 +29,28 @@ export interface PublishRecord {
   updatedAt: string;
 }
 
-export function toPublishRecord(row: Record<string, unknown> | ReturnType<typeof recordsRepo.getPublishRecord>): PublishRecord {
+export function toPublishRecord(row: ReturnType<typeof recordsRepo.getPublishRecord>): PublishRecord {
   if (!row) throw new Error("Cannot convert null record");
-  const dbRecord = row as ReturnType<typeof recordsRepo.getPublishRecord>;
-  if (!dbRecord) throw new Error("Cannot convert undefined record");
   const metadataParsed: Record<string, unknown> = (() => {
     try {
-      return typeof dbRecord.metadata === "string" ? JSON.parse(dbRecord.metadata) : dbRecord.metadata as Record<string, unknown>;
+      return typeof row.metadata === "string" ? JSON.parse(row.metadata) : row.metadata as Record<string, unknown>;
     } catch {
       return {};
     }
   })();
   return {
-    id: dbRecord.id,
-    workId: dbRecord.work_id,
-    platform: dbRecord.platform,
-    status: dbRecord.status as PublishRecord["status"],
-    platformPostId: dbRecord.platform_post_id,
+    id: row.id,
+    workId: row.work_id,
+    platform: row.platform,
+    status: row.status as PublishRecord["status"],
+    platformPostId: row.platform_post_id,
     postUrl: metadataParsed.postUrl as string | undefined,
-    error: dbRecord.error_message,
-    publishedAt: dbRecord.published_at,
-    scheduledAt: dbRecord.scheduled_at,
+    error: row.error_message,
+    publishedAt: row.published_at,
+    scheduledAt: row.scheduled_at,
     metadata: metadataParsed,
-    createdAt: dbRecord.created_at,
-    updatedAt: dbRecord.updated_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 
@@ -133,8 +131,7 @@ export async function getPublishingStatus(workId: string): Promise<PublishRecord
 
 export async function triggerLogin(platform: string): Promise<boolean> {
   const publisher = resolvePublisher(platform);
-  if (platform === "douyin") return (publisher as DouyinPublisher).login();
-  if (platform === "xiaohongshu") return (publisher as XiaohongshuPublisher).login();
+  if (publisher.login) return publisher.login();
   throw new Error(`平台 ${platform} 不支持浏览器登录`);
 }
 

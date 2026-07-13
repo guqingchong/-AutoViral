@@ -9,12 +9,17 @@ vi.mock("node:fs/promises", () => ({
 }));
 
 describe("DouyinOfficialPublisher", () => {
+  let origFetch: typeof global.fetch;
   beforeEach(() => {
     resetInMemoryDb();
     migrate();
     vi.clearAllMocks();
+    origFetch = global.fetch;
   });
-  afterEach(() => closeDb());
+  afterEach(() => {
+    global.fetch = origFetch;
+    closeDb();
+  });
 
   it("isConfigured requires access_token and open_id", () => {
     setCredential("douyin", "app_key", "ak");

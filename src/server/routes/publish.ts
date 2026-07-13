@@ -21,7 +21,7 @@ publishWorkRoutes.post("/:platform", async (c) => {
     // empty body is fine — will use buildPublishInput
   }
 
-  const input = body?.title
+  const input = body.title
     ? {
         workId,
         videoPath: (body.videoPath as string) ?? "",

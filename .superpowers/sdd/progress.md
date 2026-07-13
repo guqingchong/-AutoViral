@@ -245,3 +245,50 @@ Final test evidence: **244/244 tests pass** (46 files), backend build OK, fronte
 Phase 6 implementation complete. Branch `autoviral-phase5-data-recycling`.
 Final test evidence: **256/256 tests pass** (48 files), backend build OK, frontend build OK.
 Notable fixes: connection.ts now respects AUTOVIRAL_DATA_DIR for portable mode; getConfigDir() evaluates env var dynamically.
+
+---
+
+# AutoViral Phase 4b — RPA Platform Publishing
+
+Branch: `main` (committed directly, no worktree)
+Base: after Phase 6 merge
+
+## Tasks
+
+- [x] Phase 4b prerequisites: types, platform_credentials migration v7, repository
+- [x] Publisher interface + factory registry
+- [x] PlaywrightPublisher base class (Browser/Context/Page lifecycle, cookie persistence)
+- [x] DouyinOfficialPublisher (API) + DouyinWebPublisher (Playwright) + composite DouyinPublisher
+- [x] XiaohongshuPublisher (Playwright browser automation)
+- [x] YingdaoRPAPublisher base + ChannelsPublisher (.bot file via child_process.spawn)
+- [x] Fallback export (.zip via adm-zip, Windows-compatible)
+- [x] Publishing orchestration service (resolvePublisher, publishToPlatform, triggerLogin, buildPublishInput)
+- [x] Publish API routes (POST /:platform, POST /:platform/login, GET /records, GET /status, GET /:platform/fallback)
+- [x] Frontend Publishing.svelte page + api.ts wrappers + i18n keys
+- [x] Route mounting in api.ts, App.svelte navigation tab
+- [x] 8 publisher test files (18 tests) + service test (2 tests) + API route test (14 tests)
+- [x] TypeScript compile + Vite build: clean
+
+## Commits
+
+- `7ab4e55` feat(phase4b): RPA publishing — Playwright + Yingdao publishers
+- `6f8ac61` fix(phase4b): resolve TypeScript strict null-check errors
+
+## Final Test Evidence
+
+- **298/298 tests pass** (59 files)
+- **TypeScript: 0 errors**
+- **Vite build: 171 modules, 388 kB JS + 132 kB CSS**
+
+## FINAL STATUS: All 7 phases complete
+
+| Phase | Plan | Status | Tests |
+|-------|------|--------|-------|
+| Phase 1 | SQLite + Topic Engine | ✅ Merged | 36 |
+| Phase 2 | Digital Human + Assets | ✅ Merged | 16 |
+| Phase 3 | Template Renderer + FFmpeg | ✅ Deployed | 13 |
+| Phase 4a | Review + Official API Publish | ✅ Merged | 94 |
+| Phase 4b | RPA Publish (Playwright/Yingdao) | ✅ Completed | 34 |
+| Phase 5 | Analytics + Self-Evolution | ✅ Merged | 27 |
+| Phase 6 | Windows Installer + Docs | ✅ Merged | 15 |
+| **TOTAL** | | ✅ | **298** |

@@ -226,7 +226,7 @@
                     </td>
                     <td>
                       {#if record.postUrl}
-                        <a href={record.postUrl} target="_blank" class="post-link">{t("viewPost")}</a>
+                        <a href={record.postUrl} target="_blank" rel="noopener noreferrer" class="post-link">{t("viewPost")}</a>
                       {:else if record.error}
                         <span class="error-text" title={record.error}>{record.error.slice(0, 40)}…</span>
                       {/if}
