@@ -54,6 +54,7 @@ export interface Work {
   cliSessionId?: string;
   coverImage?: string;
   topicHint?: string;
+  accountId?: string;
   evaluationMode?: boolean;
   evalSessionIds?: Record<string, string>;
   evalAttempts?: Record<string, number>;
@@ -152,6 +153,7 @@ function dbWorkToWork(w: DbWork, steps?: DbPipelineStep[]): Work {
     cliSessionId: w.cli_session_id,
     coverImage: undefined,
     topicHint: w.topic_hint,
+    accountId: w.account_id,
     evaluationMode: w.evaluation_mode,
     evalSessionIds: w.eval_session_ids,
     evalAttempts: w.eval_attempts,
@@ -198,6 +200,7 @@ export async function createWork(input: {
   videoSearchQuery?: string;
   platforms: string[];
   topicHint?: string;
+  accountId?: string;
 }): Promise<Work> {
   await maybeMigrateLegacy();
   const now = new Date().toISOString();
@@ -213,6 +216,7 @@ export async function createWork(input: {
     platforms: input.platforms,
     evaluation_mode: false,
     topic_hint: input.topicHint,
+    account_id: input.accountId,
     tags: [],
     created_at: now,
     updated_at: now,

@@ -44,6 +44,7 @@ import { runPipeline, getRunStatus, listRuns, getRunReport, type RunConfig } fro
 import { evaluateWork } from "../test-evaluator.js";
 import { collectTrends, listTopics, getTopic } from "../services/trend-research.js";
 import { updateTopic } from "../db/topics-repo.js";
+import { getAccount } from "../db/accounts-repo.js";
 import { createArticle } from "../db/articles-repo.js";
 import { createScript } from "../db/scripts-repo.js";
 import { generateArticleFromTopic, generateScriptFromArticle } from "../services/content-generator.js";
@@ -992,6 +993,12 @@ apiRoutes.post("/api/works/:id/session", async (c) => {
     const work = await getWork(id);
     if (!work) return c.json({ error: "Work not found" }, 404);
 
+    // Look up account tone profile for style injection
+    const account = work.accountId ? getAccount(work.accountId) : undefined;
+    const toneInjection = account
+      ? `\n## 账号风格要求（请严格遵循）\n账号名称：${account.name}\n平台：${account.platform === "douyin" ? "抖音" : account.platform === "xiaohongshu" ? "小红书" : account.platform}\n这是该账号的风格配置，请据此调整你的创作输出：\n${JSON.stringify(account.tone_profile, null, 2)}\n`
+      : "";
+
     const steps = Object.entries(work.pipeline);
     const pendingStep = steps.find(([, s]) => s.status === "pending" || s.status === "active");
     const stepName = pendingStep ? pendingStep[1].name : steps[0]?.[1]?.name ?? "创作";
@@ -1000,6 +1007,7 @@ apiRoutes.post("/api/works/:id/session", async (c) => {
       `你是一个内容创作助手。你正在帮助用户创作: "${work.title}" (类型: ${work.type})。`,
       `目标平台: ${work.platforms.map((p: any) => typeof p === "string" ? p : p.platform).join(", ")}。`,
       work.topicHint ? `选题方向: ${work.topicHint}` : "",
+      toneInjection,
       ``,
       `当前步骤: "${stepName}"。`,
       `请先向用户确认：简要说明这个步骤你将做什么，询问用户是否有特定方向或要求，等用户确认后再开始工作。`,
@@ -2156,21 +2164,25 @@ apiRoutes.post("/api/topics/:id/convert", async (c) => {
   const topic = getTopic(id);
   if (!topic) return c.json({ error: "Topic not found" }, 404);
 
-  const body = await c.req.json<{ platforms?: string[]; type?: "short-video" | "image-text" }>().catch(() => ({} as { platforms?: string[]; type?: "short-video" | "image-text" }));
+  const body = await c.req.json<{ platforms?: string[]; type?: "short-video" | "image-text"; accountId?: string }>().catch(() => ({} as any));
   const platforms = body.platforms ?? ["douyin", "xiaohongshu"];
   const type = body.type ?? "short-video";
+  const accountId = (body as any).accountId as string | undefined;
+  const account = accountId ? getAccount(accountId) : undefined;
+  const genOpts = { toneProfile: account?.tone_profile };
 
   const work = await createWork({
     title: topic.title,
     type,
     contentCategory: topic.emotion_type as any,
     platforms,
+    accountId: accountId,
     topicHint: [topic.title, topic.description, `情绪：${topic.emotion_type}/${topic.emotion_subtype}`, `标签：${topic.tags.join(",")}`].filter(Boolean).join("\n"),
   });
 
   const platform = platforms[0] ?? "douyin";
-  const article = generateArticleFromTopic(topic, platform);
-  const script = article.then((a) => generateScriptFromArticle(a));
+  const article = generateArticleFromTopic(topic, platform, genOpts);
+  const script = article.then((a) => generateScriptFromArticle(a, 180, genOpts));
 
   const [a, s] = await Promise.all([article, script]);
   try {
@@ -2190,10 +2202,12 @@ apiRoutes.post("/api/topics/:id/convert", async (c) => {
 
 apiRoutes.post("/api/trends/collect", async (c) => {
   const config = await loadConfig();
-  const body = await c.req.json<{ platform?: string; interests?: string[] }>().catch(() => ({}));
+  const body = await c.req.json<{ platform?: string; interests?: string[]; accountId?: string }>().catch(() => ({}));
   const platform = (body as any).platform ?? config.research?.platforms?.[0] ?? "douyin";
   const interests = (body as any).interests ?? config.interests ?? [];
-  const results = await collectTrends([platform], interests);
+  const accountId = (body as any).accountId as string | undefined;
+  const account = accountId ? getAccount(accountId) : undefined;
+  const results = await collectTrends([platform], interests, account?.tone_profile);
   const total = results.reduce((sum, r) => sum + r.topics.length, 0);
   return c.json({ collected: total, platform, topics: results.flatMap(r => r.topics.map(t => ({ id: t.id, title: t.title, heat: t.heat }))) });
 });

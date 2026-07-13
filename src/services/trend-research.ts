@@ -5,6 +5,7 @@ import { createSnapshot } from "../db/trends-repo.js";
 import { createTopic, listTopics } from "../db/topics-repo.js";
 import type { DbTopic } from "../db/types.js";
 import { resolveClaudeCommand } from "../ws-bridge.js";
+import { buildTonePrompt } from "./tone-profile.js";
 
 const execFileAsync = promisify(execFile);
 const SCRIPTS_DIR = join(process.cwd(), "skills", "trend-research", "scripts");
@@ -23,7 +24,7 @@ export async function fetchTrendData(platform: string): Promise<string> {
   }
 }
 
-export async function collectTrends(platforms: string[], interests: string[] = []): Promise<{ platform: string; topics: DbTopic[] }[]> {
+export async function collectTrends(platforms: string[], interests: string[] = [], toneProfile?: Record<string, unknown> | null): Promise<{ platform: string; topics: DbTopic[] }[]> {
   const results: { platform: string; topics: DbTopic[] }[] = [];
   for (const platform of platforms) {
     const raw = await fetchTrendData(platform);
@@ -37,7 +38,7 @@ export async function collectTrends(platforms: string[], interests: string[] = [
       }
     }
     const snapshot = createSnapshot({ platform, snapshot_date: snapshotDate, raw_data: parsedRaw });
-    const topics = await analyzeTrendsWithAgent(platform, raw, interests, snapshot.id);
+    const topics = await analyzeTrendsWithAgent(platform, raw, interests, snapshot.id, toneProfile);
     const created: DbTopic[] = [];
     for (const t of topics) {
       created.push(createTopic({ ...t, snapshot_id: snapshot.id, status: "collected" }));
@@ -47,7 +48,7 @@ export async function collectTrends(platforms: string[], interests: string[] = [
   return results;
 }
 
-function analyzeTrendsWithAgent(platform: string, rawData: string, interests: string[], snapshotId: number): Promise<Omit<DbTopic, "id" | "created_at" | "status">[]> {
+function analyzeTrendsWithAgent(platform: string, rawData: string, interests: string[], snapshotId: number, toneProfile?: Record<string, unknown> | null): Promise<Omit<DbTopic, "id" | "created_at" | "status">[]> {
   return new Promise((resolve) => {
     const platformLabel = platform === "xiaohongshu" ? "小红书" : platform === "douyin" ? "抖音" : platform;
     const interestClause = interests.length
@@ -56,8 +57,10 @@ function analyzeTrendsWithAgent(platform: string, rawData: string, interests: st
     const dataClause = rawData
       ? `\n以下是通过 API 获取的 ${platformLabel} 实时热搜数据，请以此为基础进行分析：\n\`\`\`json\n${rawData.slice(0, 4000)}\n\`\`\`\n`
       : `\n无法通过 API 获取实时数据，请使用 WebSearch 搜索最新热搜信息。搜索："${platformLabel} 爆款内容 趋势 2026" "${platformLabel} 热门话题 最新"\n`;
+    const tonePrefix = buildTonePrompt(toneProfile);
     const prompt = [
       `你是一个专业的社交媒体趋势研究员。请分析 ${platformLabel} 平台当前最热门的内容趋势。`,
+      tonePrefix,
       dataClause,
       interestClause,
       ``,

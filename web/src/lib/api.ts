@@ -325,8 +325,8 @@ export async function cancelTrendResearch(sessionKey: string) {
   return post<{ cancelled: boolean }>(`/api/trends/cancel/${encodeURIComponent(sessionKey)}`, {});
 }
 
-export async function collectTrends(platform?: string, interests?: string[]) {
-  return post<{ collected: number; platform: string; topics: Array<{ id: number; title: string; heat: number }> }>("/api/trends/collect", { platform, interests });
+export async function collectTrends(platform?: string, interests?: string[], accountId?: string) {
+  return post<{ collected: number; platform: string; topics: Array<{ id: number; title: string; heat: number }> }>("/api/trends/collect", { platform, interests, accountId });
 }
 
 // ---------------------------------------------------------------------------
@@ -393,7 +393,7 @@ export async function fetchTopics(platform?: string): Promise<Topic[]> {
   return data.topics;
 }
 
-export async function convertTopicToWork(id: number, opts?: { platforms?: string[]; type?: "short-video" | "image-text" }) {
+export async function convertTopicToWork(id: number, opts?: { platforms?: string[]; type?: "short-video" | "image-text"; accountId?: string }) {
   return post<{ workId: string }>(`/api/topics/${encodeURIComponent(id)}/convert`, opts ?? {});
 }
 
