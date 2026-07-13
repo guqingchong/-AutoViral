@@ -50,6 +50,7 @@
 
   let works: WorkSummary[] = $state([]);
   let loading = $state(true);
+  let loadError = $state(false);
   let filter: "all" | "draft" | "published" = $state("all");
 
   let filteredWorks = $derived.by(() => {
@@ -60,10 +61,12 @@
 
   async function loadWorks() {
     loading = true;
+    loadError = false;
     try {
       works = await fetchWorks();
     } catch {
       works = [];
+      loadError = true;
     } finally {
       loading = false;
     }
@@ -445,6 +448,15 @@
     <div class="loading-state">
       <div class="loader"></div>
       <p>{tt("loading")}</p>
+    </div>
+  <!-- API error -->
+  {:else if loadError}
+    <div class="empty-state error-state">
+      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#e53e3e" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.7">
+        <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+      </svg>
+      <p style="color: #e53e3e;">服务器连接失败，请检查后端是否运行</p>
+      <button class="cta-btn" onclick={() => loadWorks()}>重试</button>
     </div>
   <!-- Empty state -->
   {:else if filteredWorks.length === 0 && works.length === 0}
