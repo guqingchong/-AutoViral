@@ -55,6 +55,7 @@
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^5.0.0",
+    "@types/adm-zip": "^0.5.8",
     "@types/better-sqlite3": "^7.6.12",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.0.0",
