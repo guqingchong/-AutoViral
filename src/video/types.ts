@@ -84,7 +84,7 @@ export interface SubtitleTrack {
 
 /**
  * Transition between layers.
- * @deprecated Transitions are parsed and validated but not yet rendered by the FFmpeg pipeline.
+ * Supported types: fade (crossfade), slide (slide right), wipe (wipe left).
  */
 export interface Transition {
   type: "fade" | "slide" | "wipe";
@@ -96,7 +96,7 @@ export interface Timeline {
   layers: TimelineLayer[];
   audio: AudioTrack[];
   subtitles?: SubtitleTrack;
-  /** Transitions are declared but not yet rendered. */
+  /** Transitions between sequential media layers (rendered via xfade). */
   transitions?: Transition[];
 }
 

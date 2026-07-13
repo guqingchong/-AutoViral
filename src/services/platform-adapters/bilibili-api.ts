@@ -3,12 +3,34 @@
  *
  * Uses the Bilibili Open API with access_key authentication.
  * Configuration: BILIBILI_CLIENT_ID / BILIBILI_CLIENT_SECRET (env).
+ *
+ * Supports both AID (numeric, e.g. "170001" or "av170001") and
+ * BVID (string, e.g. "BV1GJ411x7P7") video identifier formats.
  */
 
 import type { CollectedComment, CollectedMetrics, PlatformAdapter, ReplyResult } from "./types.js";
 import { apiGet, apiPost } from "./fetch-helper.js";
 
 const BASE = "https://api.bilibili.com";
+
+const BVID_RE = /^BV[0-9A-Za-z]{10}$/;
+const AID_RE = /^(?:av)?(\d+)$/i;
+
+/**
+ * Detect whether an external ID is AID (numeric) or BVID (BV… string).
+ * Returns the appropriate query parameter snippet: "aid=…" or "bvid=…".
+ */
+function detectIdParam(externalId: string): string {
+  if (BVID_RE.test(externalId)) {
+    return `bvid=${encodeURIComponent(externalId)}`;
+  }
+  const aidMatch = AID_RE.exec(externalId);
+  if (aidMatch) {
+    return `aid=${aidMatch[1]}`;
+  }
+  // Default to passing as-is via aid (best-effort for legacy or unknown formats)
+  return `aid=${encodeURIComponent(externalId)}`;
+}
 
 export class BilibiliAdapter implements PlatformAdapter {
   readonly platform = "bilibili";
@@ -32,8 +54,9 @@ export class BilibiliAdapter implements PlatformAdapter {
   }
 
   async collectPostMetrics(externalId: string): Promise<CollectedMetrics> {
+    const idParam = detectIdParam(externalId);
     const data = (await apiGet(
-      `${BASE}/x/web-interface/view?aid=${externalId}`
+      `${BASE}/x/web-interface/view?${idParam}`
     )) as { data?: { stat?: { view?: number; like?: number; reply?: number; share?: number; favorite?: number } } };
     const s = data.data?.stat ?? {};
     return {
@@ -51,7 +74,11 @@ export class BilibiliAdapter implements PlatformAdapter {
     externalId: string,
     cursor?: string
   ): Promise<{ comments: CollectedComment[]; nextCursor?: string }> {
-    const params = new URLSearchParams({ oid: externalId, type: "1", ps: "50" });
+    const idParam = detectIdParam(externalId);
+    const params = new URLSearchParams({ type: "1", ps: "50" });
+    // Parse the idParam back into key-value pair for the oid parameter
+    const [idKey, idValue] = idParam.split("=");
+    params.set("oid", decodeURIComponent(idValue));
     if (cursor) params.set("pn", cursor);
     const data = (await apiGet(`${BASE}/x/v2/reply?${params}`)) as {
       data?: { replies?: Array<{ rpid: number; member?: { uname?: string; mid?: string }; content?: { message?: string }; parent?: number }>; page?: { count?: number; num?: number } };

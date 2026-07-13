@@ -27,6 +27,7 @@ import { KuaishouAdapter } from "../services/platform-adapters/kuaishou-api.js";
 import { BilibiliAdapter } from "../services/platform-adapters/bilibili-api.js";
 import { ZhihuAdapter } from "../services/platform-adapters/zhihu-api.js";
 import { WechatAdapter } from "../services/platform-adapters/wechat-api.js";
+import { getCredential } from "../db/platform-credentials-repo.js";
 
 export const analyticsApi = new Hono();
 
@@ -178,10 +179,20 @@ analyticsApi.post("/scheduler/stop", (c) => {
  * Called once at server startup.
  */
 export function registerAllAdapters(): Promise<void> {
-  try { registerAdapter(new KuaishouAdapter()); } catch { /* already registered */ }
-  try { registerAdapter(new BilibiliAdapter()); } catch { /* already registered */ }
-  try { registerAdapter(new ZhihuAdapter()); } catch { /* already registered */ }
-  try { registerAdapter(new WechatAdapter()); } catch { /* already registered */ }
+  // Resolve credentials: DB-stored > env vars > empty string
+  const ka = getCredential("kuaishou", "app_id") ?? process.env["KUASHOU_APP_ID"];
+  const ks = getCredential("kuaishou", "app_secret") ?? process.env["KUASHOU_APP_SECRET"];
+  const bc = getCredential("bilibili", "client_id") ?? process.env["BILIBILI_CLIENT_ID"];
+  const bs = getCredential("bilibili", "client_secret") ?? process.env["BILIBILI_CLIENT_SECRET"];
+  const zc = getCredential("zhihu", "client_id") ?? process.env["ZHIHU_CLIENT_ID"];
+  const zs = getCredential("zhihu", "client_secret") ?? process.env["ZHIHU_CLIENT_SECRET"];
+  const wa = getCredential("wechat", "app_id") ?? process.env["WECHAT_APP_ID"];
+  const ws = getCredential("wechat", "app_secret") ?? process.env["WECHAT_APP_SECRET"];
+
+  try { registerAdapter(new KuaishouAdapter(ka, ks)); } catch { /* already registered */ }
+  try { registerAdapter(new BilibiliAdapter(bc, bs)); } catch { /* already registered */ }
+  try { registerAdapter(new ZhihuAdapter(zc, zs)); } catch { /* already registered */ }
+  try { registerAdapter(new WechatAdapter(wa, ws)); } catch { /* already registered */ }
   // Playwright-based scrapers require a browser — register only if Playwright is available.
   // Dynamic import so it doesn't break if playwright isn't installed.
   return Promise.allSettled([
