@@ -291,14 +291,35 @@ Base: after Phase 6 merge
 - [x] Functional tests: 17 API contract tests (health check, error formats, config CRUD, boundary conditions, content-type validation, endpoint completeness)
 - [x] Performance tests: 13 benchmarks (core read/write p50 latency, 100-row bulk insert/query, DB direct query, build output size)
 
+# Phase 7: Account Management
+
+Branch: `main` (committed directly, no worktree)
+Base: after Phase 4b final testing
+
+## Tasks
+
+- [x] Task 1: Migration v8 — accounts table + works.account_id + indexes
+- [x] Task 2-3: DbAccount type + account_id on DbWork + works-repo adaptation
+- [x] Task 4: accounts-repo.ts CRUD with FK protection on delete
+- [x] Task 5: Accounts API routes (GET/POST/PUT/DELETE /api/accounts) + mount in api.ts
+- [x] Task 6-7: Repo tests (10) + API route tests (13)
+- [x] Task 8-11: Frontend (API wrappers, i18n en+zh, Accounts.svelte page, nav + App.svelte)
+- [x] Task 12: TypeScript compile + Vite build clean
+- [x] Task 13: Full test regression
+
+## Commits
+
+- `b142543` feat(phase7): Account Management
+
 ## Final Test Evidence
 
-- **340/340 tests pass** (62 files)
+- **363/363 tests pass** (64 files)
 - **TypeScript: 0 errors**
-- **Vite build: 171 modules, 389 kB JS + 132 kB CSS**
-- **Integration: 8 pass | Functional: 17 pass | Performance: 13 pass | E2E: 8 pass | Unit: 294 pass**
+- **Vite build: 397 kB JS + 137 kB CSS**
+- **New tests: 23 (10 repo + 13 API)**
+- **Integration: 8 pass | Functional: 19 pass | Performance: 15 pass | E2E: 8 pass | Unit: 313 pass**
 
-## FINAL STATUS: All 7 phases + comprehensive testing complete 🎉
+## FINAL STATUS: All 8 phases + comprehensive testing complete 🎉
 
 | Phase | Plan | Status | Tests |
 |-------|------|--------|-------|
@@ -309,9 +330,10 @@ Base: after Phase 6 merge
 | Phase 4b | RPA Publish (Playwright/Yingdao) | ✅ Completed | 34 |
 | Phase 5 | Analytics + Self-Evolution | ✅ Merged | 27 |
 | Phase 6 | Windows Installer + Docs | ✅ Merged | 15 |
+| Phase 7 | Account Management | ✅ Completed | 23 |
 | Integration | Cross-module workflows | ✅ | 8 |
-| Functional | API contracts / error handling | ✅ | 17 |
-| Performance | Benchmarks / latency | ✅ | 13 |
+| Functional | API contracts / error handling | ✅ | 19 |
+| Performance | Benchmarks / latency | ✅ | 15 |
 | E2E | Full-system scenarios | ✅ | 8 |
-| Unit | All module-level tests | ✅ | 294 |
-| **TOTAL** | | ✅ | **340** |
+| Unit | All module-level tests | ✅ | 313 |
+| **TOTAL** | | ✅ | **363** |

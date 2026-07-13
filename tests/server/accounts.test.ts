@@ -76,6 +76,33 @@ describe("accounts API", () => {
     expect(res.status).toBe(400);
   });
 
+  it("POST /api/accounts rejects whitespace-only name", async () => {
+    const res = await app.request("/api/accounts", {
+      method: "POST",
+      body: JSON.stringify({ name: "   ", platform: "douyin" }),
+      headers: { "Content-Type": "application/json" },
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("POST /api/accounts rejects name longer than 100 characters", async () => {
+    const res = await app.request("/api/accounts", {
+      method: "POST",
+      body: JSON.stringify({ name: "a".repeat(101), platform: "douyin" }),
+      headers: { "Content-Type": "application/json" },
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("POST /api/accounts rejects unsupported platform", async () => {
+    const res = await app.request("/api/accounts", {
+      method: "POST",
+      body: JSON.stringify({ name: "Test", platform: "weibo" }),
+      headers: { "Content-Type": "application/json" },
+    });
+    expect(res.status).toBe(400);
+  });
+
   it("POST /api/accounts rejects missing platform", async () => {
     const res = await app.request("/api/accounts", {
       method: "POST",
@@ -121,6 +148,26 @@ describe("accounts API", () => {
     expect(data.status).toBe("inactive");
   });
 
+  it("PUT /api/accounts/:id updates tone_profile", async () => {
+    const createRes = await app.request("/api/accounts", {
+      method: "POST",
+      body: JSON.stringify({ name: "ToneTest", platform: "douyin" }),
+      headers: { "Content-Type": "application/json" },
+    });
+    const created = await createRes.json();
+    const newTone = { voice: "professional", keywords: ["trendy", "viral"] };
+    const updateRes = await app.request(`/api/accounts/${created.id}`, {
+      method: "PUT",
+      body: JSON.stringify({ tone_profile: newTone }),
+      headers: { "Content-Type": "application/json" },
+    });
+    expect(updateRes.status).toBe(200);
+    const data = await updateRes.json();
+    expect(data.tone_profile).toEqual(newTone);
+    // name should be unchanged
+    expect(data.name).toBe("ToneTest");
+  });
+
   it("PUT /api/accounts/:id returns 404 for nonexistent", async () => {
     const res = await app.request("/api/accounts/nonexistent", {
       method: "PUT",
@@ -160,6 +207,9 @@ describe("accounts API", () => {
     }, []);
     const deleteRes = await app.request(`/api/accounts/${account.id}`, { method: "DELETE" });
     expect(deleteRes.status).toBe(409);
+    const errorBody = await deleteRes.json();
+    expect(errorBody.code).toBe("ACCOUNT_REFERENCED");
+    expect(errorBody.error).toContain("still reference it");
   });
 
   it("DELETE /api/accounts/:id returns 404 for nonexistent", async () => {

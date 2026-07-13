@@ -1,6 +1,8 @@
 import { Hono } from "hono";
 import { randomUUID } from "node:crypto";
 import * as accountsRepo from "../../db/accounts-repo.js";
+import { AccountReferencedError } from "../../db/accounts-repo.js";
+import type { DbAccount } from "../../db/types.js";
 
 export const accountsRoutes = new Hono();
 
@@ -18,11 +20,19 @@ accountsRoutes.get("/:id", (c) => {
   return c.json(account);
 });
 
+const VALID_PLATFORMS = new Set(["douyin", "xiaohongshu"]);
+
 // POST / — create account
 accountsRoutes.post("/", async (c) => {
   const body = await c.req.json<{ name: string; platform: string; tone_profile?: Record<string, unknown> }>();
-  if (!body.name || !body.platform) {
+  if (!body.name?.trim() || !body.platform) {
     return c.json({ error: "name and platform are required" }, 400);
+  }
+  if (body.name.trim().length > 100) {
+    return c.json({ error: "name must be 100 characters or less" }, 400);
+  }
+  if (!VALID_PLATFORMS.has(body.platform)) {
+    return c.json({ error: `unsupported platform: ${body.platform}` }, 400);
   }
   const now = new Date().toISOString();
   const account = accountsRepo.createAccount({
@@ -40,13 +50,13 @@ accountsRoutes.post("/", async (c) => {
 // PUT /:id — update account
 accountsRoutes.put("/:id", async (c) => {
   const id = c.req.param("id");
-  const body = await c.req.json<{ name?: string; platform?: string; tone_profile?: Record<string, unknown>; status?: string }>();
-  const updates: Record<string, unknown> = {};
+  const body = await c.req.json<Partial<DbAccount>>();
+  const updates: Partial<DbAccount> = {};
   if (body.name !== undefined) updates.name = body.name;
   if (body.platform !== undefined) updates.platform = body.platform;
   if (body.tone_profile !== undefined) updates.tone_profile = body.tone_profile;
   if (body.status !== undefined) updates.status = body.status;
-  const account = accountsRepo.updateAccount(id, updates as any);
+  const account = accountsRepo.updateAccount(id, updates);
   if (!account) return c.json({ error: "Account not found" }, 404);
   return c.json(account);
 });
@@ -58,9 +68,9 @@ accountsRoutes.delete("/:id", (c) => {
     const deleted = accountsRepo.deleteAccount(id);
     if (!deleted) return c.json({ error: "Account not found" }, 404);
     return c.json({ deleted: true });
-  } catch (e: any) {
-    if (e.message?.includes("still reference it")) {
-      return c.json({ error: e.message }, 409);
+  } catch (e) {
+    if (e instanceof AccountReferencedError) {
+      return c.json({ error: e.message, code: e.code }, 409);
     }
     return c.json({ error: "Failed to delete account" }, 500);
   }

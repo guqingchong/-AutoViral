@@ -1,8 +1,23 @@
 const BASE = "";
 
+export class ApiError extends Error {
+  constructor(
+    public status: number,
+    public code?: string,
+    message?: string,
+  ) {
+    super(message || `${status}`);
+    this.name = "ApiError";
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, init);
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  if (!res.ok) {
+    let body: Record<string, unknown> = {};
+    try { body = (await res.json()) as Record<string, unknown>; } catch { /* no body */ }
+    throw new ApiError(res.status, body.code as string | undefined, (body.error as string) || `${res.status} ${res.statusText}`);
+  }
   return res.json();
 }
 
