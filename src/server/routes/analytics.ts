@@ -19,7 +19,7 @@ const analyticsRoutes = new Hono();
 
 analyticsRoutes.get("/records", (c) => {
   const records = listPublishRecords();
-  return c.json(records);
+  return c.json({ records });
 });
 
 analyticsRoutes.get("/records/:id/metrics", (c) => {

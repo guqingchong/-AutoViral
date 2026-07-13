@@ -54,8 +54,8 @@
 
   let filteredWorks = $derived.by(() => {
     if (filter === "all") return works;
-    if (filter === "draft") return works.filter(w => w.status !== "ready");
-    return works.filter(w => w.status === "ready");
+    if (filter === "draft") return works.filter(w => w.status !== "published" && w.status !== "failed");
+    return works.filter(w => w.status === "published");
   });
 
   async function loadWorks() {
@@ -69,18 +69,30 @@
     }
   }
 
+  const STATUS_LABELS: Record<string, string> = {
+    draft: "workDraft",
+    researching: "workResearching",
+    planning: "workPlanning",
+    assetting: "workAssetting",
+    assembling: "workAssembling",
+    reviewing: "workReviewing",
+    published: "workPublished",
+    failed: "workFailed",
+  };
+
   function statusLabel(status: string): string {
-    if (status === "ready") return tt("workReady");
-    return tt("workDraft");
+    return tt(STATUS_LABELS[status] ?? "workDraft");
   }
 
   function statusClass(status: string): string {
-    if (status === "ready") return "status-published";
-    return "status-draft";
+    if (status === "published") return "status-published";
+    if (status === "failed") return "status-failed";
+    if (status === "draft") return "status-draft";
+    return "status-in-progress";
   }
 
   function isPublished(status: string): boolean {
-    return status === "ready";
+    return status === "published";
   }
 
   // Mock stats for published works (in real app, fetched from analytics API)
@@ -956,7 +968,9 @@
   }
 
   .status-published { background: var(--success); color: #fff; }
+  .status-failed { background: var(--error); color: #fff; }
   .status-draft { background: rgba(255, 255, 255, 0.12); color: rgba(255, 255, 255, 0.7); }
+  .status-in-progress { background: var(--state-running); color: #fff; }
 
   /* Body */
   .card-body {

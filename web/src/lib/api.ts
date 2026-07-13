@@ -170,7 +170,7 @@ export async function deleteScheduleEntry(id: string): Promise<void> {
 
 export type WorkType = "short-video" | "image-text";
 export type ContentCategory = "anxiety" | "conflict" | "comedy" | "envy" | "other";
-export type WorkStatus = "draft" | "creating" | "ready" | "failed";
+export type WorkStatus = "draft" | "researching" | "planning" | "assetting" | "assembling" | "reviewing" | "published" | "failed";
 
 export interface WorkSummary {
   id: string;
@@ -315,6 +315,18 @@ export async function fetchTrends(platform: string) {
 
 export async function refreshTrends() {
   return post<any>("/api/trends/refresh", {});
+}
+
+export async function refreshTrendsStream(platform: string, interests?: string[]) {
+  return post<{ sessionKey: string; platform: string }>("/api/trends/refresh-stream", { platform, interests });
+}
+
+export async function cancelTrendResearch(sessionKey: string) {
+  return post<{ cancelled: boolean }>(`/api/trends/cancel/${encodeURIComponent(sessionKey)}`, {});
+}
+
+export async function collectTrends() {
+  return post<{ collected: number }>("/api/trends/collect", {});
 }
 
 // ---------------------------------------------------------------------------
@@ -529,8 +541,8 @@ export async function recheckAssetCompliance(id: number): Promise<AssetLibraryIt
 // Template & Render API
 // ---------------------------------------------------------------------------
 
-export function getAnalyticsRecords(): Promise<unknown[]> {
-  return request<unknown[]>("/api/analytics/records");
+export function getAnalyticsRecords(): Promise<{ records: unknown[] }> {
+  return request<{ records: unknown[] }>("/api/analytics/records");
 }
 
 export function getAnalyticsWorks(platform?: string): Promise<unknown[]> {

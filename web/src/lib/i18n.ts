@@ -47,8 +47,12 @@ const translations: Record<Language, Record<string, string>> = {
 
     // Work status
     workDraft: "Draft",
-    workCreating: "Draft",
-    workReady: "Published",
+    workResearching: "Researching",
+    workPlanning: "Planning",
+    workAssetting: "Assetting",
+    workAssembling: "Assembling",
+    workReviewing: "Reviewing",
+    workPublished: "Published",
     workFailed: "Failed",
     monitoring: "Monitoring",
 
@@ -129,6 +133,35 @@ const translations: Record<Language, Record<string, string>> = {
 
     // Research progress
     researchDone: "Research complete",
+
+    // Topics Center
+    topicsTitle: "Topics Center",
+    topicsSubtitle: "AI-powered trend discovery & content angle curation",
+    topicsInputPlaceholder: "What topics are you interested in? e.g. 职场、理财、健身...",
+    topicsStartResearch: "AI Trend Research",
+    topicsResearching: "Researching trends...",
+    topicsManualAdd: "Add Manually",
+    topicsNoTopics: "No topics yet",
+    topicsNoTopicsHint: "Start AI trend research or manually add topics to begin.",
+    topicsCollecting: "Collecting trending data from {platform}...",
+    topicsCollected: "Collected {count} topics",
+    topicsPlatformLabel: "Platform",
+    topicsInterestsLabel: "Interests",
+    topicsInterestsHint: "Comma-separated topics you care about",
+    topicsHeat: "Heat",
+    topicsCompetition: "Competition",
+    topicsOpportunity: "Opportunity",
+    topicsEmotion: "Emotion",
+    topicsConverted: "Converted",
+    topicsConvertToWork: "Convert to Work",
+    topicsDelete: "Delete",
+    topicsResearchFailed: "Research failed, try again",
+    competitionLow: "Low",
+    competitionMid: "Medium",
+    competitionHigh: "High",
+    opportunityGold: "Gold Mine",
+    opportunityBlue: "Blue Ocean",
+    opportunityRed: "Red Sea",
 
     // Explore / Inspiration page
     startResearch: "Research",
@@ -213,7 +246,6 @@ const translations: Record<Language, Record<string, string>> = {
     avatarImported: "Avatar imported.",
     statusPending: "Pending",
     statusRunning: "Running",
-    statusDone: "Done",
     statusFailed: "Failed",
 
     // Asset Library
@@ -455,8 +487,12 @@ const translations: Record<Language, Record<string, string>> = {
 
     // Work status
     workDraft: "草稿",
-    workCreating: "草稿",
-    workReady: "已发布",
+    workResearching: "调研中",
+    workPlanning: "策划中",
+    workAssetting: "素材准备",
+    workAssembling: "合成中",
+    workReviewing: "评审中",
+    workPublished: "已发布",
     workFailed: "失败",
     monitoring: "监测中",
 
@@ -537,6 +573,35 @@ const translations: Record<Language, Record<string, string>> = {
 
     // Research progress
     researchDone: "调研完成",
+
+    // Topics Center
+    topicsTitle: "选题中心",
+    topicsSubtitle: "AI 驱动的趋势发现与内容角度策划",
+    topicsInputPlaceholder: "你关注哪些话题？如：职场、理财、健身...",
+    topicsStartResearch: "AI 趋势调研",
+    topicsResearching: "正在调研趋势...",
+    topicsManualAdd: "手动添加",
+    topicsNoTopics: "暂无选题",
+    topicsNoTopicsHint: "启动 AI 趋势调研或手动添加选题开始创作。",
+    topicsCollecting: "正在从 {platform} 收集趋势数据...",
+    topicsCollected: "已收集 {count} 个选题",
+    topicsPlatformLabel: "平台",
+    topicsInterestsLabel: "关注领域",
+    topicsInterestsHint: "用逗号分隔你关注的话题",
+    topicsHeat: "热度",
+    topicsCompetition: "竞争",
+    topicsOpportunity: "机会",
+    topicsEmotion: "情绪",
+    topicsConverted: "已转换",
+    topicsConvertToWork: "转为作品",
+    topicsDelete: "删除",
+    topicsResearchFailed: "调研失败，请重试",
+    competitionLow: "低",
+    competitionMid: "中",
+    competitionHigh: "高",
+    opportunityGold: "金矿",
+    opportunityBlue: "蓝海",
+    opportunityRed: "红海",
 
     // Explore / Inspiration page
     startResearch: "开始调研",
@@ -621,7 +686,6 @@ const translations: Record<Language, Record<string, string>> = {
     avatarImported: "形象已导入",
     statusPending: "待处理",
     statusRunning: "进行中",
-    statusDone: "完成",
     statusFailed: "失败",
 
     // 素材库
