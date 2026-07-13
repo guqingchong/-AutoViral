@@ -87,7 +87,7 @@ Level 3: 切换到备用服务（Dreamina → OpenRouter Sora / Jimeng）
 **服务可用性检测命令**：
 ```bash
 dreamina user_credit 2>&1 | head -5       # 即梦
-curl -s https://openrouter.ai/api/v1/auth/key -H "Authorization: Bearer $OPENROUTER_API_KEY" | head -1  # OpenRouter
+python3 ~/.claude/skills/asset-generation/scripts/check_environment.py --format summary | grep -i openrouter  # OpenRouter（通过环境检测脚本，避免进程参数泄露密钥）
 python3 -c "from volcenginesdkarkruntime import Ark; print('OK')"  # Jimeng/Ark
 ```
 
