@@ -747,8 +747,20 @@ async function researchTrends(platforms: string[]): Promise<{ collected: string[
   // Load user interests once for all platforms
   const config = await loadConfig();
   const interests = config.interests ?? [];
+  // BUGFIX: user interests are the PRIMARY driver, not a soft suggestion
   const interestClause = interests.length > 0
-    ? `\n用户特别关注以下领域：${interests.join("、")}。请优先覆盖这些领域的趋势，同时也包含其他热门方向。\n`
+    ? [
+        ``,
+        `## 用户关注领域（核心驱动 - 最高优先级）`,
+        ``,
+        `用户指定了以下关注领域：**${interests.join("、")}**`,
+        ``,
+        `**强制规则：**`,
+        `1. 至少 70% 的推荐话题必须直接属于用户关注的领域或其紧密相关子领域`,
+        `2. 每个关注领域至少覆盖 2-3 个话题。如果一个领域太大（如"科技"），请拆分为具体子方向`,
+        `3. 不相关的泛热门话题最多占 30%，用于补充视野`,
+        `4. 如果用户领域偏专业/技术，用该领域的专业视角找趋势，不要强行套用娱乐化情绪模板`,
+      ].join("\n")
     : '';
 
   for (const platform of platforms) {
@@ -756,28 +768,38 @@ async function researchTrends(platforms: string[]): Promise<{ collected: string[
 
     // Run script for real-time data
     const scriptData = await runTrendScript(platform);
+    // BUGFIX: search keywords must include user interests
+    const interestSearchTerms = interests.length
+      ? interests.map(i => `"${platformLabel} ${i} 最新 2026"`).join(" ")
+      : "";
     const dataClause = scriptData
-      ? `\n以下是通过 API 获取的 ${platformLabel} 实时热搜数据，请以此为基础进行分析：\n\`\`\`json\n${scriptData.slice(0, 4000)}\n\`\`\`\n`
-      : `\n无法通过 API 获取实时数据，请使用 WebSearch 搜索最新热搜信息。\n`;
+      ? `\n以下是通过 API 获取的 ${platformLabel} 实时热搜数据。请筛选其中与用户关注领域相关的条目：\n\`\`\`json\n${scriptData.slice(0, 4000)}\n\`\`\`\n`
+      : `\n无法通过 API 获取实时数据。请使用 WebSearch 按以下关键词搜索：\n${interestSearchTerms || `"${platformLabel} 爆款内容 趋势 2026" "${platformLabel} 热门话题 最新"`}\n${interests.length ? `\n**注意**：搜索结果必须围绕用户关注领域展开。不要返回与用户领域无关的泛热门内容。` : ""}\n`;
 
     const prompt = [
-      `你是一个专业的社交媒体趋势研究员。请分析 ${platformLabel} 平台当前最热门的内容趋势。`,
+      `你是一个专业的社交媒体趋势研究员。请分析 ${platformLabel} 平台上用户关注领域的最新内容趋势。`,
       dataClause,
       interestClause,
-      `如果上面的 API 数据不够充分，请使用 WebSearch 补充搜索：`,
-      `- "${platformLabel} 爆款内容 趋势 2026"`,
-      `- "${platformLabel} 热门话题 最新"`,
       ``,
-      `根据所有信息，输出以下 JSON 格式（只输出 JSON，不要其他文字）：`,
+      `## 话题推荐维度（按优先级排序）`,
+      ``,
+      `1. **领域热度**（最高优先级）：这个方向在用户关注领域内的讨论度有多高？`,
+      `2. **信息价值**：是否能给目标观众带来新知或启发？（教程、科普、行业洞察优先于纯娱乐）`,
+      `3. **创作可行性**：用户能否基于这个话题做出有差异化的内容？`,
+      `4. **传播潜力**（辅助参考）：话题本身是否自带传播属性？`,
+      ``,
+      `输出严格 JSON（不要 Markdown，只输出 JSON 对象）：`,
       `{"topics":[{`,
-      `  "title":"话题标题",`,
+      `  "title":"话题标题（必须体现具体领域关键词）",`,
       `  "heat":4,`,
       `  "competition":"中",`,
       `  "opportunity":"金矿",`,
+      `  "emotionType":"信息价值",`,
+      `  "emotionSubtype":"行业分析",`,
       `  "description":"趋势描述和为什么值得做",`,
-      `  "tags":["推荐标签1","推荐标签2","推荐标签3"],`,
-      `  "contentAngles":["切入角度1","切入角度2"],`,
-      `  "exampleHook":"爆款开头示例，如：你绝对想不到...",`,
+      `  "tags":["领域标签1","领域标签2","推荐标签"],`,
+      `  "contentAngles":["从用户领域出发的切入角度1","切入角度2"],`,
+      `  "exampleHook":"爆款开头示例（体现领域特色）",`,
       `  "category":"所属领域"`,
       `}]}`,
       ``,
@@ -786,10 +808,13 @@ async function researchTrends(platforms: string[]): Promise<{ collected: string[
       `- heat 为 1-5 整数`,
       `- competition 为 "低"/"中"/"高"`,
       `- opportunity 为 "金矿"(高热低竞)/"蓝海"(低热低竞)/"红海"(高热高竞)`,
-      `- tags 3-5 个平台推荐标签`,
-      `- contentAngles 2-3 个具体的内容切入角度`,
-      `- exampleHook 一句话的爆款开头示例`,
-      `- category 为话题所属领域（如 美食/科技/穿搭/生活/情感/职场/健身/旅行/宠物/教育）`,
+      `- emotionType 优先使用 "信息价值"/"焦虑"/"愤怒"/"搞笑"/"羡慕"，知识类话题默认 "信息价值"`,
+      `- emotionSubtype 必填，为该情绪或信息类型的具体子类型`,
+      `- tags 3-5 个，必须包含用户关注领域的相关关键词`,
+      `- contentAngles 2-3 个具体的内容切入角度，必须从用户关注领域出发`,
+      `- exampleHook 一句话的爆款开头示例，必须体现领域特色`,
+      `- category 为话题所属领域，优先使用用户关注领域中的分类`,
+      `- **如果用户关注领域较专业，topics 中技术/行业类话题应占比 >= 70%**`,
     ].join("\n");
 
     try {
@@ -890,8 +915,20 @@ apiRoutes.post("/api/trends/refresh-stream", async (c) => {
     const reqInterests = (body as any).interests ?? config.interests ?? [];
     const interests = reqInterests as string[];
     const competitors = ((body as any).competitors ?? []) as string[];
+    // BUGFIX: user interests are the PRIMARY driver, emotion constraint is secondary
     const interestClause = interests.length > 0
-      ? `\n用户特别关注以下领域：${interests.join("、")}。请优先覆盖这些领域的趋势，同时也包含其他热门方向。\n`
+      ? [
+          ``,
+          `## 用户关注领域（核心驱动 - 最高优先级）`,
+          ``,
+          `用户指定了以下关注领域：**${interests.join("、")}**`,
+          ``,
+          `**强制规则：**`,
+          `1. 至少 70% 的推荐话题必须直接属于用户关注的领域或其紧密相关子领域`,
+          `2. 每个关注领域至少覆盖 2-3 个话题。如果一个领域太大，请拆分为具体子方向`,
+          `3. 不相关的泛热门话题最多占 30%，用于补充视野`,
+          `4. 如果用户领域偏专业/技术，用该领域的专业视角找趋势`,
+        ].join("\n")
       : '';
     const competitorClause = competitors.length > 0
       ? `\n用户关注的竞品账号：${competitors.join("、")}。请参考这些账号的内容方向和爆款模式。\n`
@@ -899,9 +936,13 @@ apiRoutes.post("/api/trends/refresh-stream", async (c) => {
 
     // 2. Run script for real-time data
     const scriptData = await runTrendScript(platform);
+    // BUGFIX: search keywords must include user interests
+    const interestSearchTerms = interests.length
+      ? interests.map(i => `"${platformLabel} ${i} 最新 2026"`).join(" ")
+      : "";
     const dataClause = scriptData
-      ? `\n以下是通过 API 获取的 ${platformLabel} 实时热搜数据，请以此为基础进行分析：\n\`\`\`json\n${scriptData.slice(0, 4000)}\n\`\`\`\n`
-      : `\n无法通过 API 获取实时数据，请使用 WebSearch 搜索最新热搜信息。\n`;
+      ? `\n以下是通过 API 获取的 ${platformLabel} 实时热搜数据。请筛选其中与用户关注领域相关的条目：\n\`\`\`json\n${scriptData.slice(0, 4000)}\n\`\`\`\n`
+      : `\n无法通过 API 获取实时数据。请使用 WebSearch 按以下关键词搜索：\n${interestSearchTerms || `"${platformLabel} 爆款内容 趋势 2026" "${platformLabel} 热门话题 最新"`}\n${interests.length ? `\n**注意**：搜索结果必须围绕用户关注领域展开。` : ""}\n`;
 
     // 3. Build enhanced prompt — agent writes files to trends output dir
     const outputDir = join(homedir(), ".autoviral", "trends", platform);
@@ -909,24 +950,26 @@ apiRoutes.post("/api/trends/refresh-stream", async (c) => {
     const reportFile = join(outputDir, "report.md");
 
     const prompt = [
-      `你是一个专业的社交媒体趋势研究员。请分析 ${platformLabel} 平台当前最热门的内容趋势。`,
+      `你是一个专业的社交媒体趋势研究员。请分析 ${platformLabel} 平台上用户关注领域的最新内容趋势。`,
       dataClause,
       interestClause,
       competitorClause,
       ``,
-      `## 核心创作方向（强制执行）`,
+      `## 推荐维度（按优先级排序）`,
       ``,
-      `每个推荐的话题/方向必须能触发以下四种情绪中的至少一种，否则不予推荐：`,
-      `1. **焦虑**（落后焦虑/错过焦虑/被替代焦虑/身份下坠焦虑）— 让观众觉得"我是不是落后了"`,
-      `2. **愤怒**（不公/冒犯/双标/欺骗/价值观冲突）— 让观众觉得"这不对/凭什么"`,
-      `3. **搞笑/抽象**（反转/共鸣/错位）— 让观众笑出来想转发`,
-      `4. **羡慕**（想成为/想拥有）— 让观众觉得"我也想要这样的生活"`,
+      `1. **领域热度**（最高优先级）：话题在用户关注领域内的讨论度`,
+      `2. **信息价值**：是否给目标观众带来新知（教程、科普优先于纯娱乐）`,
+      `3. **创作可行性**：用户能否做出有差异化的内容`,
+      `4. **传播潜力**（辅助）：话题自带传播属性`,
       ``,
-      `每个话题必须在 JSON 中标注 "emotionType"（焦虑/愤怒/搞笑/羡慕）和 "emotionSubtype"（具体子类型）。`,
+      `## 情绪标注（自然优先 — 不强制套用）`,
       ``,
-      `如果上面的 API 数据不够充分，请使用 WebSearch 补充搜索：`,
-      `- "${platformLabel} 爆款内容 趋势 2026"`,
-      `- "${platformLabel} 热门话题 最新"`,
+      `当话题自然契合以下情绪时标注对应 emotionType。如果不适合任何情绪框架（如知识科普），emotionType 填 "信息价值"：`,
+      `- 焦虑：话题自带紧迫感时使用`,
+      `- 愤怒：话题涉及争议时使用`,
+      `- 搞笑：话题有幽默元素时使用`,
+      `- 羡慕：话题展示理想生活/成就时使用`,
+      `- 信息价值：知识、教程、科普、行业分析的默认类型`,
       ``,
       `完成分析后，请将结果写入以下两个文件：`,
       ``,
@@ -937,23 +980,24 @@ apiRoutes.post("/api/trends/refresh-stream", async (c) => {
       `  "heat":4,`,
       `  "competition":"中",`,
       `  "opportunity":"金矿",`,
-      `  "emotionType":"焦虑",`,
-      `  "emotionSubtype":"被替代焦虑",`,
+      `  "emotionType":"信息价值",`,
+      `  "emotionSubtype":"行业分析",`,
       `  "description":"趋势描述和为什么值得做",`,
-      `  "tags":["推荐标签1","推荐标签2","推荐标签3"],`,
-      `  "contentAngles":["切入角度1","切入角度2"],`,
-      `  "exampleHook":"爆款开头示例",`,
+      `  "tags":["领域标签1","领域标签2","推荐标签"],`,
+      `  "contentAngles":["从用户领域出发的切入角度1","切入角度2"],`,
+      `  "exampleHook":"爆款开头示例（体现领域特色）",`,
       `  "category":"所属领域"`,
       `}]}`,
       `- topics 至少 10 个`,
       `- heat 为 1-5 整数，competition 为 "低"/"中"/"高"`,
       `- opportunity 为 "金矿"(高热低竞)/"蓝海"(低热低竞)/"红海"(高热高竞)`,
-      `- emotionType 必填，为 "焦虑"/"愤怒"/"搞笑"/"羡慕" 之一`,
-      `- emotionSubtype 必填，为该情绪的具体子类型`,
-      `- tags 3-5 个平台推荐标签`,
-      `- contentAngles 2-3 个具体的内容切入角度`,
-      `- exampleHook 一句话的爆款开头示例`,
-      `- category 为所属领域（美食/科技/穿搭/生活/情感/职场/健身/旅行/宠物/教育）`,
+      `- emotionType 优先使用 "信息价值"/"焦虑"/"愤怒"/"搞笑"/"羡慕"，知识类话题默认 "信息价值"`,
+      `- emotionSubtype 必填，为该情绪或信息类型的具体子类型`,
+      `- tags 3-5 个，必须包含用户关注领域的相关关键词`,
+      `- contentAngles 2-3 个具体的内容切入角度，必须从用户关注领域出发`,
+      `- exampleHook 一句话的爆款开头示例，必须体现领域特色`,
+      `- category 为话题所属领域，优先使用用户关注领域中的分类`,
+      `- **如果用户关注领域较专业，topics 中技术/行业类话题应占比 >= 70%**`,
       ``,
       `**文件 2: ${reportFile}**`,
       `写入一份中文的 Markdown 格式趋势研究报告，包含：`,
