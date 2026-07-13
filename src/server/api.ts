@@ -6,7 +6,9 @@ import { promisify } from "node:util";
 import { join, extname, basename, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import yaml from "js-yaml";
-import { loadConfig, saveConfig, dataDir, type AnalyticsSource } from "../config.js";
+import { loadConfig, saveConfig, dataDir, getConfigDir, type AnalyticsSource } from "../config.js";
+import { exportBackup, importBackup } from "../db/backup.js";
+import { migrateLegacyWorks } from "../db/migrate-legacy.js";
 import {
   listWorks, getWork, createWork,
   updateWork as storeUpdateWork, deleteWork as storeDeleteWork,
@@ -2616,6 +2618,33 @@ apiRoutes.post("/api/works/:id/render", async (c) => {
   } catch (err) {
     return c.json({ error: err instanceof Error ? err.message : "Render failed" }, 500);
   }
+});
+
+// ── Admin: backup, restore, migration ─────────────────────────────────────
+
+apiRoutes.post("/api/admin/backup", async (c) => {
+  const body = await c.req.json<{ path?: string }>().catch(() => ({}));
+  const dest = body?.path ?? join(getConfigDir(), `autoviral-backup-${Date.now()}.zip`);
+  await exportBackup(dest);
+  return c.json({ ok: true, path: dest });
+});
+
+apiRoutes.post("/api/admin/restore", async (c) => {
+  const body = await c.req.json<{ path?: string; overwrite?: boolean }>().catch(() => ({}));
+  const src = body?.path;
+  if (!src) return c.json({ error: "Missing backup path" }, 400);
+  if (!existsSync(src)) return c.json({ error: "Backup file not found" }, 404);
+  const restored = await importBackup(src, { overwrite: body?.overwrite ?? false });
+  return c.json({ ok: true, restored });
+});
+
+apiRoutes.post("/api/admin/migrate", async (c) => {
+  const dryRun = c.req.query("dryRun") === "true";
+  if (dryRun) {
+    return c.json({ dryRun: true, wouldMigrate: true });
+  }
+  const migrated = await migrateLegacyWorks();
+  return c.json({ ok: true, migrated });
 });
 
 // ── Publish API ───────────────────────────────────────────────────────────
