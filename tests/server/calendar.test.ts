@@ -112,6 +112,58 @@ describe("calendar API", () => {
     expect(res.status).toBe(400);
   });
 
+  it("POST /api/calendar rejects title > 100 chars", async () => {
+    const res = await postEntry({ title: "x".repeat(150), scheduled_date: "2026-08-20" });
+    expect(res.status).toBe(400);
+  });
+
+  it("POST /api/calendar rejects invalid platform", async () => {
+    const res = await postEntry({ title: "Test", scheduled_date: "2026-08-20", platform: "twitter" });
+    expect(res.status).toBe(400);
+  });
+
+  it("POST /api/calendar rejects invalid content_type", async () => {
+    const res = await postEntry({ title: "Test", scheduled_date: "2026-08-20", content_type: "long-form" });
+    expect(res.status).toBe(400);
+  });
+
+  it("POST /api/calendar rejects invalid status", async () => {
+    const res = await postEntry({ title: "Test", scheduled_date: "2026-08-20", status: "archived" });
+    expect(res.status).toBe(400);
+  });
+
+  it("POST /api/calendar rejects invalid scheduled_date format", async () => {
+    const res = await postEntry({ title: "Test", scheduled_date: "2026/08/20" });
+    expect(res.status).toBe(400);
+  });
+
+  it("POST /api/calendar rejects invalid scheduled_time format", async () => {
+    const res = await postEntry({ title: "Test", scheduled_date: "2026-08-20", scheduled_time: "2:30 PM" });
+    expect(res.status).toBe(400);
+  });
+
+  it("PUT /api/calendar/:id rejects empty title", async () => {
+    const createRes = await postEntry({ title: "Test", scheduled_date: "2026-08-20" });
+    const created = await createRes.json();
+    const res = await app.request(`/api/calendar/${created.id}`, {
+      method: "PUT",
+      body: JSON.stringify({ title: "   " }),
+      headers: { "Content-Type": "application/json" },
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("PUT /api/calendar/:id rejects invalid status", async () => {
+    const createRes = await postEntry({ title: "Test", scheduled_date: "2026-08-20" });
+    const created = await createRes.json();
+    const res = await app.request(`/api/calendar/${created.id}`, {
+      method: "PUT",
+      body: JSON.stringify({ status: "deleted" }),
+      headers: { "Content-Type": "application/json" },
+    });
+    expect(res.status).toBe(400);
+  });
+
   it("GET /api/calendar/:id returns entry", async () => {
     const createRes = await postEntry({ title: "Test Entry", scheduled_date: "2026-08-20" });
     const created = await createRes.json();

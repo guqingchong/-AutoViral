@@ -114,8 +114,8 @@
       entries = data.entries;
       counts = data.counts;
       accounts = accts;
-    } catch {
-      // silently fail
+    } catch (err: any) {
+      showMessage("error", err.message || String(err));
     } finally {
       loading = false;
     }
@@ -220,7 +220,7 @@
           description: formDescription,
           color: formColor,
         });
-        showMessage("success", t("accountCreated"));
+        showMessage("success", t("scheduleCreated"));
       }
       resetForm();
       await loadData();
@@ -235,7 +235,7 @@
     if (!confirm(t("scheduleDeleteConfirm"))) return;
     try {
       await deleteScheduleEntry(entry.id);
-      showMessage("success", t("accountDeleted"));
+      showMessage("success", t("scheduleDeleted"));
       await loadData();
     } catch (err: any) {
       showMessage("error", err.message || String(err));
@@ -295,7 +295,7 @@
               >
                 <span class="cal-day-num">{cell.day}</span>
                 {#if cell.count > 0}
-                  <span class="cal-dot">{cell.count}</span>
+                  <span class="cal-dot">{cell.count > 9 ? "9+" : cell.count}</span>
                 {/if}
               </div>
             {:else}
@@ -325,9 +325,9 @@
                 {#if entry.platform || entry.content_type}
                   <div class="entry-meta">
                     {#if entry.platform}
-                      <span class="meta-badge">{entry.platform}</span>
+                      <span class="meta-badge">{entry.platform === "douyin" ? t("accountPlatformDouyin") : entry.platform === "xiaohongshu" ? t("accountPlatformXiaohongshu") : entry.platform}</span>
                     {/if}
-                    <span class="meta-badge">{entry.content_type}</span>
+                    <span class="meta-badge">{entry.content_type === "short-video" ? t("shortVideo") : entry.content_type === "image-text" ? t("imageText") : entry.content_type}</span>
                     <span class="status-chip" class:chip-planned={entry.status === "planned"} class:chip-progress={entry.status === "in_progress"} class:chip-done={entry.status === "done"} class:chip-cancelled={entry.status === "cancelled"}>
                       {entry.status === "planned" ? t("statusPlanned") : entry.status === "in_progress" ? t("statusInProgress") : entry.status === "done" ? t("statusDone") : t("statusCancelled")}
                     </span>
@@ -382,8 +382,8 @@
         <label class="field">
           <span class="field-label">{t("scheduleContentType")}</span>
           <select bind:value={formContentType}>
-            <option value="short-video">Short Video</option>
-            <option value="image-text">Image + Text</option>
+            <option value="short-video">{t("shortVideo")}</option>
+            <option value="image-text">{t("imageText")}</option>
           </select>
         </label>
       </div>
@@ -396,6 +396,21 @@
           <option value="cancelled">{t("statusCancelled")}</option>
         </select>
       </label>
+      <div class="field-row">
+        <label class="field">
+          <span class="field-label">{t("scheduleAccount")}</span>
+          <select bind:value={formAccountId}>
+            <option value="">—</option>
+            {#each accounts as a}
+              <option value={a.id}>{a.name} ({a.platform === "douyin" ? t("accountPlatformDouyin") : a.platform === "xiaohongshu" ? t("accountPlatformXiaohongshu") : a.platform})</option>
+            {/each}
+          </select>
+        </label>
+        <label class="field">
+          <span class="field-label">{t("scheduleWork")}</span>
+          <input type="text" bind:value={formWorkId} placeholder="Work ID" />
+        </label>
+      </div>
       <label class="field">
         <span class="field-label">{t("scheduleColor")}</span>
         <div class="color-row">

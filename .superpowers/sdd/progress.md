@@ -341,10 +341,45 @@ Base: after Phase 4b final testing
 | Phase 4b | RPA Publish (Playwright/Yingdao) | ✅ Completed | 34 |
 | Phase 5 | Analytics + Self-Evolution | ✅ Merged | 27 |
 | Phase 6 | Windows Installer + Docs | ✅ Merged | 15 |
-| Phase 7 | Account Management | ✅ Completed | 23 |
+| Phase 7 | Account Management | ✅ Completed | 27 |
+| Phase 8 | Content Calendar & Scheduling | ✅ Completed | 26 |
 | Integration | Cross-module workflows | ✅ | 8 |
 | Functional | API contracts / error handling | ✅ | 19 |
 | Performance | Benchmarks / latency | ✅ | 15 |
 | E2E | Full-system scenarios | ✅ | 8 |
-| Unit | All module-level tests | ✅ | 313 |
-| **TOTAL** | | ✅ | **363** |
+| Unit | All module-level tests | ✅ | 343 |
+| **TOTAL** | | ✅ | **393** |
+
+---
+
+# Phase 8: Content Calendar & Scheduling
+
+Branch: `main` (committed directly, no worktree)
+Base: after Phase 7 Codex fix wave
+
+## Tasks
+
+- [x] Task 1: Migration v9 — content_schedule table + indexes
+- [x] Task 2: DbContentSchedule type in types.ts
+- [x] Task 3: content-schedule-repo.ts (CRUD + date range/month/count/listByWork/listByAccount)
+- [x] Task 4: Calendar API routes (GET range/month/:ym/:id, POST, PUT, DELETE) + mount in api.ts
+- [x] Task 5: Repo tests (12 tests)
+- [x] Task 6: API route tests (14 tests)
+- [x] Task 7: Frontend API wrappers (ScheduleEntry type + 5 functions)
+- [x] Task 8: i18n keys (en + zh, 22 keys each)
+- [x] Task 9: Calendar.svelte page (month grid + day detail + create/edit modal)
+- [x] Task 10: Navigation tab + App.svelte route
+- [x] Task 11: tsc clean + vite build clean
+- [x] Task 12: Full regression (393 tests pass)
+
+## Commits
+
+- `0ea725e` feat(phase8): Content Calendar & Scheduling
+
+## Final Test Evidence
+
+- **393/393 tests pass** (66 files)
+- **TypeScript: 0 errors**
+- **Vite build: 412 kB JS + 145 kB CSS**
+- **New tests: 26 (12 repo + 14 API)**
+

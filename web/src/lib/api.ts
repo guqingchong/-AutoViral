@@ -121,8 +121,8 @@ export interface ScheduleEntry {
   scheduled_date: string;
   scheduled_time?: string;
   platform: string;
-  content_type: string;
-  status: string;
+  content_type: "short-video" | "image-text";
+  status: "planned" | "in_progress" | "done" | "cancelled";
   color?: string;
   created_at: string;
   updated_at: string;
