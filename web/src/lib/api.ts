@@ -186,6 +186,8 @@ export interface WorkSummary {
   topicId?: number;
   templateId?: string;
   digitalHumanId?: string;
+  /** 流水线各阶段状态（作品卡片实时进度条） */
+  pipeline?: Array<{ key: string; name: string; status: string }>;
   updatedAt: string;
 }
 

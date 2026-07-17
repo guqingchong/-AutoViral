@@ -82,6 +82,8 @@ export interface WorkSummary {
   topicId?: number;
   templateId?: string;
   digitalHumanId?: string;
+  /** 流水线各阶段状态（作品卡片实时进度条） */
+  pipeline?: Array<{ key: string; name: string; status: string }>;
   updatedAt: string;
 }
 
@@ -205,6 +207,7 @@ export async function listWorks(): Promise<WorkSummary[]> {
     topicId: w.topic_id,
     templateId: w.template_id,
     digitalHumanId: w.digital_human_id,
+    pipeline: getWorkSteps(w.id).map((s) => ({ key: s.step_key, name: s.name, status: s.status as string })),
     updatedAt: w.updated_at,
   }));
 }
