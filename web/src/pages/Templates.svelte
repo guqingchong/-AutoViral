@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { fetchTemplates, deleteTemplateApi, renderPreview, type Template } from "../lib/api.js";
+  import { fetchTemplates, deleteTemplateApi, renderPreview, updateTemplateApi, type Template } from "../lib/api.js";
   import { t } from "../lib/i18n.js";
   import TemplateEditor from "./TemplateEditor.svelte";
 
@@ -17,6 +17,9 @@
   let genJobId = $state<string | null>(null);
   let genPollTimer: ReturnType<typeof setInterval> | null = null;
   let genMessage = $state("");
+
+  /** preview_url 可能是 /preview-file 视频端点（img 无法渲染），仅图片扩展名可直接用 <img> */
+  const isImageUrl = (u?: string) => !!u && /\.(png|jpe?g|webp|gif)(\?|$)/i.test(u);
 
   async function generateTemplates() {
     generating = true;
@@ -61,7 +64,7 @@
       if (posterRes.ok) {
         const posterData = await posterRes.json();
         if (posterData.posterUrl) {
-          tpl.previewUrl = `${posterData.posterUrl}?t=${Date.now()}`;
+          tpl.posterUrl = `${posterData.posterUrl}?t=${Date.now()}`;
           templates = [...templates];
           return;
         }
@@ -78,37 +81,47 @@
     }
   }
 
-  // Auto-generate posters for all templates on load
+  /** candidate → approved（批量自动制作只会列出 approved 模板）；approved → candidate 停用 */
+  async function setStatus(tpl: Template, status: string) {
+    try {
+      await updateTemplateApi(tpl.id, { status });
+      tpl.status = status;
+      templates = [...templates];
+    } catch (err) {
+      alert("状态更新失败：" + (err instanceof Error ? err.message : String(err)));
+    }
+  }
+
+  // Auto-generate posters for templates that have no displayable image
   async function autoGeneratePosters() {
     for (const tpl of templates) {
-      if (!tpl.previewUrl) {
-        try {
-          // Add cache-buster to force regeneration if poster was stale
-          const res = await fetch(`/api/templates/${tpl.id}/poster?t=${Date.now()}`);
-          if (res.ok) {
-            const data = await res.json();
-            if (data.posterUrl) {
-              tpl.previewUrl = data.posterUrl;
-            }
-          } else {
-            // If poster failed, try preview endpoint
-            try {
-              const pvRes = await fetch(`/api/templates/${tpl.id}/preview`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ variables: {} }),
-              });
-              if (pvRes.ok) {
-                const pvData = await pvRes.json();
-                if (pvData.previewUrl) {
-                  tpl.previewUrl = pvData.previewUrl;
-                }
-              }
-            } catch {}
+      if (tpl.posterUrl || isImageUrl(tpl.previewUrl)) continue;
+      try {
+        // Add cache-buster to force regeneration if poster was stale
+        const res = await fetch(`/api/templates/${tpl.id}/poster?t=${Date.now()}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.posterUrl) {
+            tpl.posterUrl = data.posterUrl;
           }
-        } catch {
-          // ignore poster generation errors
+        } else {
+          // If poster failed, try preview endpoint
+          try {
+            const pvRes = await fetch(`/api/templates/${tpl.id}/preview`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ variables: {} }),
+            });
+            if (pvRes.ok) {
+              const pvData = await pvRes.json();
+              if (pvData.previewUrl) {
+                tpl.previewUrl = pvData.previewUrl;
+              }
+            }
+          } catch {}
         }
+      } catch {
+        // ignore poster generation errors
       }
     }
     templates = [...templates];
@@ -211,12 +224,12 @@
         {#each templates as tpl}
           <article class="template-card">
             <div class="preview">
-              {#if tpl.previewUrl}
-                {#if tpl.previewUrl.endsWith(".mp4")}
-                  <video src={tpl.previewUrl} muted loop playsinline preload="metadata"></video>
-                {:else}
-                  <img src={tpl.previewUrl} alt={tpl.name} class="poster-img" />
-                {/if}
+              {#if tpl.posterUrl}
+                <img src={tpl.posterUrl} alt={tpl.name} class="poster-img" />
+              {:else if isImageUrl(tpl.previewUrl)}
+                <img src={tpl.previewUrl} alt={tpl.name} class="poster-img" />
+              {:else if tpl.previewUrl && tpl.previewUrl.endsWith(".mp4")}
+                <video src={tpl.previewUrl} muted loop playsinline preload="metadata"></video>
               {:else}
                 <div class="preview-placeholder">{t("noPreview")}</div>
               {/if}
@@ -232,6 +245,11 @@
                 {renderingId === tpl.id ? t("rendering") : t("preview")}
               </button>
               <button class="btn-sm secondary" onclick={() => editingId = tpl.id}>{t("edit")}</button>
+              {#if tpl.status === "candidate"}
+                <button class="btn-sm approve" title="设为可用后，批量自动制作可选择此模板" onclick={() => setStatus(tpl, "approved")}>启用</button>
+              {:else if tpl.status === "approved"}
+                <button class="btn-sm secondary" title="停用后批量自动制作将不再列出此模板" onclick={() => setStatus(tpl, "candidate")}>停用</button>
+              {/if}
               <button class="btn-sm secondary" onclick={() => remove(tpl.id)}>{t("delete")}</button>
             </div>
           </article>
@@ -262,6 +280,7 @@
   .actions { display: flex; gap: 0.5rem; margin-top: auto; }
   .btn-sm { flex: 1; padding: 0.45rem 0.6rem; border: none; border-radius: 4px; background: var(--text); color: var(--bg); font-size: var(--size-xs); font-weight: 600; cursor: pointer; }
   .btn-sm.secondary { background: var(--bg-inset); color: var(--text); border: 1px solid var(--border); }
+  .btn-sm.approve { background: var(--accent); color: var(--accent-text); }
   .btn-sm:disabled { opacity: 0.5; cursor: not-allowed; }
   .btn-primary { background: var(--accent); color: var(--accent-text); border: none; border-radius: 4px; padding: 0.5rem 0.9rem; cursor: pointer; }
   .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
