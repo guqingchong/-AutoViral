@@ -6,6 +6,15 @@ import { randomUUID } from "node:crypto";
 import { getFFmpegPath } from "./ffmpeg.js";
 import { parseFFmpegProgress } from "./progress.js";
 import { validateTimeline } from "./schema.js";
+import {
+  escapeDrawtext,
+  escapeFilterPath,
+  getFontPath,
+  lineHeightFor,
+  normalizeColorForFfmpeg,
+  resolveFontPaths,
+  wrapTextLines,
+} from "./draw-utils.js";
 import type { Timeline, TimelineLayer, TimelinePosition, TimelineAnimation } from "./types.js";
 
 export interface RenderOptions {
@@ -32,6 +41,8 @@ interface InputSlot {
 export async function renderTimeline(timeline: Timeline, options: RenderOptions): Promise<RenderResult> {
   const tl = validateTimeline(timeline);
   const ffmpeg = await getFFmpegPath();
+  // 预热渲染字体（复制到纯 ASCII 路径，绕过 Windows FreeType 非 ASCII 路径缺陷）
+  await resolveFontPaths();
   const outputDuration = options.duration ?? computeDuration(tl);
   const renderDuration = options.preview ? Math.min(options.previewDuration ?? 5, outputDuration) : outputDuration;
 
@@ -196,33 +207,11 @@ export function buildFilterComplexArgs(tl: Timeline, inputs: InputSlot[], durati
     const end = start + layer.duration;
 
     if (layer.type === "text" || layer.type === "shape") {
-      let filter = `[base]`;
-
       if (layer.type === "text") {
-        const text = layer.content.replace(/'/g, "'\\''").replace(/:/g, "\\:");
-        const fontSize = layer.fontSize ?? 48;
-        const textColor = layer.color ?? "#FFFFFF";
-        const alignMap: Record<string, string> = { left: "L", center: "C", right: "R" };
-        const ffAlign = alignMap[layer.align ?? "center"] ?? "C";
-        filter += `drawtext=text='${text}':fontsize=${fontSize}:fontcolor=${textColor}:x=${pos.x}:y=${pos.y}:align=${ffAlign}:enable='between(t\\,${start}\\,${end})'`;
-        if (layer.stroke) {
-          filter += `:borderw=${layer.stroke.width}:bordercolor=${layer.stroke.color}`;
-        }
+        videoFilterParts.push(...buildTextDrawFilters(layer, pos, tl.canvas, start, end, "[base]", "[base]"));
       } else {
-        const size = layer.size!;
-        const fill = layer.fill ?? "#FFFFFF";
-        filter += `drawbox=x=${pos.x}:y=${pos.y}:w=${size.width}:h=${size.height}:color=${fill}:t=fill:enable='between(t\\,${start}\\,${end})'`;
+        videoFilterParts.push(buildShapeDrawFilter(layer, pos, tl.canvas, start, end, "[base]", "[base]"));
       }
-
-      if (opacity < 1) {
-        filter += `,format=rgba,colorchannelmixer=aa=${opacity}`;
-      }
-
-      const animFilters = buildAnimationFilters(layer, pos, layer.size ?? { width: 0, height: 0 });
-      if (animFilters) filter += `,${animFilters}`;
-
-      filter += `[base]`;
-      videoFilterParts.push(filter);
     } else {
       // Video/image layers: overlay compositing with optional slide animations
       const srcIdx = getInputIndex(layer, inputs);
@@ -419,6 +408,91 @@ function buildOverlayExpr(
   return `,overlay=x='${xExpr}':y='${yExpr}'`;
 }
 
+// ── Text/Shape 绘制 ─────────────────────────────────────────────────────────
+
+/**
+ * 把一个 text 层转成若干条 drawtext 滤镜链（每行一条，解决 drawtext 不支持
+ * 自动换行的问题）。支持 slidein 入场动画（通过 x/y 表达式实现位置滑动）。
+ * 注意：fade/scale/rotate 类滤镜动画不能用于 text/shape 层 —— 它们作用于
+ * 整条 [base] 视频流，会把整个画面一起变换（历史 bug，已移除）。
+ */
+function buildTextDrawFilters(
+  layer: Extract<TimelineLayer, { type: "text" }>,
+  pos: TimelinePosition,
+  _canvas: { width: number; height: number },
+  start: number,
+  end: number,
+  inLabel: string,
+  outLabel: string,
+): string[] {
+  const fontSize = layer.fontSize ?? 48;
+  const textColor = normalizeColorForFfmpeg(layer.color ?? "#FFFFFF");
+  const font = escapeFilterPath(getFontPath("bold"));
+  const lines = wrapTextLines(layer.content ?? "", fontSize, layer.size?.width);
+  const lineH = lineHeightFor(fontSize);
+  if (lines.length === 0) return [];
+
+  // drawtext 无 align 选项（本机 FFmpeg build 不支持），用 text_w 表达式实现对齐
+  const boxW = layer.size?.width ?? 0;
+  const alignX = (base: number): string => {
+    const a = layer.align ?? "center";
+    if (a === "left" || boxW <= 0) return String(base);
+    if (a === "right") return `${base}+(${boxW}-text_w)`;
+    return `${base}+(${boxW}-text_w)/2`;
+  };
+
+  const slide = layer.animations?.find((a) => a.type === "slidein");
+
+  return lines.map((line, i) => {
+    const escaped = escapeDrawtext(line);
+    let xExpr = alignX(pos.x);
+    let yExpr = String(pos.y + i * lineH);
+    if (slide) {
+      const d = slide.duration && slide.duration > 0 ? slide.duration : 0.5;
+      const off = 60;
+      const prog = `max(0\\,1-(t-${start})/${d})`;
+      switch (slide.direction ?? "bottom") {
+        case "top":
+          yExpr = `${pos.y + i * lineH}-${off}*${prog}`;
+          break;
+        case "left":
+          xExpr = `${alignX(pos.x)}-${off}*${prog}`;
+          break;
+        case "right":
+          xExpr = `${alignX(pos.x)}+${off}*${prog}`;
+          break;
+        default:
+          yExpr = `${pos.y + i * lineH}+${off}*${prog}`;
+          break;
+      }
+    }
+    let f = `${inLabel}drawtext=fontfile='${font}':text='${escaped}':fontsize=${fontSize}:fontcolor=${textColor}:x=${xExpr}:y=${yExpr}`;
+    if (layer.stroke) {
+      f += `:borderw=${layer.stroke.width}:bordercolor=${normalizeColorForFfmpeg(layer.stroke.color)}`;
+    }
+    f += `:enable='between(t\\,${start}\\,${end})'${outLabel}`;
+    return f;
+  });
+}
+
+/**
+ * 把一个 shape 层转成 drawbox 滤镜链。颜色经过 normalizeColorForFfmpeg
+ * 规范化（rgba() 与画布背景预混合成实色，避免半透明滤镜链崩溃）。
+ */
+function buildShapeDrawFilter(
+  layer: Extract<TimelineLayer, { type: "shape" }>,
+  pos: TimelinePosition,
+  canvas: { width: number; height: number; backgroundColor?: string },
+  start: number,
+  end: number,
+  inLabel: string,
+  outLabel: string,
+): string {
+  const size = layer.size!;
+  const fill = normalizeColorForFfmpeg(layer.fill ?? "#FFFFFF", canvas.backgroundColor);
+  return `${inLabel}drawbox=x=${pos.x}:y=${pos.y}:w=${size.width}:h=${size.height}:color=${fill}:t=fill:enable='between(t\\,${start}\\,${end})'${outLabel}`;
+}
+
 // ── Animation Filters ───────────────────────────────────────────────────────
 
 /**
@@ -485,7 +559,7 @@ function getInputIndex(layer: TimelineLayer, inputs: InputSlot[]): number {
 function buildLayerVideoChain(
   layer: TimelineLayer,
   inputIndex: number,
-  canvas: { width: number; height: number },
+  canvas: { width: number; height: number; backgroundColor?: string },
   duration: number,
 ): string {
   const start = layer.start;
@@ -500,19 +574,21 @@ function buildLayerVideoChain(
       chain += `,format=yuv420p`;
     }
   } else if (layer.type === "text") {
-    const text = layer.content.replace(/'/g, "'\\''").replace(/:/g, "\\:");
+    const text = escapeDrawtext(layer.content);
     const fontSize = layer.fontSize ?? 48;
-    const color = layer.color ?? "#FFFFFF";
-    const alignMap: Record<string, string> = { left: "L", center: "C", right: "R" };
-    const ffAlign = alignMap[layer.align ?? "center"] ?? "C";
+    const color = normalizeColorForFfmpeg(layer.color ?? "#FFFFFF");
     const pos = resolvePosition(layer.position, layer.size, canvas);
-    chain = `[${inputIndex}:v]drawtext=text='${text}':fontsize=${fontSize}:fontcolor=${color}:x=${pos.x}:y=${pos.y}:align=${ffAlign}:enable='between(t\\,${start}\\,${end})'`;
+    const font = escapeFilterPath(getFontPath("bold"));
+    const boxW = layer.size?.width ?? 0;
+    const align = layer.align ?? "center";
+    const xExpr = align === "center" && boxW > 0 ? `${pos.x}+(${boxW}-text_w)/2` : align === "right" && boxW > 0 ? `${pos.x}+(${boxW}-text_w)` : String(pos.x);
+    chain = `[${inputIndex}:v]drawtext=fontfile='${font}':text='${text}':fontsize=${fontSize}:fontcolor=${color}:x=${xExpr}:y=${pos.y}:enable='between(t\\,${start}\\,${end})'`;
     if (layer.stroke) {
-      chain += `:borderw=${layer.stroke.width}:bordercolor=${layer.stroke.color}`;
+      chain += `:borderw=${layer.stroke.width}:bordercolor=${normalizeColorForFfmpeg(layer.stroke.color)}`;
     }
   } else if (layer.type === "shape") {
     const size = layer.size!;
-    const fill = layer.fill ?? "#FFFFFF";
+    const fill = normalizeColorForFfmpeg(layer.fill ?? "#FFFFFF", canvas.backgroundColor);
     const pos = resolvePosition(layer.position, layer.size, canvas);
     chain = `[${inputIndex}:v]drawbox=x=${pos.x}:y=${pos.y}:w=${size.width}:h=${size.height}:color=${fill}:t=fill:enable='between(t\\,${start}\\,${end})'`;
   }
