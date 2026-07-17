@@ -101,6 +101,9 @@
             <span class="type-name">{tt("imageText")}</span>
           </button>
         </div>
+        {#if selectedType === "image-text"}
+          <p class="format-warning">⚠ 图文格式仅限在小红书平台发布</p>
+        {/if}
       </div>
 
       <!-- Video Source: only visible when short-video is selected -->
@@ -549,4 +552,5 @@
   .btn-create:hover {
     opacity: 0.85;
   }
+.format-warning { font-size: 0.8rem; color: #f59e0b; background: rgba(245,158,11,0.1); padding: 0.5rem 0.75rem; border-radius: 4px; margin-top: 0.5rem; }
 </style>

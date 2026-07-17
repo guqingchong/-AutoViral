@@ -12,6 +12,16 @@
   let researchMessage = $state("");
   let lastCollectedCount = $state(0);
   let deleteConfirmId = $state<number | null>(null);
+  // Batch automation state
+  let selectedTopicIds = $state<Set<number>>(new Set());
+  let showBatchModal = $state(false);
+  let batchTemplateId = $state<string>("");
+  let batchDigitalHumanId = $state<string>("");
+  let batchType = $state<"short-video" | "image-text">("short-video");
+  let templates = $state<any[]>([]);
+  let avatars = $state<any[]>([]);
+  let batchConverting = $state(false);
+  let batchResult = $state<string>("");
 
   function tt(key: string): string { void lang; return t(key); }
 
@@ -55,22 +65,44 @@
     } catch {}
   }
 
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
+
   async function startAITrendResearch() {
     researchStatus = "collecting";
-    const targetPlatform = platform || "douyin";
-    researchMessage = tt("topicsCollecting").replace("{platform}", targetPlatform === "douyin" ? "抖音" : targetPlatform === "xiaohongshu" ? "小红书" : targetPlatform);
+    const targetPlatform = platform || "";
+    const platformLabel = targetPlatform
+      ? (targetPlatform === "douyin" ? "抖音" : targetPlatform === "xiaohongshu" ? "小红书" : targetPlatform === "bilibili" ? "B站" : targetPlatform === "zhihu" ? "知乎" : targetPlatform === "kuaishou" ? "快手" : targetPlatform)
+      : "全平台";
+    researchMessage = tt("topicsCollecting").replace("{platform}", platformLabel);
     try {
       const interestArr = interests.split(",").map(s => s.trim()).filter(Boolean);
-      // Save interests to config for future sessions
       await updateConfig({ interests: interestArr } as any);
-      // Call synchronous collect endpoint — backend runs Python scripts + Claude analysis
-      const result = await collectTrends(targetPlatform, interestArr);
-      lastCollectedCount = result.collected;
-      // Refresh the topics list from DB
-      await load();
-      researchStatus = "done";
-      researchMessage = tt("topicsCollected").replace("{count}", String(result.collected));
-      setTimeout(() => { if (researchStatus === "done") researchStatus = "idle"; }, 5000);
+      const res = await fetch("/api/trends/collect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ platform: targetPlatform || undefined, interests: interestArr }),
+      });
+      const data = await res.json();
+      if (!data.jobId) throw new Error("No jobId returned");
+      pollTimer = setInterval(async () => {
+        try {
+          const statusRes = await fetch("/api/trends/collect/status/" + data.jobId);
+          const statusData = await statusRes.json();
+          if (statusData.status === "done") {
+            if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+            lastCollectedCount = statusData.collected;
+            await load();
+            researchStatus = "done";
+            researchMessage = tt("topicsCollected").replace("{count}", String(statusData.collected));
+            setTimeout(() => { if (researchStatus === "done") researchStatus = "idle"; }, 5000);
+          } else if (statusData.status === "error") {
+            if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+            researchStatus = "error";
+            researchMessage = statusData.error || tt("topicsResearchFailed");
+            setTimeout(() => { if (researchStatus === "error") researchStatus = "idle"; }, 8000);
+          }
+        } catch {}
+      }, 5000);
     } catch {
       researchStatus = "error";
       researchMessage = tt("topicsResearchFailed");
@@ -79,36 +111,100 @@
   }
 
   async function quickCollect() {
-    researchStatus = "collecting";
-    const targetPlatform = platform || "douyin";
-    researchMessage = tt("topicsCollecting").replace("{platform}", targetPlatform === "douyin" ? "抖音" : targetPlatform === "xiaohongshu" ? "小红书" : targetPlatform);
-    try {
-      const interestArr = interests.split(",").map(s => s.trim()).filter(Boolean);
-      const result = await collectTrends(targetPlatform, interestArr);
-      lastCollectedCount = result.collected;
-      await load();
-      researchStatus = "done";
-      researchMessage = tt("topicsCollected").replace("{count}", String(result.collected));
-      setTimeout(() => { if (researchStatus === "done") researchStatus = "idle"; }, 5000);
-    } catch {
-      researchStatus = "error";
-      researchMessage = tt("topicsResearchFailed");
-      setTimeout(() => { if (researchStatus === "error") researchStatus = "idle"; }, 5000);
-    }
+    await startAITrendResearch();
   }
 
   function cancelResearch() {
-    // Synchronous collect can't be cancelled mid-flight; just reset UI
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
     researchStatus = "idle";
     researchMessage = "";
   }
 
   async function convert(topic: Topic) {
     try {
-      await convertTopicToWork(topic.id, { platforms: [topic.platform || "douyin"], type: "short-video" });
+      const res = await convertTopicToWork(topic.id, { platforms: [topic.platform || "douyin"], type: "short-video" });
       topic.status = "converted";
     } catch {
       alert(t("error") || "转换失败");
+    }
+  }
+
+  function toggleSelect(topicId: number) {
+    if (selectedTopicIds.has(topicId)) {
+      selectedTopicIds.delete(topicId);
+    } else {
+      selectedTopicIds.add(topicId);
+    }
+    selectedTopicIds = new Set(selectedTopicIds);
+  }
+
+  function selectAllConverted() {
+    for (const t of topics) {
+      if (t.status !== "converted") {
+        selectedTopicIds.add(t.id);
+      }
+    }
+    selectedTopicIds = new Set(selectedTopicIds);
+  }
+
+  function clearSelection() {
+    selectedTopicIds = new Set();
+  }
+
+  async function openBatchModal() {
+    showBatchModal = true;
+    batchResult = "";
+    // Load templates and avatars for selection
+    try {
+      const tplRes = await fetch("/api/templates?status=approved");
+      if (tplRes.ok) {
+        const data = await tplRes.json();
+        templates = data.templates ?? [];
+      }
+    } catch {}
+    try {
+      const avRes = await fetch("/api/digital-humans/avatars");
+      if (avRes.ok) {
+        const data = await avRes.json();
+        avatars = data.avatars ?? [];
+      }
+    } catch {}
+  }
+
+  async function batchConvert() {
+    if (selectedTopicIds.size === 0) return;
+    batchConverting = true;
+    batchResult = "正在批量创建作品并自动启动流水线...";
+    try {
+      const res = await fetch("/api/topics/batch-convert", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          topicIds: [...selectedTopicIds],
+          templateId: batchTemplateId || undefined,
+          digitalHumanId: batchDigitalHumanId || undefined,
+          type: batchType,
+          platforms: ["douyin", "xiaohongshu"],
+          autoPipeline: true,
+        }),
+      });
+      const data = await res.json();
+      const success = data.results?.filter((r: any) => r.workId).length ?? 0;
+      const failed = data.results?.filter((r: any) => r.error).length ?? 0;
+      batchResult = `完成！成功创建 ${success} 个作品${failed > 0 ? `，失败 ${failed} 个` : ""}。流水线已自动启动。`;
+      // Mark converted topics
+      for (const r of data.results ?? []) {
+        if (r.workId) {
+          const topic = topics.find(t => t.id === r.topicId);
+          if (topic) topic.status = "converted";
+        }
+      }
+      selectedTopicIds = new Set();
+      topics = [...topics];
+    } catch (err) {
+      batchResult = "批量转换失败：" + (err instanceof Error ? err.message : String(err));
+    } finally {
+      batchConverting = false;
     }
   }
 
@@ -241,9 +337,25 @@
       <p class="empty-hint">{tt("topicsNoTopicsHint")}</p>
     </div>
   {:else}
-    <div class="topic-grid">
+    {#if topics.filter(t => t.status !== "converted").length > 0}
+    <div class="batch-bar">
+      <label class="batch-check">
+        <input type="checkbox" onchange={(e) => e.target.checked ? selectAllConverted() : clearSelection()} />
+        全选未转换
+      </label>
+      <span class="batch-count">{selectedTopicIds.size} 个已选</span>
+      <button class="btn-batch" disabled={selectedTopicIds.size === 0} onclick={openBatchModal}>
+        批量转为作品（自动流水线）
+      </button>
+    </div>
+  {/if}
+
+  <div class="topic-grid">
       {#each topics as topic (topic.id)}
         <article class="topic-card" class:converted={topic.status === "converted"}>
+          {#if topic.status !== "converted"}
+            <input type="checkbox" class="topic-checkbox" checked={selectedTopicIds.has(topic.id)} onchange={() => toggleSelect(topic.id)} />
+          {/if}
           <!-- Top Row: Platform + Emotion + Status -->
           <div class="card-top">
             <span class="platform-tag">{topic.platform ?? "通用"}</span>
@@ -342,6 +454,68 @@
     </div>
   {/if}
 </div>
+
+{#if showBatchModal}
+  <div class="batch-overlay" onclick={(e) => { if (e.target.classList.contains("batch-overlay")) showBatchModal = false; }}>
+    <div class="batch-modal">
+      <div class="batch-modal-header">
+        <h2>批量自动制作</h2>
+        <button class="batch-close" onclick={() => showBatchModal = false}>✕</button>
+      </div>
+      <div class="batch-modal-body">
+        {#if batchResult}
+          <p class="batch-result">{batchResult}</p>
+          {#if !batchConverting && batchResult.includes("完成")}
+            <button class="btn-primary" onclick={() => showBatchModal = false}>完成</button>
+          {/if}
+        {:else}
+          <div class="batch-field">
+            <label>内容类型</label>
+            <select bind:value={batchType}>
+              <option value="short-video">短视频</option>
+              <option value="image-text">图文</option>
+            </select>
+          </div>
+          <div class="batch-field">
+            <label>使用模板（可选，选择后将自动执行流水线）</label>
+            <select bind:value={batchTemplateId}>
+              <option value="">不使用模板（手动确认每个环节）</option>
+              {#each templates as tpl}
+                <option value={tpl.id}>{tpl.name}</option>
+              {/each}
+            </select>
+            {#if templates.length === 0}
+              <p class="batch-hint">暂无已批准模板，可前往模板库生成并批准模板</p>
+            {/if}
+          </div>
+          <div class="batch-field">
+            <label>使用数字人（可选）</label>
+            <select bind:value={batchDigitalHumanId}>
+              <option value="">不使用数字人</option>
+              {#each avatars as av}
+                <option value={av.id}>{av.name ?? av.id}</option>
+              {/each}
+            </select>
+            {#if avatars.length === 0}
+              <p class="batch-hint">暂无数字人，可前往数字人页面创建</p>
+            {/if}
+          </div>
+          <div class="batch-info">
+            <p>将选中的 <strong>{selectedTopicIds.size}</strong> 个选题批量转为作品。</p>
+            {#if batchTemplateId || batchDigitalHumanId}
+              <p class="batch-auto-notice">已选择模板/数字人，系统将自动执行完整流水线，无需用户逐步确认。制作完成后可在作品页审核发布。</p>
+            {:else}
+              <p class="batch-hint">选择模板或数字人后可启用全自动流水线模式</p>
+            {/if}
+          </div>
+          <button class="btn-batch-start" disabled={batchConverting} onclick={batchConvert}>
+            {batchConverting ? "创建中..." : `批量创建 ${selectedTopicIds.size} 个作品`}
+          </button>
+        {/if}
+      </div>
+    </div>
+  </div>
+{/if}
 
 <style>
   .topics-page {
@@ -907,6 +1081,94 @@
     font-size: var(--size-xs);
     font-weight: 600;
     cursor: pointer;
+  }
+
+  /* Batch automation styles */
+  .batch-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+    padding: 0.6rem 0.8rem;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+  }
+  .batch-check { display: flex; align-items: center; gap: 0.35rem; font-size: 0.82rem; cursor: pointer; color: var(--text-secondary); }
+  .batch-count { font-size: 0.8rem; color: var(--text-dim); }
+  .btn-batch {
+    margin-left: auto;
+    padding: 0.45rem 0.9rem;
+    background: var(--accent);
+    color: var(--accent-text);
+    border: none;
+    border-radius: 4px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .btn-batch:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .batch-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.55);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    padding: 1rem;
+  }
+  .batch-modal {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    width: 100%;
+    max-width: 440px;
+    box-shadow: var(--shadow-lg, 0 8px 32px rgba(0,0,0,0.3));
+  }
+  .batch-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1rem 1.25rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .batch-modal-header h2 { font-size: 1rem; font-weight: 700; margin: 0; }
+  .batch-close { background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 1.1rem; }
+  .batch-modal-body { padding: 1.25rem; display: flex; flex-direction: column; gap: 1rem; }
+  .batch-field { display: flex; flex-direction: column; gap: 0.35rem; }
+  .batch-field label { font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); }
+  .batch-field select {
+    background: var(--bg-inset);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.45rem 0.6rem;
+    font-size: 0.82rem;
+  }
+  .batch-hint { font-size: 0.72rem; color: var(--text-dim); margin: 0; }
+  .batch-info { padding: 0.6rem; background: var(--bg-inset); border-radius: 4px; }
+  .batch-info p { font-size: 0.8rem; margin: 0 0 0.35rem; color: var(--text-secondary); }
+  .batch-auto-notice { font-size: 0.78rem; color: var(--success); margin-top: 0.5rem; }
+  .batch-result { font-size: 0.85rem; color: var(--text); text-align: center; padding: 1rem 0; }
+  .btn-batch-start {
+    width: 100%;
+    padding: 0.6rem;
+    background: var(--accent);
+    color: var(--accent-text);
+    border: none;
+    border-radius: 4px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .btn-batch-start:disabled { opacity: 0.5; cursor: not-allowed; }
+  .topic-checkbox {
+    position: absolute;
+    top: 0.5rem;
+    left: 0.5rem;
+    z-index: 5;
   }
 
   /* ── Responsive ────────────────────────────── */

@@ -8,6 +8,6 @@ export interface PublishTarget {
 
 export const publishTarget = writable<PublishTarget | null>(null);
 
-export type Tab = "explore" | "works" | "topics" | "digital-humans" | "assets" | "analytics" | "templates" | "jobs" | "publish" | "publishing" | "comments" | "evolution" | "admin" | "accounts" | "calendar";
+export type Tab = "explore" | "works" | "topics" | "digital-humans" | "assets" | "analytics" | "templates" | "jobs" | "publish" | "articles" | "comments" | "evolution" | "admin" | "calendar";
 
 export const activeTab = writable<Tab>("works");

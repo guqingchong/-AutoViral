@@ -1,4 +1,4 @@
-<script lang="ts">
+﻿<script lang="ts">
   import { onMount } from "svelte";
 
   let { show = false, onclose }: { show: boolean; onclose?: () => void } = $props();
@@ -15,6 +15,19 @@
   let model = $state("sonnet");
   let douyinUrl = $state("")
   let memorySyncEnabled = $state(false)
+  let chanjingAppId = $state("");
+  let chanjingSecretKey = $state("");
+  let bailianApiKey = $state("");
+  let minimaxKey = $state("");
+  let pexelsApiKey = $state("");
+  let pixabayApiKey = $state("");
+  let unsplashAccessKey = $state("");
+  let showChjSecret = $state(false);
+  let showBailian = $state(false);
+  let showMinimax = $state(false);
+  let showPexels = $state(false);
+  let showPixabay = $state(false);
+  let showUnsplash = $state(false);
 
   // Show/hide password toggles
   let showAccessKey = $state(false);
@@ -41,6 +54,13 @@
         model = data.model ?? "sonnet";
         douyinUrl = data.douyinUrl ?? ""
         memorySyncEnabled = data.memorySyncEnabled ?? false
+        chanjingAppId = data.chanjingAppId ?? ""
+        chanjingSecretKey = data.chanjingSecretKey ?? ""
+        bailianApiKey = data.bailianApiKey ?? ""
+        minimaxKey = data.minimaxKey ?? ""
+        pexelsApiKey = data.pexelsApiKey ?? ""
+        pixabayApiKey = data.pixabayApiKey ?? ""
+        unsplashAccessKey = data.unsplashAccessKey ?? ""
       }
     } catch {
       // silently fail
@@ -63,6 +83,13 @@
           researchCron,
           model,
           douyinUrl,
+          chanjingAppId,
+          chanjingSecretKey,
+          bailianApiKey,
+          minimaxKey,
+          pexelsApiKey,
+          pixabayApiKey,
+          unsplashAccessKey,
           memorySyncEnabled,
         }),
       });
@@ -252,6 +279,82 @@
                 </button>
               </div>
               <p class="field-hint field-hint--muted">需要配置 EVERMEMOS_API_KEY 环境变量</p>
+            </div>
+          </section>
+
+          <!-- 蝉镜数字人 -->
+          <section class="config-section">
+            <h3 class="section-label">蝉镜数字人</h3>
+            <div class="field-group">
+              <label class="field-label">
+                AppID
+                <div class="input-row">
+                  <input type="text" class="field-input" bind:value={chanjingAppId} placeholder="蝉镜 AppID" />
+                </div>
+              </label>
+              <label class="field-label">
+                SecretKey
+                <div class="input-row">
+                  <input type={showChjSecret ? "text" : "password"} class="field-input" bind:value={chanjingSecretKey} placeholder="蝉镜 SecretKey" />
+                  <button class="toggle-vis" onclick={() => showChjSecret = !showChjSecret} aria-label="切换可见">{showChjSecret ? "隐藏" : "显示"}</button>
+                </div>
+              </label>
+            </div>
+          </section>
+
+          <!-- 百炼 LivePortrait -->
+          <section class="config-section">
+            <h3 class="section-label">百炼 LivePortrait（备用数字人）</h3>
+            <div class="field-group">
+              <label class="field-label">
+                API Key
+                <div class="input-row">
+                  <input type={showBailian ? "text" : "password"} class="field-input" bind:value={bailianApiKey} placeholder="百炼 API Key" />
+                  <button class="toggle-vis" onclick={() => showBailian = !showBailian} aria-label="切换可见">{showBailian ? "隐藏" : "显示"}</button>
+                </div>
+              </label>
+            </div>
+          </section>
+
+          <!-- MiniMax 语音/音乐 -->
+          <section class="config-section">
+            <h3 class="section-label">MiniMax（语音/音乐）</h3>
+            <div class="field-group">
+              <label class="field-label">
+                API Key
+                <div class="input-row">
+                  <input type={showMinimax ? "text" : "password"} class="field-input" bind:value={minimaxKey} placeholder="MiniMax API Key" />
+                  <button class="toggle-vis" onclick={() => showMinimax = !showMinimax} aria-label="切换可见">{showMinimax ? "隐藏" : "显示"}</button>
+                </div>
+              </label>
+            </div>
+          </section>
+
+          <!-- 免费素材库 -->
+          <section class="config-section">
+            <h3 class="section-label">免费素材库（Pexels / Pixabay / Unsplash）</h3>
+            <div class="field-group">
+              <label class="field-label">
+                Pexels API Key
+                <div class="input-row">
+                  <input type={showPexels ? "text" : "password"} class="field-input" bind:value={pexelsApiKey} placeholder="pexels.com/api" />
+                  <button class="toggle-vis" onclick={() => showPexels = !showPexels} aria-label="切换可见">{showPexels ? "隐藏" : "显示"}</button>
+                </div>
+              </label>
+              <label class="field-label">
+                Pixabay API Key
+                <div class="input-row">
+                  <input type={showPixabay ? "text" : "password"} class="field-input" bind:value={pixabayApiKey} placeholder="pixabay.com/api/docs" />
+                  <button class="toggle-vis" onclick={() => showPixabay = !showPixabay} aria-label="切换可见">{showPixabay ? "隐藏" : "显示"}</button>
+                </div>
+              </label>
+              <label class="field-label">
+                Unsplash Access Key
+                <div class="input-row">
+                  <input type={showUnsplash ? "text" : "password"} class="field-input" bind:value={unsplashAccessKey} placeholder="unsplash.com/developers" />
+                  <button class="toggle-vis" onclick={() => showUnsplash = !showUnsplash} aria-label="切换可见">{showUnsplash ? "隐藏" : "显示"}</button>
+                </div>
+              </label>
             </div>
           </section>
         </div>
