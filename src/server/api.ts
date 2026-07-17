@@ -1183,6 +1183,8 @@ async function startWorkSession(id: string): Promise<{ status: string; step?: st
   const steps = Object.entries(work.pipeline);
   const pendingStep = steps.find(([, s]) => s.status === "pending" || s.status === "active");
   const stepName = pendingStep ? pendingStep[1].name : steps[0]?.[1]?.name ?? "创作";
+  const stepKeys = steps.map(([k]) => k);
+  const currentStepKey = pendingStep ? pendingStep[0] : stepKeys[0];
 
   const hasTemplate = !!work.templateId;
   const hasDigitalHuman = !!work.digitalHumanId;
@@ -1195,9 +1197,14 @@ async function startWorkSession(id: string): Promise<{ status: string; step?: st
     hasDigitalHuman ? `使用数字人: ${work.digitalHumanId}` : "",
     toneInjection,
     ``,
-    `当前步骤: "${stepName}"。`,
+    `当前步骤: "${stepName}"（key: ${currentStepKey}）。流水线阶段顺序: ${stepKeys.join(" → ")}。`,
     hasTemplate || hasDigitalHuman
-      ? `**自动化模式**：用户已预先设定好模板和数字人，请直接执行当前步骤，不要询问用户确认。执行完毕后自动进入下一步骤。`
+      ? [
+          `**自动化模式**：用户已预先设定好模板和数字人，请直接执行当前步骤，不要询问用户确认。`,
+          `完成当前步骤后，必须调用以下命令推进流水线（把 NEXT_STEP 替换为下一阶段 key）：`,
+          `curl -X POST http://localhost:3271/api/works/${id}/pipeline/advance -H "Content-Type: application/json" -d '{"completedStep":"${currentStepKey}","nextStep":"NEXT_STEP"}'`,
+          `推进后系统会自动给你发送继续指令，请接着执行下一阶段，如此循环直到最后一个阶段完成。`,
+        ].join("\n")
       : `请先向用户确认：简要说明这个步骤你将做什么，询问用户是否有特定方向或要求，等用户确认后再开始工作。不要直接开始执行，先和用户沟通。`,
   ].filter(Boolean).join("\n");
 
@@ -2132,6 +2139,24 @@ apiRoutes.post("/api/works/:id/pipeline/advance", async (c) => {
           session.messageHistory.push(dividerBlock as any);
         }
       }
+
+      // 关键续命：本端点是 agent 回合中通过 curl 调用的——其 CLI 进程在回合
+      // 结束后就会退出。后台等待回合完成，然后发送继续指令（--resume 恢复
+      // 上下文），驱动流水线自动走完全程，否则作品会停滞在下一阶段开头。
+      if (wsBridge) {
+        const stepNameForPrompt = stepName;
+        (async () => {
+          await waitForCreatorIdle(id, 600_000);
+          const session = wsBridge.getSession(id);
+          // 仅在会话仍可恢复时续命（无会话说明用户未开启过 agent，跳过）
+          if (session && (session.cliSessionId || session.messageHistory.length > 0)) {
+            await wsBridge.sendMessage(
+              id,
+              `Pipeline 已推进到「${stepNameForPrompt}」阶段。请继续执行该阶段的工作，完成后再次调用 pipeline/advance 推进到下一阶段。`,
+            );
+          }
+        })().catch((err) => log("error", "api", "pipeline_continue_failed", id, { error: (err as Error).message }));
+      }
     }
 
     await storeUpdateWork(id, { pipeline: work.pipeline });
@@ -2566,11 +2591,16 @@ async function runBatchConvert(
   const platforms = body.platforms ?? ["douyin", "xiaohongshu"];
   const type = body.type ?? "short-video";
 
-  for (const item of job.items) {
+  // 并行创作：2 条处理链同时跑（每条链内含 2 次 LLM 调用 + 会话启动）。
+  // 并发度 2 是 LLM 订阅并发与本机 CPU（后续 FFmpeg 渲染）的保守平衡。
+  const CONCURRENCY = 2;
+  const queue = [...job.items];
+
+  const processItem = async (item: BatchConvertItem): Promise<void> => {
     try {
       item.stage = "creating";
       const topic = getTopic(item.topicId);
-      if (!topic) { item.stage = "error"; item.error = "选题不存在"; continue; }
+      if (!topic) { item.stage = "error"; item.error = "选题不存在"; return; }
       item.title = topic.title;
 
       const work = await createWork({
@@ -2634,7 +2664,17 @@ async function runBatchConvert(
       item.stage = "error";
       item.error = err instanceof Error ? err.message : String(err);
     }
-  }
+  };
+
+  const workers = Array.from({ length: Math.min(CONCURRENCY, queue.length) }, async () => {
+    while (queue.length > 0) {
+      const item = queue.shift();
+      if (!item) break;
+      await processItem(item);
+    }
+  });
+  await Promise.all(workers);
+
   job.status = "done";
   job.finishedAt = Date.now();
 }

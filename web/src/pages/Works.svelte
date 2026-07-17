@@ -59,16 +59,21 @@
     return works.filter(w => w.status === "published");
   });
 
-  async function loadWorks() {
-    loading = true;
-    loadError = false;
+  async function loadWorks(silent = false) {
+    if (!silent) {
+      loading = true;
+      loadError = false;
+    }
     try {
       works = await fetchWorks();
+      if (!silent) loadError = false;
     } catch {
-      works = [];
-      loadError = true;
+      if (!silent) {
+        works = [];
+        loadError = true;
+      }
     } finally {
-      loading = false;
+      if (!silent) loading = false;
     }
   }
 
@@ -189,6 +194,7 @@
   let researchLoading = $state(false);
   let researchSeconds = $state(0);
   let researchTimer: ReturnType<typeof setInterval> | null = null;
+  let worksPollTimer: ReturnType<typeof setInterval> | null = null;
   let showResearchModal = $state(false);
   let configInterval = $state("1h");
   let configModel = $state("sonnet");
@@ -342,9 +348,12 @@
     loadInspirationDirections();
     loadInterests();
     loadConfig();
+    // 静默轮询：流水线进展（agent 后台执行）每 8 秒刷新到卡片上
+    worksPollTimer = setInterval(() => loadWorks(true), 8000);
     return () => {
       unsub();
       if (researchTimer) clearInterval(researchTimer);
+      if (worksPollTimer) clearInterval(worksPollTimer);
     };
   });
 </script>
@@ -537,6 +546,29 @@
                 <span class="card-tag">{platformLabel(p)}</span>
               {/each}
             </div>
+            {#if w.pipeline && w.pipeline.length > 0 && w.pipeline.some((s) => s.status !== "done" && s.status !== "skipped")}
+              {@const activeStep = w.pipeline.find((s) => s.status === "active" || s.status === "evaluating" || s.status === "eval_blocked")}
+              <div class="pipeline-progress" title="流水线实时进度">
+                <div class="pp-bar">
+                  {#each w.pipeline as s}
+                    <span
+                      class="pp-seg"
+                      class:pp-done={s.status === "done" || s.status === "skipped"}
+                      class:pp-active={s.status === "active" || s.status === "evaluating"}
+                      class:pp-blocked={s.status === "eval_blocked"}
+                      title={`${s.name}: ${s.status}`}
+                    ></span>
+                  {/each}
+                </div>
+                <span class="pp-label">
+                  {#if activeStep}
+                    {activeStep.status === "eval_blocked" ? "评审受阻" : "进行中"} · {activeStep.name}
+                  {:else}
+                    等待启动
+                  {/if}
+                </span>
+              </div>
+            {/if}
             {#if isPublished(w.status)}
               {@const stats = getWorkStats(w.id)}
               <div class="card-stats">
@@ -1061,6 +1093,14 @@
     border: 1px dashed var(--border);
     background: transparent;
   }
+  .pipeline-progress { margin-top: 0.45rem; display: flex; align-items: center; gap: 0.5rem; }
+  .pp-bar { flex: 1; display: flex; gap: 2px; height: 4px; }
+  .pp-seg { flex: 1; border-radius: 2px; background: var(--bg-elevated); }
+  .pp-seg.pp-done { background: var(--accent); }
+  .pp-seg.pp-active { background: var(--accent); animation: pp-pulse 1.2s ease-in-out infinite; }
+  .pp-seg.pp-blocked { background: var(--error, #ef4444); }
+  @keyframes pp-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+  .pp-label { font-size: 9px; color: var(--text-dim); white-space: nowrap; }
 
   .card-meta {
     display: flex;
