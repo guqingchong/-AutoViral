@@ -37,6 +37,22 @@
   let creatingAccount = $state(false);
   let acctForm = $state({ name: "", platform: "douyin", username: "", password: "", cookie: "", status: "active" });
   let acctBusy = $state(false);
+  let credentialStatus = $state<Record<string, { keys: string[]; configured: boolean }>>({});
+  let loginBusy = $state<Record<string, boolean>>({});
+
+  /** 平台凭证填写引导（accounts 字段 → 发布器实际读取的 platform_credentials） */
+  const CRED_GUIDES: Record<string, { mode: "rpa" | "api"; fields: { username?: string; cookie: string }; note: string; loginBtn?: boolean }> = {
+    douyin: { mode: "rpa", fields: { cookie: "登录 Cookie（JSON 数组）" }, note: "发布方式：Playwright 浏览器自动化。点击「浏览器登录」人工登录一次，Cookie 自动入库；或手动粘贴浏览器导出的 Cookie JSON。", loginBtn: true },
+    xiaohongshu: { mode: "rpa", fields: { cookie: "登录 Cookie（JSON 数组）" }, note: "发布方式：Playwright 浏览器自动化。点击「浏览器登录」人工登录一次，Cookie 自动入库；或手动粘贴 Cookie JSON。", loginBtn: true },
+    channels: { mode: "rpa", fields: { cookie: "登录 Cookie" }, note: "发布方式：影刀 RPA。粘贴视频号助手登录 Cookie。" },
+    wechat_mp: { mode: "api", fields: { username: "AppID", cookie: "AppSecret" }, note: "发布方式：公众号官方 API。「用户名」填 AppID，下方填 AppSecret（公众平台 → 设置与开发 → 基本配置）。" },
+    kuaishou: { mode: "api", fields: { username: "app_id", cookie: "app_secret" }, note: "发布方式：快手开放平台 API。「用户名」填 app_id，下方填 app_secret。" },
+    zhihu: { mode: "api", fields: { cookie: "access_token" }, note: "发布方式：知乎官方 API。下方填 OAuth access_token。" },
+    bilibili: { mode: "api", fields: { cookie: "完整 Cookie（含 SESSDATA 与 bili_jct）" }, note: "发布方式：B站官方 API。粘贴浏览器完整 Cookie，系统自动解析 SESSDATA / bili_jct。" },
+  };
+  const credGuide = $derived(CRED_GUIDES[acctForm.platform]);
+  /** 账号平台键 → 凭证状态键（wechat_mp → wechat） */
+  function credKeyOf(platform: string): string { return platform === "wechat_mp" ? "wechat" : platform; }
 
   const selectedWork = $derived(works.find((w) => w.id === selectedWorkId));
 
@@ -60,6 +76,34 @@
       const data = await res.json();
       accounts = data.accounts ?? [];
     } catch {}
+  }
+
+  async function loadCredentialStatus() {
+    try {
+      const res = await fetch("/api/accounts/credential-status");
+      const data = await res.json();
+      credentialStatus = data.status ?? {};
+    } catch {}
+  }
+
+  /** RPA 平台：触发浏览器人工登录，成功后 cookie 自动存入 platform_credentials */
+  async function handleBrowserLogin(platform: string) {
+    loginBusy = { ...loginBusy, [platform]: true };
+    showMessage("success", `正在打开${platformLabel(platform)}登录页，请在浏览器中完成登录…`);
+    try {
+      const res = await fetch(`/api/accounts/login/${platform}`, { method: "POST" });
+      const data = await res.json();
+      if (data.success) {
+        showMessage("success", `${platformLabel(platform)} 登录成功，Cookie 已保存，发布链路已就绪`);
+      } else {
+        showMessage("error", `${platformLabel(platform)} 登录未完成：${data.error ?? "已取消或超时"}`);
+      }
+    } catch (err) {
+      showMessage("error", `登录失败：${String(err)}`);
+    } finally {
+      loginBusy = { ...loginBusy, [platform]: false };
+      await loadCredentialStatus();
+    }
   }
 
   async function loadRecords() {
@@ -169,22 +213,29 @@
     if (!acctForm.name.trim()) return;
     acctBusy = true;
     try {
+      let bridged: string[] = [];
       if (editingAccount) {
-        await fetch(`/api/accounts/${editingAccount.id}`, {
+        const res = await fetch(`/api/accounts/${editingAccount.id}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(acctForm),
         });
+        const data = await res.json();
+        bridged = data.bridgedCredentials ?? [];
       } else {
-        await fetch("/api/accounts", {
-          method: "PUT" === "POST" ? "POST" : "POST",
+        const res = await fetch("/api/accounts", {
+          method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ ...acctForm, tone_profile: {} }),
         });
+        const data = await res.json();
+        bridged = data.bridgedCredentials ?? [];
       }
-      showMessage("success", "账号已保存");
+      showMessage("success", bridged.length > 0
+        ? `账号已保存，发布凭证已同步（${bridged.join("、")}）`
+        : "账号已保存");
       resetForm();
-      await loadAccounts();
+      await Promise.all([loadAccounts(), loadCredentialStatus()]);
     } catch (err) {
       showMessage("error", "保存失败: " + String(err));
     } finally {
@@ -213,7 +264,7 @@
   }
 
   onMount(async () => {
-    await Promise.all([loadWorks(), loadAccounts()]);
+    await Promise.all([loadWorks(), loadAccounts(), loadCredentialStatus()]);
     if (!destroyed) loading = false;
     return () => { destroyed = true; };
   });
@@ -416,12 +467,22 @@
               </select>
             </label>
           </div>
+          {#if credGuide}
+            <div class="cred-guide" data-mode={credGuide.mode}>
+              <span class="cg-mode">{credGuide.mode === "api" ? "官方 API 发布" : "浏览器自动化发布"}</span>
+              <p>{credGuide.note}</p>
+              {#if credGuide.loginBtn}
+                <button class="btn-login" disabled={loginBusy[acctForm.platform]} onclick={() => handleBrowserLogin(acctForm.platform)}>
+                  {loginBusy[acctForm.platform] ? "等待登录中…" : "🌐 浏览器登录（推荐）"}
+                </button>
+              {/if}
+            </div>
+          {/if}
           <div class="form-row">
-            <label>用户名/手机号<input type="text" bind:value={acctForm.username} placeholder="登录用户名" /></label>
-            <label>密码<input type="text" bind:value={acctForm.password} placeholder="登录密码" /></label>
-          </div>
-          <div class="form-row">
-            <label>Cookie（可选）<input type="text" bind:value={acctForm.cookie} placeholder="已登录Cookie（用于免密发布）" /></label>
+            {#if credGuide?.fields.username}
+              <label>{credGuide.fields.username}<input type="text" bind:value={acctForm.username} placeholder={credGuide.fields.username} /></label>
+            {/if}
+            <label>{credGuide?.fields.cookie ?? "Cookie（可选）"}<input type="text" bind:value={acctForm.cookie} placeholder={credGuide?.fields.cookie ?? "已登录Cookie（用于免密发布）"} /></label>
             <label>状态
               <select bind:value={acctForm.status}>
                 <option value="active">启用</option>
@@ -438,8 +499,22 @@
 
       <div class="accounts-grid">
         {#each PLATFORMS as p}
+          {@const cred = credentialStatus[credKeyOf(p.key)]}
           <div class="platform-group">
-            <h3 class="platform-title">{p.label}</h3>
+            <h3 class="platform-title">
+              {p.label}
+              {#if cred}
+                <span class="cred-badge" class:cred-ok={cred.configured} class:cred-missing={!cred.configured}
+                  title={cred.configured ? `发布凭证已就绪（${cred.keys.join("、")}）` : "发布凭证未配置，发布将失败"}>
+                  {cred.configured ? "✓ 发布就绪" : "⚠ 未配置凭证"}
+                </span>
+              {/if}
+              {#if CRED_GUIDES[p.key]?.loginBtn}
+                <button class="btn-login-sm" disabled={loginBusy[p.key]} onclick={() => handleBrowserLogin(p.key)}>
+                  {loginBusy[p.key] ? "登录中…" : "浏览器登录"}
+                </button>
+              {/if}
+            </h3>
             <div class="platform-accounts">
               {#if getAccountsForPlatform(p.key).length === 0}
                 <p class="no-acct">暂无账号</p>
@@ -557,7 +632,18 @@
   .btn-cancel { padding: 0.45rem 1rem; background: var(--bg-inset); color: var(--text-secondary); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; font-size: 0.82rem; }
   .accounts-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1rem; }
   .platform-group { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: var(--card-radius); padding: 0.75rem; }
-  .platform-title { font-size: 0.9rem; font-weight: 600; margin: 0 0 0.5rem; }
+  .platform-title { font-size: 0.9rem; font-weight: 600; margin: 0 0 0.5rem; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+  .cred-badge { font-size: 0.62rem; font-weight: 600; padding: 0.1rem 0.4rem; border-radius: 3px; }
+  .cred-badge.cred-ok { background: rgba(34, 197, 94, 0.12); color: var(--success, #22c55e); }
+  .cred-badge.cred-missing { background: rgba(239, 68, 68, 0.1); color: var(--error, #ef4444); }
+  .btn-login-sm { font-size: 0.68rem; padding: 0.15rem 0.5rem; border-radius: 3px; border: 1px solid var(--border); background: var(--bg-inset); color: var(--text-secondary); cursor: pointer; }
+  .btn-login-sm:hover { border-color: var(--accent); color: var(--accent); }
+  .btn-login-sm:disabled { opacity: 0.5; cursor: not-allowed; }
+  .cred-guide { background: var(--accent-soft, rgba(254, 44, 85, 0.06)); border: 1px solid var(--card-border); border-radius: 4px; padding: 0.65rem 0.8rem; margin-bottom: 0.75rem; }
+  .cred-guide p { font-size: 0.78rem; color: var(--text-secondary); margin: 0.3rem 0 0; line-height: 1.5; }
+  .cg-mode { font-size: 0.68rem; font-weight: 700; color: var(--accent); }
+  .btn-login { margin-top: 0.5rem; padding: 0.4rem 0.9rem; border-radius: 4px; border: none; background: var(--accent); color: var(--accent-text); font-size: 0.78rem; font-weight: 600; cursor: pointer; }
+  .btn-login:disabled { opacity: 0.5; cursor: not-allowed; }
   .platform-accounts { display: flex; flex-direction: column; gap: 0.4rem; }
   .no-acct { font-size: 0.78rem; color: var(--text-dim); }
   .acct-row { display: flex; justify-content: space-between; align-items: center; padding: 0.4rem 0.5rem; background: var(--bg-inset); border-radius: 4px; }

@@ -35,8 +35,10 @@ interface WxPublishResponse {
  *   - app_id: 公众号 AppID
  *   - app_secret: 公众号 AppSecret
  *
- * Flow: get access_token -> upload video as permanent material -> create draft
- *       -> submit for publish (freepublish).
+ * Flow: get access_token -> upload cover image (thumb) -> create draft with
+ *       article content -> submit for publish (freepublish).
+ *       草稿正文取自 input.options.content（buildPublishInput 注入的文章内容），
+ *       封面取自 input.coverPath（公众号草稿必须 thumb_media_id）。
  */
 export class WechatOfficialPublisher implements Publisher {
   readonly platform = "wechat";
@@ -66,27 +68,61 @@ export class WechatOfficialPublisher implements Publisher {
     return this.cachedToken;
   }
 
+  /** 纯文本/Markdown 转公众号 HTML（按段落换行包装 <p>，转义 HTML 特殊字符） */
+  private toHtml(raw: string): string {
+    const escaped = raw
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+    return escaped
+      .split(/\n{2,}|\r?\n/)
+      .map((p) => p.trim())
+      .filter((p) => p.length > 0)
+      .map((p) => `<p>${p}</p>`)
+      .join("");
+  }
+
+  /** 上传封面图作为永久图片素材，返回 thumb 用 media_id */
+  private async uploadThumb(token: string, coverPath: string): Promise<string | undefined> {
+    try {
+      const imgBuffer = await readFile(coverPath);
+      const form = new FormData();
+      form.append("media", new Blob([imgBuffer]), "cover.jpg");
+      const res = await fetch(`${BASE}/material/add_material?access_token=${encodeURIComponent(token)}&type=image`, {
+        method: "POST",
+        body: form,
+      });
+      const data = (await res.json()) as WxMediaResponse;
+      return data.media_id;
+    } catch {
+      return undefined;
+    }
+  }
+
   async publish(input: PublishInput): Promise<PublishOutput> {
     try {
       const token = await this.ensureToken();
 
-      // 1. Upload the video as permanent material (type=video)
-      let mediaId: string | undefined;
-      try {
-        const videoBuffer = await readFile(input.videoPath);
-        const form = new FormData();
-        form.append("media", new Blob([videoBuffer]), "video.mp4");
-        const mediaRes = await fetch(`${BASE}/material/add_material?access_token=${encodeURIComponent(token)}&type=video`, {
-          method: "POST",
-          body: form,
-        });
-        const mediaJson = (await mediaRes.json()) as WxMediaResponse;
-        mediaId = mediaJson.media_id;
-      } catch {
-        mediaId = undefined;
+      // 1. 封面图（公众号草稿必填 thumb_media_id）
+      let thumbMediaId: string | undefined;
+      if (input.coverPath) {
+        thumbMediaId = await this.uploadThumb(token, input.coverPath);
+      }
+      if (!thumbMediaId) {
+        return {
+          success: false,
+          error: "公众号发布需要封面图：请确保作品 output/cover.jpg 存在（封面上传失败或缺失）",
+        };
       }
 
-      // 2. Create a draft article embedding the video
+      // 2. 草稿正文：优先文章内容（options.content），退回标题
+      const rawContent =
+        (input.options?.content as string) ??
+        (input.options?.description as string) ??
+        input.title;
+      const htmlContent = this.toHtml(rawContent) || `<p>${input.title}</p>`;
+
+      // 3. Create a draft article
       const draftRes = await fetch(`${BASE}/draft/add?access_token=${encodeURIComponent(token)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -94,8 +130,8 @@ export class WechatOfficialPublisher implements Publisher {
           articles: [
             {
               title: input.title,
-              content: `<p>${input.title}</p>`,
-              thumb_media_id: "",
+              content: htmlContent,
+              thumb_media_id: thumbMediaId,
               need_open_comment: 0,
             },
           ],

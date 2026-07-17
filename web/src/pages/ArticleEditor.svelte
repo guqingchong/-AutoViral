@@ -10,6 +10,9 @@
   let editPlatform = $state("");
   let saving = $state(false);
   let message = $state("");
+  let publishing = $state<Record<string, boolean>>({});
+  let publishResults = $state<Record<string, { ok: boolean; text: string }>>({});
+  let credentialStatus = $state<Record<string, { keys: string[]; configured: boolean }>>({});
   let destroyed = $state(false);
 
   const selected = $derived(articles.find((a) => a.id === selectedId));
@@ -23,6 +26,14 @@
     loading = false;
   }
 
+  async function loadCredentialStatus() {
+    try {
+      const res = await fetch("/api/accounts/credential-status");
+      const data = await res.json();
+      credentialStatus = data.status ?? {};
+    } catch {}
+  }
+
   function selectArticle(id: number) {
     const a = articles.find((x) => x.id === id);
     if (!a) return;
@@ -31,6 +42,7 @@
     editContent = a.content;
     editPlatform = a.platform ?? "";
     message = "";
+    publishResults = {};
   }
 
   async function save() {
@@ -59,7 +71,36 @@
     setTimeout(() => { if (!destroyed) message = ""; }, 3000);
   }
 
-  onMount(() => { load(); return () => { destroyed = true; }; });
+  /** 发布文章到公众号/知乎（经由作品发布链路，文章正文注入 options.content） */
+  async function publishArticle(platform: "wechat_mp" | "zhihu") {
+    const a = selected;
+    if (!a) return;
+    if (!a.work_id) {
+      publishResults = { ...publishResults, [platform]: { ok: false, text: "该文章未关联作品，无法发布" } };
+      return;
+    }
+    publishing = { ...publishing, [platform]: true };
+    publishResults = { ...publishResults, [platform]: undefined as any };
+    try {
+      const res = await fetch(`/api/works/${a.work_id}/publish/${platform}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: editTitle, options: { content: editContent } }),
+      });
+      const data = await res.json();
+      if (data.status === "published") {
+        publishResults = { ...publishResults, [platform]: { ok: true, text: data.postUrl ? `发布成功：${data.postUrl}` : "发布成功" } };
+      } else {
+        publishResults = { ...publishResults, [platform]: { ok: false, text: `发布失败：${data.error ?? "未知错误"}` } };
+      }
+    } catch (err) {
+      publishResults = { ...publishResults, [platform]: { ok: false, text: "发布失败：" + (err instanceof Error ? err.message : String(err)) } };
+    } finally {
+      publishing = { ...publishing, [platform]: false };
+    }
+  }
+
+  onMount(() => { load(); loadCredentialStatus(); return () => { destroyed = true; }; });
 </script>
 
 <div class="article-editor-page">
@@ -96,7 +137,33 @@
           <div class="editor-toolbar">
             <button class="btn-save" disabled={saving} onclick={save}>{saving ? "保存中..." : "保存"}</button>
             {#if message}<span class="msg">{message}</span>{/if}
+            <div class="publish-actions">
+              <span class="pa-label">发布到：</span>
+              <button
+                class="btn-publish"
+                disabled={publishing["wechat_mp"]}
+                title={credentialStatus["wechat"]?.configured ? "发布到微信公众号" : "公众号凭证未配置，请先到 发布 → 账号管理 填写 AppID/AppSecret"}
+                onclick={() => publishArticle("wechat_mp")}>
+                {publishing["wechat_mp"] ? "发布中…" : "公众号"}
+                {#if credentialStatus["wechat"] && !credentialStatus["wechat"].configured}<span class="cred-dot"></span>{/if}
+              </button>
+              <button
+                class="btn-publish"
+                disabled={publishing["zhihu"]}
+                title={credentialStatus["zhihu"]?.configured ? "发布到知乎" : "知乎凭证未配置，请先到 发布 → 账号管理 填写 access_token"}
+                onclick={() => publishArticle("zhihu")}>
+                {publishing["zhihu"] ? "发布中…" : "知乎"}
+                {#if credentialStatus["zhihu"] && !credentialStatus["zhihu"].configured}<span class="cred-dot"></span>{/if}
+              </button>
+            </div>
           </div>
+          {#each Object.entries(publishResults) as [platform, result]}
+            {#if result}
+              <p class="publish-result" class:ok={result.ok} class:fail={!result.ok}>
+                {platform === "wechat_mp" ? "公众号" : "知乎"}：{result.text}
+              </p>
+            {/if}
+          {/each}
           <div class="editor-fields">
             <label>
               <span>标题</span>
@@ -151,7 +218,16 @@
   .badge { font-size: 0.65rem; font-weight: 600; padding: 0.1rem 0.35rem; border-radius: 3px; background: var(--accent-soft); color: var(--text-secondary); }
   .date { font-size: 0.65rem; color: var(--text-dim); }
   .ae-editor { display: flex; flex-direction: column; gap: 0.75rem; }
-  .editor-toolbar { display: flex; align-items: center; gap: 0.75rem; }
+  .editor-toolbar { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+  .publish-actions { display: flex; align-items: center; gap: 0.4rem; margin-left: auto; }
+  .pa-label { font-size: 0.78rem; color: var(--text-dim); }
+  .btn-publish { position: relative; padding: 0.4rem 0.9rem; border-radius: 4px; border: 1px solid var(--border); background: var(--bg-inset); color: var(--text); cursor: pointer; font-size: 0.8rem; font-weight: 600; }
+  .btn-publish:hover { border-color: var(--accent); color: var(--accent); }
+  .btn-publish:disabled { opacity: 0.5; cursor: not-allowed; }
+  .cred-dot { position: absolute; top: -3px; right: -3px; width: 8px; height: 8px; border-radius: 50%; background: var(--error, #ef4444); }
+  .publish-result { font-size: 0.8rem; margin: 0.25rem 0 0; padding: 0.4rem 0.6rem; border-radius: 4px; }
+  .publish-result.ok { color: var(--success, #22c55e); background: rgba(34, 197, 94, 0.08); }
+  .publish-result.fail { color: var(--error, #ef4444); background: rgba(239, 68, 68, 0.08); }
   .btn-save { padding: 0.45rem 1.2rem; border: none; border-radius: 4px; background: var(--accent); color: var(--accent-text); cursor: pointer; font-size: 0.82rem; font-weight: 600; }
   .btn-save:disabled { opacity: 0.5; cursor: not-allowed; }
   .msg { font-size: 0.8rem; color: var(--success); }
