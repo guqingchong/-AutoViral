@@ -33,14 +33,61 @@ export interface DbTemplate {
   updated_at: string;
 }
 
+function normalizeLayer(layer: Record<string, unknown>, i: number): Record<string, unknown> {
+  const l = { ...layer };
+  if (!l.id || typeof l.id !== "string") l.id = `layer_${i}`;
+  if (typeof l.start !== "number") l.start = 0;
+  if (typeof l.duration !== "number") l.duration = 10;
+  if (!l.position || typeof l.position !== "object") l.position = { x: 0, y: 0 };
+  else {
+    const pos = l.position as Record<string, unknown>;
+    if (typeof pos.x !== "number") pos.x = 0;
+    if (typeof pos.y !== "number") pos.y = 0;
+  }
+  if (l.type === "text") {
+    if (!l.content && l.text) l.content = l.text;
+    if (!l.content) l.content = "";
+    const style = l.style as Record<string, unknown> | undefined;
+    if (style) {
+      if (style.fontSize && !l.fontSize) l.fontSize = style.fontSize;
+      if (style.color && !l.color) l.color = style.color;
+      if (style.align && !l.align) l.align = style.align;
+      delete l.style;
+    }
+    if (typeof l.fontSize !== "number") l.fontSize = 40;
+    if (!l.color) l.color = "#FFFFFF";
+    if (!l.align) l.align = "left";
+  }
+  if (l.type === "shape") {
+    if (!l.shape) l.shape = "rect";
+    if (!l.fill && l.color) l.fill = l.color;
+    if (!l.fill) l.fill = "#FFFFFF";
+    if (!l.size || typeof l.size !== "object") l.size = { width: 100, height: 100 };
+    else {
+      const sz = l.size as Record<string, unknown>;
+      if (typeof sz.width !== "number") sz.width = 100;
+      if (typeof sz.height !== "number") sz.height = 100;
+    }
+    delete l.color;
+  }
+  return l;
+}
+
 function rowToTemplate(row: Record<string, unknown>): DbTemplate {
   return {
     id: row.id as string,
     name: row.name as string,
     content_form: (row.content_form as string) || undefined,
-    canvas: fromJson(row.canvas as string) as TemplateCanvas,
+    canvas: (() => {
+      const c = fromJson(row.canvas as string) as TemplateCanvas;
+      if (typeof c.width !== 'number') c.width = 1080;
+      if (typeof c.height !== 'number') c.height = 1920;
+      if (typeof c.fps !== 'number') c.fps = 30;
+      if (!c.backgroundColor) c.backgroundColor = '#0a0a0a';
+      return c;
+    })(),
     variables: fromJson(row.variables as string) as TemplateVariable[],
-    layers: fromJson(row.layers as string) as Record<string, unknown>[],
+    layers: (fromJson(row.layers as string) as Record<string, unknown>[] ?? []).map(normalizeLayer),
     audio: fromJson(row.audio as string) as Record<string, unknown>[],
     subtitles: row.subtitles ? fromJson(row.subtitles as string) as Record<string, unknown> | undefined : undefined,
     transitions: fromJson(row.transitions as string) as Record<string, unknown>[],

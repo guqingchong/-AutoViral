@@ -83,13 +83,21 @@ export class JimengProvider implements GenerateProvider {
   }
 
   async generateImage(opts: ImageOpts): Promise<GenerateResult> {
-    const { prompt, workId, filename } = opts
+    const { workId, filename } = opts
+    let prompt = opts.prompt
 
     if (!prompt || prompt.length === 0) {
       return { success: false, error: 'prompt 不能为空', code: 'INVALID_PARAMS' }
     }
+
+    // Auto-enhance prompt with quality keywords if not already present
+    const qualityKeywords = ['high quality', 'professional', 'detailed', '4K', 'sharp focus', 'masterpiece', 'best quality']
+    const hasQuality = qualityKeywords.some(kw => prompt.toLowerCase().includes(kw.toLowerCase()))
+    if (!hasQuality) {
+      prompt = prompt + ', high quality, professional, detailed, sharp focus, best quality, masterpiece'
+    }
     if (prompt.length > 800) {
-      return { success: false, error: 'prompt 过长(限制 800 字符)', code: 'INVALID_PARAMS' }
+      prompt = prompt.slice(0, 800)
     }
 
     try {

@@ -225,6 +225,8 @@ export async function createWork(input: {
   topicHint?: string;
   topicId?: number;
   accountId?: string;
+  templateId?: string;
+  digitalHumanId?: string;
 }): Promise<Work> {
   await maybeMigrateLegacy();
   const now = new Date().toISOString();
@@ -243,6 +245,8 @@ export async function createWork(input: {
     topic_hint: input.topicHint,
     topic_id: input.topicId,
     account_id: input.accountId,
+    template_id: input.templateId,
+    digital_human_id: input.digitalHumanId,
     tags: [],
     created_at: now,
     updated_at: now,
@@ -336,7 +340,7 @@ export async function listAssets(id: string): Promise<string[]> {
         if (entry.isDirectory()) {
           await walk(fullPath);
         } else {
-          results.push(relative(baseDir, fullPath));
+          results.push(relative(baseDir, fullPath).replace(/\\/g, "/"));
         }
       }
     } catch {
