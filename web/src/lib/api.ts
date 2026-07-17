@@ -635,6 +635,8 @@ export interface Template {
   subtitles?: Record<string, unknown>;
   transitions: Record<string, unknown>[];
   previewUrl?: string;
+  /** poster.png 静态图 URL（存在时由后端返回），模板卡片优先用它展示 */
+  posterUrl?: string;
   status: string;
   createdAt: string;
   updatedAt: string;

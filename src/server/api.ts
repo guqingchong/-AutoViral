@@ -2920,6 +2920,10 @@ apiRoutes.post("/api/assets/:id/compliance", async (c) => {
 const TEMPLATE_DIR = join(dataDir, "shared-assets", "templates");
 
 function templateToApi(t: DbTemplate) {
+  // poster.png 存在时一并返回，前端模板卡片直接显示图片
+  // （preview_url 可能是 /preview-file 视频端点，<img> 无法渲染）
+  const posterPath = join(TEMPLATE_DIR, t.id, "poster.png");
+  const posterUrl = existsSync(posterPath) ? `/api/shared-assets/templates/${t.id}/poster.png` : undefined;
   return {
     id: t.id,
     name: t.name,
@@ -2931,6 +2935,7 @@ function templateToApi(t: DbTemplate) {
     subtitles: t.subtitles,
     transitions: t.transitions,
     previewUrl: t.preview_url,
+    posterUrl,
     status: t.status,
     createdAt: t.created_at,
     updatedAt: t.updated_at,
@@ -3000,6 +3005,21 @@ apiRoutes.get("/api/templates/generate/active", async (c) => {
   } catch {
     return c.json({ active: false });
   }
+});
+
+// GET /api/templates/:id/preview-file — stream the rendered 5s preview mp4
+// （renderTemplatePreview 将 preview_url 设置为此端点，必须存在否则 404）
+apiRoutes.get("/api/templates/:id/preview-file", async (c) => {
+  const id = c.req.param("id");
+  if (!/^[a-zA-Z0-9_-]+$/.test(id)) return c.json({ error: "Invalid template id" }, 400);
+  const previewPath = join(dataDir, "templates", `${id}-preview.mp4`);
+  if (!existsSync(previewPath)) return c.json({ error: "Preview not rendered yet" }, 404);
+  const { createReadStream } = await import("node:fs");
+  const { stat } = await import("node:fs/promises");
+  const s = await stat(previewPath);
+  return new Response(createReadStream(previewPath) as unknown as ReadableStream, {
+    headers: { "Content-Type": "video/mp4", "Content-Length": String(s.size), "Cache-Control": "no-cache" },
+  });
 });
 
 apiRoutes.get("/api/templates", async (c) => {
