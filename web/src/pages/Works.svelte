@@ -184,7 +184,7 @@
   let douyinDirections: TrendDirection[] = $state([]);
   let xhsDirections: TrendDirection[] = $state([]);
   let selectedTrend: TrendDirection | null = $state(null);
-  let inspirationPlatform: "douyin" | "xiaohongshu" = $state("douyin");
+  let inspirationPlatform: string = $state("douyin");
   let interests: string[] = $state([]);
   let researchLoading = $state(false);
   let researchSeconds = $state(0);
@@ -274,32 +274,31 @@
   );
 
   async function loadInspirationDirections() {
-    for (const platform of ["douyin", "xiaohongshu"] as const) {
-      try {
-        const res = await fetch(`/api/trends/${platform}`);
-        if (res.ok) {
-          const data = await res.json();
-          const arr = data.topics ?? data.directions ?? data.trends ?? data.items ?? [];
-          if (Array.isArray(arr)) {
-            const mapped = arr.map((item: any) => ({
-              title: item.title ?? item.name ?? "",
-              heat: Math.min(5, Math.max(1, Number(item.heat ?? item.score ?? 3))),
-              description: item.description ?? item.desc ?? "",
-              tags: Array.isArray(item.tags) ? item.tags : [],
-              contentAngles: Array.isArray(item.contentAngles) ? item.contentAngles : [],
-              exampleHook: item.exampleHook ?? "",
-              opportunity: item.opportunity ?? "",
-              competition: item.competition ?? "",
-              category: item.category ?? "",
-              emotionType: item.emotionType ?? "",
-              emotionSubtype: item.emotionSubtype ?? "",
-            }));
-            if (platform === "douyin") douyinDirections = mapped;
-            else xhsDirections = mapped;
-          }
+    try {
+      const res = await fetch("/api/topics?limit=20");
+      if (res.ok) {
+        const data = await res.json();
+        const arr = data.topics ?? [];
+        if (Array.isArray(arr)) {
+          const mapped = arr.map((item: any) => ({
+            title: item.title ?? "",
+            heat: Math.min(5, Math.max(1, Number(item.heat ?? 3))),
+            description: item.description ?? "",
+            tags: Array.isArray(item.tags) ? item.tags : [],
+            contentAngles: Array.isArray(item.contentAngles) ? item.contentAngles : [],
+            exampleHook: item.exampleHook ?? "",
+            opportunity: item.opportunity ?? "",
+            competition: item.competition ?? "",
+            category: item.category ?? "",
+            emotionType: item.emotionType ?? "",
+            emotionSubtype: item.emotionSubtype ?? "",
+            platform: item.platform ?? "",
+          }));
+          douyinDirections = mapped;
+          xhsDirections = mapped;
         }
-      } catch {}
-    }
+      }
+    } catch {}
   }
 
   async function loadInterests() {

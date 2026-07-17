@@ -392,6 +392,7 @@ const translations: Record<Language, Record<string, string>> = {
 
     // Phase 7: Account Management
     navAccounts: "Accounts",
+    navArticles: "Articles",
     accountsTitle: "Account Management",
     accountName: "Name",
     accountPlatform: "Platform",
@@ -833,6 +834,7 @@ const translations: Record<Language, Record<string, string>> = {
 
     // Phase 7: 账号管理
     navAccounts: "账号",
+    navArticles: "文章",
     accountsTitle: "账号管理",
     accountName: "账号名称",
     accountPlatform: "平台",

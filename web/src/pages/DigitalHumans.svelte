@@ -176,4 +176,7 @@
   .name { font-weight: 600; }
   .badge { text-transform: uppercase; font-size: var(--size-xs); background: var(--accent-soft); padding: 0.15rem 0.4rem; border-radius: 4px; width: fit-content; }
   .meta { font-size: var(--size-sm); color: var(--text-muted); }
+  .config-banner { display: flex; align-items: center; gap: 0.75rem; background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.3); border-radius: 4px; padding: 0.6rem 0.8rem; margin-bottom: 1rem; }
+  .config-banner.configured { background: rgba(34, 197, 94, 0.08); border-color: rgba(34, 197, 94, 0.3); }
+  .banner-text { font-size: 0.82rem; color: var(--text-secondary); flex: 1; }
 </style>

@@ -12,9 +12,8 @@
   import Assets from "./pages/Assets.svelte";
   import Templates from "./pages/Templates.svelte";
   import RenderJobs from "./pages/RenderJobs.svelte";
-  import Publish from "./pages/Publish.svelte";
-  import Publishing from "./pages/Publishing.svelte";
-  import Accounts from "./pages/Accounts.svelte";
+  import PublishCenter from "./pages/PublishCenter.svelte";
+  import ArticleEditor from "./pages/ArticleEditor.svelte";
   import Calendar from "./pages/Calendar.svelte";
   import NewWorkModal from "./components/NewWorkModal.svelte";
   import { fetchConfig, updateConfig, fetchWorks, createWorkApi, type WorkSummary, type ContentCategory } from "./lib/api";
@@ -37,6 +36,17 @@
   let autoRun: boolean = $state(false);
   let saving: boolean = $state(false);
   let settingsMessage: string = $state("");
+  let pexelsApiKey: string = $state("");
+  let pixabayApiKey: string = $state("");
+  let unsplashAccessKey: string = $state("");
+  let jimengAccessKey: string = $state("");
+  let jimengSecretKey: string = $state("");
+  let chanjingAppId: string = $state("");
+  let chanjingSecretKey: string = $state("");
+  let showChanjingKey: boolean = $state(false);
+  let showPexelsKey: boolean = $state(false);
+  let showPixabayKey: boolean = $state(false);
+  let showUnsplashKey: boolean = $state(false);
 
   function openStudio(workId: string) {
     initialPrompt = "";
@@ -135,7 +145,16 @@
     saving = true;
     settingsMessage = "";
     try {
-      await updateConfig({ interval, model, autoRun });
+      await fetch("/api/config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          interval, model, autoRun,
+          pexelsApiKey, pixabayApiKey, unsplashAccessKey,
+          jimengAccessKey, jimengSecretKey,
+          chanjingAppId, chanjingSecretKey,
+        }),
+      });
       settingsMessage = tt("settingsSaved");
       setTimeout(() => { settingsMessage = ""; }, 3000);
     } catch {
@@ -144,6 +163,7 @@
       saving = false;
     }
   }
+
 
   function toggleTheme() {
     theme = theme === "dark" ? "light" : "dark";
@@ -165,6 +185,20 @@
       interval = c.interval;
       model = c.model;
       autoRun = c.autoRun;
+      // Load stock API keys and jimeng keys
+      try {
+        const res = await fetch("/api/config");
+        if (res.ok) {
+          const data = await res.json();
+          pexelsApiKey = data.pexelsApiKey ?? "";
+          pixabayApiKey = data.pixabayApiKey ?? "";
+          unsplashAccessKey = data.unsplashAccessKey ?? "";
+          jimengAccessKey = data.jimengAccessKey ?? "";
+          jimengSecretKey = data.jimengSecretKey ?? "";
+          chanjingAppId = data.chanjingAppId ?? "";
+          chanjingSecretKey = data.chanjingSecretKey ?? "";
+        }
+      } catch {}
     } catch {}
     return () => {
       unsub();
@@ -179,8 +213,7 @@
     { tab: "templates" as Tab, labelKey: "templates" },
     { tab: "jobs" as Tab, labelKey: "renderJobs" },
     { tab: "publish" as Tab, labelKey: "publish" },
-    { tab: "publishing" as Tab, labelKey: "publishing" },
-    { tab: "accounts" as Tab, labelKey: "navAccounts" },
+    { tab: "articles" as Tab, labelKey: "navArticles" },
     { tab: "calendar" as Tab, labelKey: "navCalendar" },
     { tab: "explore" as Tab, labelKey: "explore" },
     { tab: "analytics" as Tab, labelKey: "analytics" },
@@ -238,17 +271,15 @@
     {:else if $activeTab === "digital-humans"}
       <DigitalHumans />
     {:else if $activeTab === "assets"}
-      <Assets />
+      <Assets onOpenSettings={() => { showSettings = true; }} />
     {:else if $activeTab === "templates"}
       <Templates />
     {:else if $activeTab === "jobs"}
       <RenderJobs />
     {:else if $activeTab === "publish"}
-      <Publish />
-    {:else if $activeTab === "publishing"}
-      <Publishing />
-    {:else if $activeTab === "accounts"}
-      <Accounts />
+      <PublishCenter />
+    {:else if $activeTab === "articles"}
+      <ArticleEditor />
     {:else if $activeTab === "calendar"}
       <Calendar />
     {:else if $activeTab === "works"}
@@ -325,6 +356,60 @@
                 <span class="switch-thumb"></span>
               </button>
             </div>
+          </div>
+        </div>
+
+        <div class="field-group">
+          <span class="field-label-upper">素材库 API Key</span>
+          <div class="stack">
+            <label class="field-row">
+              <span class="field-label-sm">Pexels API Key</span>
+              <div class="key-input-row">
+                <input type={showPexelsKey ? "text" : "password"} bind:value={pexelsApiKey} placeholder="可选" class="key-input" />
+                <button class="key-toggle" onclick={() => showPexelsKey = !showPexelsKey}>{showPexelsKey ? "🙈" : "👁"}</button>
+              </div>
+            </label>
+            <label class="field-row">
+              <span class="field-label-sm">Pixabay API Key</span>
+              <div class="key-input-row">
+                <input type={showPixabayKey ? "text" : "password"} bind:value={pixabayApiKey} placeholder="可选" class="key-input" />
+                <button class="key-toggle" onclick={() => showPixabayKey = !showPixabayKey}>{showPixabayKey ? "🙈" : "👁"}</button>
+              </div>
+            </label>
+            <label class="field-row">
+              <span class="field-label-sm">Unsplash Access Key</span>
+              <div class="key-input-row">
+                <input type={showUnsplashKey ? "text" : "password"} bind:value={unsplashAccessKey} placeholder="可选" class="key-input" />
+                <button class="key-toggle" onclick={() => showUnsplashKey = !showUnsplashKey}>{showUnsplashKey ? "🙈" : "👁"}</button>
+              </div>
+            </label>
+            <label class="field-row">
+              <span class="field-label-sm">即梦 AccessKey（AI生图）</span>
+              <input type="text" bind:value={jimengAccessKey} placeholder="火山引擎 AccessKey" class="key-input" />
+            </label>
+            <label class="field-row">
+              <span class="field-label-sm">即梦 SecretKey（AI生图）</span>
+              <input type="text" bind:value={jimengSecretKey} placeholder="火山引擎 SecretKey" class="key-input" />
+            </label>
+            <p class="hint-sm">Pexels/Pixabay/Unsplash 用于素材搜索；即梦用于 AI 生图/生视频。Openverse 无需配置即可使用。</p>
+          </div>
+        </div>
+
+        <div class="field-group">
+          <span class="field-label-upper">数字人 API</span>
+          <div class="stack">
+            <label class="field-row">
+              <span class="field-label-sm">蝉镜 AppId</span>
+              <input type="text" bind:value={chanjingAppId} placeholder="蝉镜平台 AppId" class="key-input" />
+            </label>
+            <label class="field-row">
+              <span class="field-label-sm">蝉镜 SecretKey</span>
+              <div class="key-input-row">
+                <input type={showChanjingKey ? "text" : "password"} bind:value={chanjingSecretKey} placeholder="蝉镜平台 SecretKey" class="key-input" />
+                <button class="key-toggle" onclick={() => showChanjingKey = !showChanjingKey}>{showChanjingKey ? "🙈" : "👁"}</button>
+              </div>
+            </label>
+            <p class="hint-sm">蝉镜 API 用于数字人视频生成。配置后可在"数字人"页面创建和使用数字人。</p>
           </div>
         </div>
 
@@ -807,6 +892,10 @@
     font-weight: 500;
     color: var(--success);
   }
+  .key-input-row { display: flex; gap: 0.3rem; align-items: center; }
+  .key-input { flex: 1; padding: 0.35rem 0.5rem; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-inset); color: var(--text); font-size: 0.8rem; }
+  .key-toggle { padding: 0.3rem 0.5rem; border: 1px solid var(--border); border-radius: 4px; background: none; cursor: pointer; font-size: 0.8rem; }
+  .hint-sm { font-size: 0.72rem; color: var(--text-dim); margin: 0.25rem 0 0; }
 
   /* Buttons */
   .btn-primary {

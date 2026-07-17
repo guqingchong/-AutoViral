@@ -63,6 +63,18 @@
     }
     rendering = true;
     try {
+      // Try poster endpoint first (fast, no host_video needed)
+      const posterRes = await fetch(`/api/templates/${template.id}/poster`);
+      if (posterRes.ok) {
+        const posterData = await posterRes.json();
+        if (posterData.posterUrl) {
+          template.previewUrl = posterData.posterUrl;
+          message = "预览图已生成";
+          rendering = false;
+          return;
+        }
+      }
+      // Fallback: try full video preview (will also fall back to poster internally)
       const defaults: Record<string, string | number> = {};
       for (const v of template.variables ?? []) defaults[v.name] = v.default ?? (v.type === "number" ? 0 : "预览");
       const result = await renderPreview(template.id, defaults);
@@ -121,7 +133,11 @@
       </label>
       {#if template.previewUrl}
         <div class="preview-box">
-          <video src={template.previewUrl} controls muted loop playsinline></video>
+          {#if template.previewUrl.endsWith(".mp4")}
+            <video src={template.previewUrl} controls muted loop playsinline></video>
+          {:else}
+            <img src={template.previewUrl} alt="preview" style="width: 100%; height: 100%; object-fit: cover;" />
+          {/if}
         </div>
       {/if}
     </div>
