@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { fetchTopics, convertTopicToWork, collectTrends, fetchConfig, updateConfig, type Topic } from "../lib/api.js";
   import { t, getLanguage, subscribe } from "../lib/i18n.js";
+  import { activeTab } from "../lib/navigation.js";
 
   let topics = $state<Topic[]>([]);
   let loading = $state(true);
@@ -22,6 +23,9 @@
   let avatars = $state<any[]>([]);
   let batchConverting = $state(false);
   let batchResult = $state<string>("");
+  let batchJob = $state<any | null>(null);
+  let batchJobId = $state<string | null>(null);
+  let batchPollTimer: ReturnType<typeof setInterval> | null = null;
 
   function tt(key: string): string { void lang; return t(key); }
 
@@ -174,7 +178,8 @@
   async function batchConvert() {
     if (selectedTopicIds.size === 0) return;
     batchConverting = true;
-    batchResult = "正在批量创建作品并自动启动流水线...";
+    batchResult = "";
+    batchJob = null;
     try {
       const res = await fetch("/api/topics/batch-convert", {
         method: "POST",
@@ -189,22 +194,60 @@
         }),
       });
       const data = await res.json();
-      const success = data.results?.filter((r: any) => r.workId).length ?? 0;
-      const failed = data.results?.filter((r: any) => r.error).length ?? 0;
-      batchResult = `完成！成功创建 ${success} 个作品${failed > 0 ? `，失败 ${failed} 个` : ""}。流水线已自动启动。`;
-      // Mark converted topics
-      for (const r of data.results ?? []) {
-        if (r.workId) {
-          const topic = topics.find(t => t.id === r.topicId);
-          if (topic) topic.status = "converted";
-        }
+      if (!data.jobId) {
+        batchResult = "批量转换启动失败：" + (data.error ?? "未知错误");
+        batchConverting = false;
+        return;
       }
-      selectedTopicIds = new Set();
-      topics = [...topics];
+      batchJobId = data.jobId;
+      startBatchPolling(data.jobId);
     } catch (err) {
       batchResult = "批量转换失败：" + (err instanceof Error ? err.message : String(err));
-    } finally {
       batchConverting = false;
+    }
+  }
+
+  function startBatchPolling(jobId: string) {
+    if (batchPollTimer) clearInterval(batchPollTimer);
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/topics/batch-status/${jobId}`);
+        if (!res.ok) return;
+        const job = await res.json();
+        batchJob = job;
+        // Mark converted topics as soon as their workId appears
+        for (const item of job.items ?? []) {
+          if (item.workId) {
+            const topic = topics.find(t => t.id === item.topicId);
+            if (topic) topic.status = "converted";
+          }
+        }
+        topics = [...topics];
+        if (job.status === "done") {
+          if (batchPollTimer) { clearInterval(batchPollTimer); batchPollTimer = null; }
+          const ok = job.items.filter((i: any) => i.workId && i.stage !== "error").length;
+          const failed = job.items.filter((i: any) => i.stage === "error").length;
+          batchResult = `全部处理完成：成功 ${ok} 个${failed > 0 ? `，失败 ${failed} 个` : ""}。流水线已在后台自动执行，可在作品页查看进展。`;
+          batchConverting = false;
+          selectedTopicIds = new Set();
+        }
+      } catch {}
+    };
+    poll();
+    batchPollTimer = setInterval(poll, 3000);
+  }
+
+  /** 批量条目阶段显示 */
+  function batchStageLabel(stage: string): string {
+    switch (stage) {
+      case "queued": return "排队中";
+      case "creating": return "创建作品…";
+      case "generating": return "生成文案…";
+      case "starting": return "启动流水线…";
+      case "running": return "流水线执行中";
+      case "done": return "完成";
+      case "error": return "失败";
+      default: return stage;
     }
   }
 
@@ -463,10 +506,37 @@
         <button class="batch-close" onclick={() => showBatchModal = false}>✕</button>
       </div>
       <div class="batch-modal-body">
-        {#if batchResult}
-          <p class="batch-result">{batchResult}</p>
-          {#if !batchConverting && batchResult.includes("完成")}
-            <button class="btn-primary" onclick={() => showBatchModal = false}>完成</button>
+        {#if batchJob || batchResult}
+          <!-- 实时进度视图 -->
+          {#if batchJob}
+            <div class="batch-progress">
+              <div class="batch-progress-header">
+                <strong>批量制作进行中</strong>
+                <span class="batch-progress-count">
+                  {batchJob.items.filter((i: any) => i.stage === "done" || i.stage === "running").length} / {batchJob.items.length} 已进入流水线
+                </span>
+              </div>
+              <div class="batch-items">
+                {#each batchJob.items as item}
+                  <div class="batch-item" data-stage={item.stage}>
+                    <span class="bi-dot"></span>
+                    <span class="bi-title">{item.title ?? `选题 #${item.topicId}`}</span>
+                    <span class="bi-stage">{batchStageLabel(item.stage)}</span>
+                    {#if item.error}<span class="bi-error" title={item.error}>⚠</span>{/if}
+                  </div>
+                {/each}
+              </div>
+              <p class="batch-hint">作品创建后将由 AI 全自动执行流水线（调研→分镜→素材→合成），无需人工介入。可关闭本窗口，在作品页查看每个作品的实时进展。</p>
+            </div>
+          {/if}
+          {#if batchResult}
+            <p class="batch-result">{batchResult}</p>
+            {#if !batchConverting}
+              <div class="batch-done-actions">
+                <button class="btn-primary" onclick={() => { showBatchModal = false; batchJob = null; batchResult = ""; }}>完成</button>
+                <button class="btn-secondary" onclick={() => { showBatchModal = false; batchJob = null; batchResult = ""; activeTab.set("works"); }}>前往作品页查看</button>
+              </div>
+            {/if}
           {/if}
         {:else}
           <div class="batch-field">
@@ -485,7 +555,7 @@
               {/each}
             </select>
             {#if templates.length === 0}
-              <p class="batch-hint">暂无已批准模板，可前往模板库生成并批准模板</p>
+              <p class="batch-hint">暂无已启用模板，可前往模板库生成并启用模板</p>
             {/if}
           </div>
           <div class="batch-field">
@@ -503,13 +573,13 @@
           <div class="batch-info">
             <p>将选中的 <strong>{selectedTopicIds.size}</strong> 个选题批量转为作品。</p>
             {#if batchTemplateId || batchDigitalHumanId}
-              <p class="batch-auto-notice">已选择模板/数字人，系统将自动执行完整流水线，无需用户逐步确认。制作完成后可在作品页审核发布。</p>
+              <p class="batch-auto-notice">已选择模板/数字人 → <strong>全自动模式</strong>：AI 将无人值守执行完整流水线，本窗口会实时显示每个选题的制作进度。</p>
             {:else}
-              <p class="batch-hint">选择模板或数字人后可启用全自动流水线模式</p>
+              <p class="batch-hint">未选择模板/数字人 → <strong>深度介入模式</strong>：每个作品需要在制作对话中逐步确认。选择模板或数字人后切换为全自动模式。</p>
             {/if}
           </div>
           <button class="btn-batch-start" disabled={batchConverting} onclick={batchConvert}>
-            {batchConverting ? "创建中..." : `批量创建 ${selectedTopicIds.size} 个作品`}
+            {batchConverting ? "启动中..." : `批量创建 ${selectedTopicIds.size} 个作品`}
           </button>
         {/if}
       </div>
@@ -1152,6 +1222,22 @@
   .batch-info p { font-size: 0.8rem; margin: 0 0 0.35rem; color: var(--text-secondary); }
   .batch-auto-notice { font-size: 0.78rem; color: var(--success); margin-top: 0.5rem; }
   .batch-result { font-size: 0.85rem; color: var(--text); text-align: center; padding: 1rem 0; }
+  .batch-progress { display: flex; flex-direction: column; gap: 0.6rem; }
+  .batch-progress-header { display: flex; justify-content: space-between; align-items: center; font-size: 0.88rem; }
+  .batch-progress-count { font-size: 0.78rem; color: var(--text-dim); }
+  .batch-items { display: flex; flex-direction: column; gap: 0.35rem; max-height: 320px; overflow-y: auto; }
+  .batch-item { display: flex; align-items: center; gap: 0.5rem; padding: 0.45rem 0.6rem; background: var(--bg-inset); border-radius: 4px; font-size: 0.8rem; }
+  .bi-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-dim); flex-shrink: 0; }
+  .batch-item[data-stage="creating"] .bi-dot, .batch-item[data-stage="generating"] .bi-dot, .batch-item[data-stage="starting"] .bi-dot { background: var(--accent); animation: bi-pulse 1s ease-in-out infinite; }
+  .batch-item[data-stage="running"] .bi-dot { background: #3b82f6; animation: bi-pulse 1.4s ease-in-out infinite; }
+  .batch-item[data-stage="done"] .bi-dot { background: var(--success, #22c55e); }
+  .batch-item[data-stage="error"] .bi-dot { background: var(--error, #ef4444); }
+  @keyframes bi-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+  .bi-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bi-stage { font-size: 0.72rem; color: var(--text-secondary); flex-shrink: 0; }
+  .bi-error { color: var(--error, #ef4444); cursor: help; }
+  .batch-done-actions { display: flex; gap: 0.6rem; justify-content: center; }
+  .btn-secondary { padding: 0.5rem 1rem; border-radius: 4px; border: 1px solid var(--border); background: var(--bg-inset); color: var(--text); cursor: pointer; font-size: 0.82rem; }
   .btn-batch-start {
     width: 100%;
     padding: 0.6rem;

@@ -1162,50 +1162,58 @@ apiRoutes.post("/api/works/:id/abort", async (c) => {
   return c.json({ aborted: killed });
 });
 
+/**
+ * 启动作品的 agent 创作会话（有模板/数字人时为全自动模式，否则为确认模式）。
+ * POST /api/works/:id/session 与批量自动流水线共用。
+ */
+async function startWorkSession(id: string): Promise<{ status: string; step?: string }> {
+  if (!wsBridge) throw new Error("WsBridge not initialized");
+  const existing = wsBridge.getSession(id);
+  if (existing?.cliProcess) return { status: "already_running" };
+
+  const work = await getWork(id);
+  if (!work) throw new Error("Work not found");
+
+  // Look up account tone profile for style injection
+  const account = work.accountId ? getAccount(work.accountId) : undefined;
+  const toneInjection = account
+    ? `\n账号名称：${account.name}\n平台：${account.platform === "douyin" ? "抖音" : account.platform === "xiaohongshu" ? "小红书" : account.platform}\n${buildTonePrompt(account.tone_profile)}`
+    : "";
+
+  const steps = Object.entries(work.pipeline);
+  const pendingStep = steps.find(([, s]) => s.status === "pending" || s.status === "active");
+  const stepName = pendingStep ? pendingStep[1].name : steps[0]?.[1]?.name ?? "创作";
+
+  const hasTemplate = !!work.templateId;
+  const hasDigitalHuman = !!work.digitalHumanId;
+
+  const prompt = [
+    `你是一个内容创作助手。你正在帮助用户创作: "${work.title}" (类型: ${work.type})。`,
+    `目标平台: ${work.platforms.map((p: any) => typeof p === "string" ? p : p.platform).join(", ")}。`,
+    work.topicHint ? `选题方向: ${work.topicHint}` : "",
+    hasTemplate ? `使用模板: ${work.templateId}` : "",
+    hasDigitalHuman ? `使用数字人: ${work.digitalHumanId}` : "",
+    toneInjection,
+    ``,
+    `当前步骤: "${stepName}"。`,
+    hasTemplate || hasDigitalHuman
+      ? `**自动化模式**：用户已预先设定好模板和数字人，请直接执行当前步骤，不要询问用户确认。执行完毕后自动进入下一步骤。`
+      : `请先向用户确认：简要说明这个步骤你将做什么，询问用户是否有特定方向或要求，等用户确认后再开始工作。不要直接开始执行，先和用户沟通。`,
+  ].filter(Boolean).join("\n");
+
+  const config = await loadConfig();
+  await wsBridge.createSession(id, prompt, config.model);
+  return { status: "started", step: stepName };
+}
+
 // POST /api/works/:id/session
 apiRoutes.post("/api/works/:id/session", async (c) => {
   const id = c.req.param("id");
   if (!wsBridge) return c.json({ error: "WsBridge not initialized" }, 503);
 
   try {
-    const session = wsBridge.getSession(id);
-    if (session?.cliProcess) {
-      return c.json({ status: "already_running", workId: id });
-    }
-
-    const work = await getWork(id);
-    if (!work) return c.json({ error: "Work not found" }, 404);
-
-    // Look up account tone profile for style injection
-    const account = work.accountId ? getAccount(work.accountId) : undefined;
-    const toneInjection = account
-      ? `\n账号名称：${account.name}\n平台：${account.platform === "douyin" ? "抖音" : account.platform === "xiaohongshu" ? "小红书" : account.platform}\n${buildTonePrompt(account.tone_profile)}`
-      : "";
-
-    const steps = Object.entries(work.pipeline);
-    const pendingStep = steps.find(([, s]) => s.status === "pending" || s.status === "active");
-    const stepName = pendingStep ? pendingStep[1].name : steps[0]?.[1]?.name ?? "创作";
-
-    const hasTemplate = !!work.templateId;
-    const hasDigitalHuman = !!work.digitalHumanId;
-
-    const prompt = [
-      `你是一个内容创作助手。你正在帮助用户创作: "${work.title}" (类型: ${work.type})。`,
-      `目标平台: ${work.platforms.map((p: any) => typeof p === "string" ? p : p.platform).join(", ")}。`,
-      work.topicHint ? `选题方向: ${work.topicHint}` : "",
-      hasTemplate ? `使用模板: ${work.templateId}` : "",
-      hasDigitalHuman ? `使用数字人: ${work.digitalHumanId}` : "",
-      toneInjection,
-      ``,
-      `当前步骤: "${stepName}"。`,
-      hasTemplate || hasDigitalHuman
-        ? `**自动化模式**：用户已预先设定好模板和数字人，请直接执行当前步骤，不要询问用户确认。执行完毕后自动进入下一步骤。`
-        : `请先向用户确认：简要说明这个步骤你将做什么，询问用户是否有特定方向或要求，等用户确认后再开始工作。不要直接开始执行，先和用户沟通。`,
-    ].filter(Boolean).join("\n");
-
-    const config = await loadConfig();
-    await wsBridge.createSession(id, prompt, config.model);
-    return c.json({ status: "started", workId: id, step: stepName });
+    const result = await startWorkSession(id);
+    return c.json({ ...result, workId: id });
   } catch (err) {
     return c.json({ error: err instanceof Error ? err.message : "Session start error" }, 500);
   }
@@ -2529,26 +2537,41 @@ apiRoutes.post("/api/topics/:id/convert", async (c) => {
   return c.json({ workId: work.id, autoStarted: true });
 });
 
-// POST /api/topics/batch-convert - Convert multiple topics to works with auto-pipeline
-apiRoutes.post("/api/topics/batch-convert", async (c) => {
-  const body = await c.req.json<{
-    topicIds: number[];
-    templateId?: string;
-    digitalHumanId?: string;
-    platforms?: string[];
-    type?: "short-video" | "image-text";
-    autoPipeline?: boolean;
-  }>().catch(() => ({ topicIds: [] } as any));
+// POST /api/topics/batch-convert - Convert multiple topics to works with auto-pipeline (async)
+//
+// 立即返回 jobId，后台串行处理：创建作品 → 生成文章/脚本 → 启动 agent 会话
+// （有模板/数字人时全自动走完流水线）。前端轮询 batch-status 获取逐项进度。
+interface BatchConvertItem {
+  topicId: number;
+  title?: string;
+  workId?: string;
+  /** queued → creating → generating → starting → running / done / error */
+  stage: string;
+  error?: string;
+}
+interface BatchConvertJob {
+  id: string;
+  status: "running" | "done";
+  autoPipeline: boolean;
+  items: BatchConvertItem[];
+  startedAt: number;
+  finishedAt?: number;
+}
+const batchConvertJobs = new Map<string, BatchConvertJob>();
 
-  if (!body.topicIds?.length) return c.json({ error: "topicIds is required" }, 400);
+async function runBatchConvert(
+  job: BatchConvertJob,
+  body: { templateId?: string; digitalHumanId?: string; platforms?: string[]; type?: "short-video" | "image-text" },
+): Promise<void> {
   const platforms = body.platforms ?? ["douyin", "xiaohongshu"];
   const type = body.type ?? "short-video";
-  const results: { topicId: number; workId?: string; error?: string }[] = [];
 
-  for (const topicId of body.topicIds) {
+  for (const item of job.items) {
     try {
-      const topic = getTopic(topicId);
-      if (!topic) { results.push({ topicId, error: "Topic not found" }); continue; }
+      item.stage = "creating";
+      const topic = getTopic(item.topicId);
+      if (!topic) { item.stage = "error"; item.error = "选题不存在"; continue; }
+      item.title = topic.title;
 
       const work = await createWork({
         title: topic.title,
@@ -2559,8 +2582,9 @@ apiRoutes.post("/api/topics/batch-convert", async (c) => {
         templateId: body.templateId,
         digitalHumanId: body.digitalHumanId,
       });
+      item.workId = work.id;
 
-      // Generate article and script
+      item.stage = "generating";
       const platform = platforms[0] ?? "douyin";
       const article = await generateArticleFromTopic(topic, platform);
       const script = await generateScriptFromArticle(article, 180);
@@ -2570,10 +2594,10 @@ apiRoutes.post("/api/topics/batch-convert", async (c) => {
         createScript({ work_id: work.id, content: script as unknown as Record<string, unknown>, duration: script.duration, status: "ready" });
         updateTopic(topic.id, { status: "converted", work_id: work.id });
       } catch (err) {
-        console.error(`[batch-convert] DB write failed for topic ${topicId}:`, err);
+        console.error(`[batch-convert] DB write failed for topic ${item.topicId}:`, err);
       }
 
-      // Auto-start pipeline: mark research as done, trigger plan
+      // Mark research as done, plan as active
       try {
         const workObj = await getWork(work.id);
         if (workObj) {
@@ -2590,16 +2614,67 @@ apiRoutes.post("/api/topics/batch-convert", async (c) => {
           await storeUpdateWork(work.id, { status: "planning", pipeline });
         }
       } catch (err) {
-        console.error(`[batch-convert] Failed to auto-start pipeline for topic ${topicId}:`, err);
+        console.error(`[batch-convert] Failed to auto-start pipeline for topic ${item.topicId}:`, err);
       }
 
-      results.push({ topicId, workId: work.id });
+      // 全自动模式：真正启动 agent 会话，让流水线自动执行后续阶段
+      if (job.autoPipeline) {
+        item.stage = "starting";
+        try {
+          await startWorkSession(work.id);
+          item.stage = "running";
+        } catch (err) {
+          item.stage = "error";
+          item.error = "会话启动失败：" + (err instanceof Error ? err.message : String(err));
+        }
+      } else {
+        item.stage = "done";
+      }
     } catch (err) {
-      results.push({ topicId, error: err instanceof Error ? err.message : String(err) });
+      item.stage = "error";
+      item.error = err instanceof Error ? err.message : String(err);
     }
   }
+  job.status = "done";
+  job.finishedAt = Date.now();
+}
 
-  return c.json({ results, count: results.length });
+apiRoutes.post("/api/topics/batch-convert", async (c) => {
+  const body = await c.req.json<{
+    topicIds: number[];
+    templateId?: string;
+    digitalHumanId?: string;
+    platforms?: string[];
+    type?: "short-video" | "image-text";
+    autoPipeline?: boolean;
+  }>().catch(() => ({ topicIds: [] } as any));
+
+  if (!body.topicIds?.length) return c.json({ error: "topicIds is required" }, 400);
+
+  const jobId = "batch_" + Date.now();
+  const job: BatchConvertJob = {
+    id: jobId,
+    status: "running",
+    autoPipeline: body.autoPipeline !== false,
+    items: body.topicIds.map((topicId: number) => ({ topicId, stage: "queued" })),
+    startedAt: Date.now(),
+  };
+  batchConvertJobs.set(jobId, job);
+
+  // fire-and-forget：后台串行执行，前端轮询进度
+  runBatchConvert(job, body).catch((err) => {
+    job.status = "done";
+    console.error("[batch-convert] job crashed:", err);
+  });
+
+  return c.json({ jobId, count: job.items.length });
+});
+
+// GET /api/topics/batch-status/:jobId - poll batch conversion progress
+apiRoutes.get("/api/topics/batch-status/:jobId", (c) => {
+  const job = batchConvertJobs.get(c.req.param("jobId"));
+  if (!job) return c.json({ error: "Job not found" }, 404);
+  return c.json(job);
 });
 
 // GET /api/digital-humans/avatars/list - simple list for dropdowns

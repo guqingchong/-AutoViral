@@ -8,6 +8,7 @@ import { ChannelsPublisher } from "./publishers/channels-publisher.js";
 import { generateFallbackPackage } from "./publishers/fallback-export.js";
 import * as recordsRepo from "../db/publish-records-repo.js";
 import { updateWork } from "../db/works-repo.js";
+import { listArticlesByWork } from "../db/articles-repo.js";
 import type { Publisher, PublishInput, PublishOutput } from "./publishers/types.js";
 import type { DbWork } from "../db/types.js";
 
@@ -56,14 +57,20 @@ export function toPublishRecord(row: ReturnType<typeof recordsRepo.getPublishRec
 
 const publisherCache = new Map<string, Publisher>();
 
+/** 前端/账号体系使用的平台键 → 发布器注册键（wechat_mp 是 UI 侧键，发布器注册为 wechat） */
+const PLATFORM_ALIASES: Record<string, string> = {
+  wechat_mp: "wechat",
+};
+
 export function resolvePublisher(platform: string): Publisher {
-  if (!publisherCache.has(platform)) {
-    if (platform === "douyin") publisherCache.set(platform, new DouyinPublisher());
-    else if (platform === "xiaohongshu") publisherCache.set(platform, new XiaohongshuPublisher());
-    else if (platform === "channels") publisherCache.set(platform, new ChannelsPublisher());
-    else publisherCache.set(platform, getPublisher(platform));
+  const key = PLATFORM_ALIASES[platform] ?? platform;
+  if (!publisherCache.has(key)) {
+    if (key === "douyin") publisherCache.set(key, new DouyinPublisher());
+    else if (key === "xiaohongshu") publisherCache.set(key, new XiaohongshuPublisher());
+    else if (key === "channels") publisherCache.set(key, new ChannelsPublisher());
+    else publisherCache.set(key, getPublisher(key));
   }
-  return publisherCache.get(platform)!;
+  return publisherCache.get(key)!;
 }
 
 const FALLBACK_PLATFORMS = ["douyin", "xiaohongshu", "channels"];
@@ -135,7 +142,7 @@ export async function triggerLogin(platform: string): Promise<boolean> {
   throw new Error(`平台 ${platform} 不支持浏览器登录`);
 }
 
-export async function buildPublishInput(work: DbWork, _platform: string): Promise<PublishInput> {
+export async function buildPublishInput(work: DbWork, platform: string): Promise<PublishInput> {
   const workDir = join(dataDir, "works", work.id);
   const outputDir = join(workDir, "output");
 
@@ -153,12 +160,24 @@ export async function buildPublishInput(work: DbWork, _platform: string): Promis
   }
 
   const coverPath = join(outputDir, "cover.jpg");
+  const options: Record<string, unknown> = {};
+
+  // 文章型平台（知乎/公众号）：发布器需要 options.content 作为正文，
+  // 注入该作品最新一篇文章的内容，否则发布器只能发标题占位文本
+  const key = PLATFORM_ALIASES[platform] ?? platform;
+  if (key === "zhihu" || key === "wechat") {
+    const article = listArticlesByWork(work.id)[0];
+    if (article?.content) {
+      options.content = article.content;
+      options.articleTitle = article.title;
+    }
+  }
 
   return {
     workId: work.id,
     videoPath,
     coverPath,
     title: work.title,
-    options: {},
+    options,
   };
 }

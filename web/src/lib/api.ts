@@ -185,6 +185,7 @@ export interface WorkSummary {
   accountId?: string;
   topicId?: number;
   templateId?: string;
+  digitalHumanId?: string;
   updatedAt: string;
 }
 

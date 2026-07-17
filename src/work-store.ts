@@ -81,6 +81,7 @@ export interface WorkSummary {
   status: WorkStatus;
   topicId?: number;
   templateId?: string;
+  digitalHumanId?: string;
   updatedAt: string;
 }
 
@@ -203,6 +204,7 @@ export async function listWorks(): Promise<WorkSummary[]> {
     status: w.status,
     topicId: w.topic_id,
     templateId: w.template_id,
+    digitalHumanId: w.digital_human_id,
     updatedAt: w.updated_at,
   }));
 }

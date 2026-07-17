@@ -524,6 +524,11 @@
               </button>
             </div>
             <div class="card-tags">
+              {#if w.templateId || w.digitalHumanId}
+                <span class="card-tag mode-auto" title="已配置模板/数字人，AI 全自动执行流水线，无需逐步确认">⚡ 全自动</span>
+              {:else}
+                <span class="card-tag mode-manual" title="深度介入模式：在制作对话中逐步确认每个环节；配置模板/数字人后可切换全自动">🖐 深度介入</span>
+              {/if}
               <span class="card-tag">{typeLabel(w.type)}</span>
               {#if w.contentCategory}
                 <span class="card-tag">{categoryLabel(w.contentCategory)}</span>
@@ -1045,6 +1050,16 @@
     padding: 0.1rem 0.4rem;
     border-radius: 3px;
     line-height: 1.4;
+  }
+  .card-tag.mode-auto {
+    color: var(--accent);
+    background: var(--accent-soft, rgba(254, 44, 85, 0.08));
+    font-weight: 600;
+  }
+  .card-tag.mode-manual {
+    color: var(--text-dim);
+    border: 1px dashed var(--border);
+    background: transparent;
   }
 
   .card-meta {
