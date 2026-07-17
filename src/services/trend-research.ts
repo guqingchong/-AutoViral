@@ -1,8 +1,9 @@
-import { spawn, execFile } from "node:child_process";
+﻿import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { join } from "node:path";
 import { createSnapshot } from "../db/trends-repo.js";
 import { createTopic, listTopics } from "../db/topics-repo.js";
+import { recordDataSourceReference } from "../db/data-sources-repo.js";
 import type { DbTopic } from "../db/types.js";
 import { resolveClaudeCommand } from "../ws-bridge.js";
 import { buildTonePrompt } from "./tone-profile.js";
@@ -28,6 +29,11 @@ export async function fetchTrendData(platform: string): Promise<string> {
 
 export async function collectTrends(platforms: string[], interests: string[] = [], toneProfile?: Record<string, unknown> | null): Promise<{ platform: string; topics: DbTopic[] }[]> {
   const results: { platform: string; topics: DbTopic[] }[] = [];
+
+  // Gather all existing topic titles for dedup across all platforms
+  const existingTopics = listTopics(undefined, 500);
+  const existingTitles = new Set(existingTopics.map(t => t.title.trim().toLowerCase()));
+
   for (const platform of platforms) {
     const raw = await fetchTrendData(platform);
     const snapshotDate = new Date().toISOString().slice(0, 10);
@@ -40,11 +46,37 @@ export async function collectTrends(platforms: string[], interests: string[] = [
       }
     }
     const snapshot = createSnapshot({ platform, snapshot_date: snapshotDate, raw_data: parsedRaw });
-    const topics = await analyzeTrendsWithAgent(platform, raw, interests, snapshot.id, toneProfile);
+    const allTopics = await analyzeTrendsWithAgent(platform, raw, interests, snapshot.id, toneProfile);
+
+    // Dedup: skip topics whose title already exists (case-insensitive) or is too similar
+    const deduped = allTopics.filter(t => {
+      const titleLower = t.title.trim().toLowerCase();
+      if (existingTitles.has(titleLower)) return false;
+      // Check for near-duplicates: if >60% of words overlap with an existing title, skip
+      const words = titleLower.split(/[\s,，。、]+/).filter((w: string) => w.length >= 2);
+      if (words.length > 0) {
+        for (const existing of existingTopics) {
+          const exWords = existing.title.toLowerCase().split(/[\s,，。、]+/).filter((w: string) => w.length >= 2);
+          const exSet = new Set(exWords);
+          const overlap = words.filter(w => exSet.has(w)).length;
+          const ratio = overlap / Math.max(words.length, exWords.length);
+          if (ratio > 0.6) return false;
+        }
+      }
+      return true;
+    });
+
     const created: DbTopic[] = [];
-    for (const t of topics) {
-      created.push(createTopic({ ...t, snapshot_id: snapshot.id, status: "collected" }));
+    for (const t of deduped) {
+      const topic = createTopic({ ...t, snapshot_id: snapshot.id, status: "collected" });
+      created.push(topic);
+      existingTitles.add(t.title.trim().toLowerCase());
+      // PRD 4.1.1: track external data sources referenced via WebSearch; promote to fixed after 5+ references
+      if (t.source_url) {
+        try { recordDataSourceReference({ url: t.source_url, platform, title: t.title }); } catch { /* ignore tracking errors */ }
+      }
     }
+    console.log(`[trends] ${platform}: collected ${allTopics.length} topics, ${deduped.length} new after dedup`);
     results.push({ platform, topics: created });
   }
   return results;
@@ -62,16 +94,24 @@ function analyzeTrendsWithAgent(platform: string, rawData: string, interests: st
           `用户指定了以下关注领域：**${interests.join("、")}**`,
           ``,
           `**强制规则：**`,
-          `1. 至少 70% 的推荐话题必须直接属于用户关注的领域或其紧密相关子领域`,
-          `2. 每个关注领域至少覆盖 2-3 个话题。如果一个领域太大（如"科技"），请拆分为具体子方向（如 AI、芯片、新能源、自动驾驶）`,
-          `3. 不相关的泛热门话题最多占 30%，用于补充视野`,
-          `4. 如果用户领域偏专业/技术（如"芯片制造""量子计算"），用该领域的专业视角找趋势，不要强行套用娱乐化情绪模板`,
+          `1. **100% 的推荐话题必须直接属于用户关注的领域或其紧密相关子领域。禁止返回任何与关注领域无关的泛热门话题。**`,
+          `2. 每个关注领域至少覆盖 3-5 个话题。如果一个领域太大（如"科技"），请拆分为具体子方向（如 AI、芯片、新能源、自动驾驶）`,
+          `3. 如果某个关注领域在当前平台热搜中完全没有相关条目，请用 WebSearch 深度搜索该领域，而不是用泛热门话题填充`,
+          `4. 每个话题的 title 中必须包含该关注领域的具体关键词，不能是泛化的"热门话题"`,
+          `5. 如果用户领域偏专业/技术（如"芯片制造""量子计算"），用该领域的专业视角找趋势，不要强行套用娱乐化情绪模板`,
         ].join("\n")
       : "";
     // BUGFIX: 搜索关键词必须包含用户关注领域
     const year = new Date().getFullYear();
+    // Generate multi-dimensional search keywords for deep domain research
     const interestSearchTerms = interests.length
-      ? interests.map(i => `"${platformLabel} ${i} 最新 ${year}"`).join(" ")
+      ? interests.flatMap(i => [
+          "\"" + i + " 趋势 " + year + "\"",
+          "\"" + i + " 最新政策 " + year + "\"",
+          "\"" + i + " 教程 干货\"",
+          "\"" + i + " 案例 分析\"",
+          "\"" + i + " 争议 热议\"",
+        ]).join(" ")
       : "";
     const dataClause = rawData
       ? `\n以下是通过 API 获取的 ${platformLabel} 实时热搜数据。请先从中筛选出与用户关注领域直接相关的条目（如果没有则跳过）。然后**必须使用 WebSearch 工具**搜索以下关键词，每个关键词一次独立搜索，补充领域专属内容：\n${interestSearchTerms || `"${platformLabel} 爆款内容 趋势 ${year}"`}\n\n**重要**：WebSearch 搜索是关键步骤，不要跳过。用户关注领域的热门话题通常不在泛热搜榜上，必须通过定向搜索获取。\n\n热搜原始数据：\n\`\`\`json\n${rawData.slice(0, 3000)}\n\`\`\`\n`
@@ -117,7 +157,7 @@ function analyzeTrendsWithAgent(platform: string, rawData: string, interests: st
       }, null, 2),
       ``,
       `## 输出约束`,
-      `- topics 至少 10 个，不够就多搜多看`,
+      `- topics 至少 15 个，不够就多搜多看，每个角度都可以成为一个独立话题`,
       `- heat 为 1-5 整数，5 = 现象级刷屏`,
       `- competition "低"/"中"/"高"——低竞争是蓝海机会`,
       `- opportunity "金矿"(高热低竞)/"蓝海"(低热低竞)/"红海"(高热高竞)`,
@@ -132,10 +172,12 @@ function analyzeTrendsWithAgent(platform: string, rawData: string, interests: st
 
     const cli = resolveClaudeCommand();
     console.log(`[trends] spawning Claude CLI for ${platformLabel} (cli=${cli}, interests=[${interests.join(",")}])`);
-    const proc = spawn(cli, ["-p", prompt, "--output-format", "json", "--dangerously-skip-permissions", "--model", "haiku"], {
+    const proc = spawn(cli, ["-p", prompt, "--output-format", "json", "--dangerously-skip-permissions", "--model", "sonnet"], {
       cwd: process.env.HOME ?? process.cwd(),
       env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: "cli" },
     });
+    // Close stdin immediately to prevent 3s wait
+    try { proc.stdin?.end(); } catch { /* ignore */ }
     let stdout = "";
     let stderr = "";
     proc.stdout?.on("data", (d: Buffer) => { stdout += d.toString(); });
@@ -181,7 +223,7 @@ function analyzeTrendsWithAgent(platform: string, rawData: string, interests: st
       console.error(`[trends] Claude CLI spawn error:`, err.message);
       resolve([]);
     });
-    setTimeout(() => { try { proc.kill(); } catch {} resolve([]); }, 120000);
+    setTimeout(() => { try { proc.kill(); } catch {} resolve([]); }, 180000);
   });
 }
 

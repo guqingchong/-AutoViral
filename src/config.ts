@@ -17,6 +17,9 @@ export interface Config {
   minimax?: { apiKey: string };
   chanjing?: { appId: string; secretKey: string };
   bailian?: { apiKey: string };
+  pexels?: { apiKey: string };
+  pixabay?: { apiKey: string };
+  unsplash?: { accessKey: string };
   research: { enabled: boolean; schedule: string; platforms: string[] };
   interests?: string[];
   memory?: { apiKey: string; userId: string; syncEnabled: boolean };
@@ -30,6 +33,12 @@ export interface Config {
     enabled: boolean;
     autoApply: boolean;
     minConfidence: number;
+  };
+  /** PRD 4.3.6: budget control */
+  budget?: {
+    monthlyLimitYuan: number;
+    dailyLimitYuan: number;
+    warningThresholdPercent: number;
   };
 }
 
@@ -49,9 +58,10 @@ export function getDefaultConfig(): Config {
     port: 3271,
     model: "opus",
     jimeng: { accessKey: "", secretKey: "" },
-    research: { enabled: true, schedule: "0 9,21 * * *", platforms: ["douyin", "xiaohongshu"] },
+    research: { enabled: true, schedule: "0 9,21 * * *", platforms: ["douyin", "xiaohongshu", "weibo", "zhihu", "bilibili"] },
     interests: [],
     analytics: { enabled: false, collectInterval: 60, sources: [] },
+    budget: { monthlyLimitYuan: 2500, dailyLimitYuan: 200, warningThresholdPercent: 80 },
   };
 }
 

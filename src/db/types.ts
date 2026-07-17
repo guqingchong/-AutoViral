@@ -69,6 +69,7 @@ export interface DbTopic {
   example_hook?: string;
   category?: string;
   source_url?: string;
+  content_plan?: Record<string, unknown>;
   status: "collected" | "selected" | "converted";
   created_at: string;
 }
@@ -91,6 +92,7 @@ export interface DbArticle {
   platform?: string;
   status: "draft" | "ready";
   created_at: string;
+  updated_at?: string;
 }
 
 export interface DbScript {
@@ -173,6 +175,9 @@ export interface DbAccount {
   platform: string;
   tone_profile: Record<string, unknown>;
   status: DbAccountStatus;
+  username?: string;
+  password?: string;
+  cookie?: string;
   created_at: string;
   updated_at: string;
 }

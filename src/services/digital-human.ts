@@ -8,6 +8,7 @@ import { ChanjingClient } from "./chanjing-client.js";
 import { BailianClient } from "./bailian-client.js";
 import * as avatarsRepo from "../db/avatars-repo.js";
 import * as jobsRepo from "../db/digital-human-jobs-repo.js";
+import { assertWithinBudget } from "./budget-service.js";
 import type { DbAvatar, DbDigitalHumanJob } from "../db/types.js";
 
 const execFileAsync = promisify(execFile);
@@ -114,6 +115,7 @@ export async function submitJob(input: {
 }): Promise<DbDigitalHumanJob> {
   const avatar = avatarsRepo.getAvatar(input.avatarId);
   if (!avatar) throw new Error("Avatar not found");
+  assertWithinBudget(input.estimatedCost ?? 0);
   const job: DbDigitalHumanJob = {
     id: generateId("dhjob"),
     work_id: input.workId,

@@ -508,6 +508,48 @@ CREATE INDEX IF NOT EXISTS idx_works_topic_id ON works(topic_id);
 CREATE INDEX IF NOT EXISTS idx_works_content_form ON works(content_form);
 `,
   },
+  {
+    version: 11,
+    name: "topic_contentplan_and_data_sources",
+    sql: `
+ALTER TABLE topics ADD COLUMN content_plan TEXT;
+
+CREATE TABLE IF NOT EXISTS data_sources (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  url TEXT NOT NULL UNIQUE,
+  platform TEXT,
+  title TEXT,
+  reference_count INTEGER NOT NULL DEFAULT 0,
+  fixed INTEGER NOT NULL DEFAULT 0,
+  first_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+  last_referenced_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_data_sources_fixed ON data_sources(fixed);
+CREATE INDEX IF NOT EXISTS idx_data_sources_url ON data_sources(url);
+`,
+  },
+  {
+    version: 12,
+    name: "account_credentials_and_template_jobs",
+    sql: `
+ALTER TABLE accounts ADD COLUMN username TEXT;
+ALTER TABLE accounts ADD COLUMN password TEXT;
+ALTER TABLE accounts ADD COLUMN cookie TEXT;
+
+CREATE TABLE IF NOT EXISTS template_gen_jobs (
+  id TEXT PRIMARY KEY,
+  status TEXT NOT NULL DEFAULT 'running',
+  count INTEGER NOT NULL DEFAULT 0,
+  generated INTEGER NOT NULL DEFAULT 0,
+  error TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+ALTER TABLE articles ADD COLUMN updated_at TEXT;
+`,
+  },
 ];
 
 export function migrate(): void {

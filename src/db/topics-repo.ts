@@ -1,4 +1,4 @@
-import { getDb } from "./connection.js";
+﻿import { getDb } from "./connection.js";
 import { fromJson, toJson } from "./json.js";
 import type { DbTopic } from "./types.js";
 
@@ -20,6 +20,7 @@ function rowToTopic(row: Record<string, unknown>): DbTopic {
     example_hook: (row.example_hook as string) || undefined,
     category: (row.category as string) || undefined,
     source_url: (row.source_url as string) || undefined,
+    content_plan: fromJson(row.content_plan as string) ?? undefined,
     status: row.status as DbTopic["status"],
     created_at: row.created_at as string,
   };
@@ -29,8 +30,8 @@ export function createTopic(topic: Omit<DbTopic, "id" | "created_at">): DbTopic 
   const db = getDb();
   const result = db
     .prepare(
-      `INSERT INTO topics (work_id, snapshot_id, platform, title, description, heat, competition, opportunity, emotion_type, emotion_subtype, tags, content_angles, example_hook, category, source_url, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO topics (work_id, snapshot_id, platform, title, description, heat, competition, opportunity, emotion_type, emotion_subtype, tags, content_angles, example_hook, category, source_url, content_plan, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       topic.work_id ?? null,
@@ -48,6 +49,7 @@ export function createTopic(topic: Omit<DbTopic, "id" | "created_at">): DbTopic 
       topic.example_hook ?? null,
       topic.category ?? null,
       topic.source_url ?? null,
+      topic.content_plan ? toJson(topic.content_plan) : null,
       topic.status
     );
   return { ...topic, id: Number(result.lastInsertRowid), created_at: new Date().toISOString() };
@@ -76,7 +78,7 @@ export function updateTopic(id: number, updates: Partial<DbTopic>): DbTopic | un
   const topic = { ...existing, ...updates, id };
   const db = getDb();
   db.prepare(
-    `UPDATE topics SET work_id = ?, snapshot_id = ?, platform = ?, title = ?, description = ?, heat = ?, competition = ?, opportunity = ?, emotion_type = ?, emotion_subtype = ?, tags = ?, content_angles = ?, example_hook = ?, category = ?, source_url = ?, status = ? WHERE id = ?`
+    `UPDATE topics SET work_id = ?, snapshot_id = ?, platform = ?, title = ?, description = ?, heat = ?, competition = ?, opportunity = ?, emotion_type = ?, emotion_subtype = ?, tags = ?, content_angles = ?, example_hook = ?, category = ?, source_url = ?, content_plan = ?, status = ? WHERE id = ?`
   ).run(
     topic.work_id ?? null,
     topic.snapshot_id ?? null,
@@ -93,6 +95,7 @@ export function updateTopic(id: number, updates: Partial<DbTopic>): DbTopic | un
     topic.example_hook ?? null,
     topic.category ?? null,
     topic.source_url ?? null,
+    topic.content_plan ? toJson(topic.content_plan) : null,
     topic.status,
     id
   );
