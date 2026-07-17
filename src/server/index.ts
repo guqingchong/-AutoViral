@@ -25,6 +25,7 @@ import { closeDb } from "../db/connection.js";
 import { migrateLegacyWorks } from "../db/migrate-legacy.js";
 import { recoverStuckJobs, startPublishCron } from "../services/publish-service.js";
 import { recoverStuckRenderJobs } from "../services/video-factory.js";
+import { registerAllPublishers } from "../services/publishers/factory.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -101,6 +102,9 @@ export async function startServer(port: number): Promise<{ server: Server }> {
 
   // 0.7. Start periodic stuck-job sweep (every 5 minutes)
   startPublishCron();
+
+  // 0.8. Register all platform publishers (PRD Phase 4a/4b)
+  registerAllPublishers();
 
   // 1. Load config
   const config = await loadConfig();
