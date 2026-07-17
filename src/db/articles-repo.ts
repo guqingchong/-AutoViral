@@ -32,6 +32,7 @@ export function getArticle(id: number): DbArticle | undefined {
     platform: (row.platform as string) || undefined,
     status: row.status as DbArticle["status"],
     created_at: row.created_at as string,
+    updated_at: (row.updated_at as string) || undefined,
   };
 }
 
@@ -47,5 +48,40 @@ export function listArticlesByWork(workId: string): DbArticle[] {
     platform: (row.platform as string) || undefined,
     status: row.status as DbArticle["status"],
     created_at: row.created_at as string,
+  }));
+}
+
+
+export function updateArticle(id: number, updates: Partial<DbArticle>): DbArticle | undefined {
+  const db = getDb();
+  const existing = getArticle(id);
+  if (!existing) return undefined;
+  const article = { ...existing, ...updates, id, updated_at: new Date().toISOString() };
+  db.prepare(
+    `UPDATE articles SET title = ?, content = ?, platform = ?, status = ?, updated_at = ? WHERE id = ?`
+  ).run(
+    article.title,
+    article.content,
+    article.platform ?? null,
+    article.status,
+    article.updated_at,
+    id
+  );
+  return article;
+}
+
+export function listAllArticles(limit = 100): DbArticle[] {
+  const db = getDb();
+  const rows = db.prepare("SELECT * FROM articles ORDER BY created_at DESC LIMIT ?").all(limit) as Record<string, unknown>[];
+  return rows.map((row) => ({
+    id: row.id as number,
+    work_id: (row.work_id as string) || undefined,
+    topic_id: (row.topic_id as number) || undefined,
+    title: row.title as string,
+    content: row.content as string,
+    platform: (row.platform as string) || undefined,
+    status: row.status as DbArticle["status"],
+    created_at: row.created_at as string,
+    updated_at: (row.updated_at as string) || undefined,
   }));
 }

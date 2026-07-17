@@ -18,6 +18,9 @@ function rowToAccount(row: Record<string, unknown>): DbAccount {
     platform: row.platform as string,
     tone_profile: fromJson(row.tone_profile as string) ?? {},
     status: row.status as DbAccount["status"],
+    username: (row.username as string) || undefined,
+    password: (row.password as string) || undefined,
+    cookie: (row.cookie as string) || undefined,
     created_at: row.created_at as string,
     updated_at: row.updated_at as string,
   };
@@ -26,14 +29,17 @@ function rowToAccount(row: Record<string, unknown>): DbAccount {
 export function createAccount(account: DbAccount): DbAccount {
   const db = getDb();
   db.prepare(
-    `INSERT INTO accounts (id, name, platform, tone_profile, status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO accounts (id, name, platform, tone_profile, status, username, password, cookie, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     account.id,
     account.name,
     account.platform,
     toJson(account.tone_profile),
     account.status,
+    account.username ?? null,
+    account.password ?? null,
+    account.cookie ?? null,
     account.created_at,
     account.updated_at
   );
@@ -60,13 +66,16 @@ export function updateAccount(id: string, updates: Partial<DbAccount>): DbAccoun
   if (!existing) return undefined;
   const account = { ...existing, ...updates, id, updated_at: new Date().toISOString() };
   db.prepare(
-    `UPDATE accounts SET name = ?, platform = ?, tone_profile = ?, status = ?, updated_at = ?
+    `UPDATE accounts SET name = ?, platform = ?, tone_profile = ?, status = ?, username = ?, password = ?, cookie = ?, updated_at = ?
      WHERE id = ?`
   ).run(
     account.name,
     account.platform,
     toJson(account.tone_profile),
     account.status,
+    account.username ?? null,
+    account.password ?? null,
+    account.cookie ?? null,
     account.updated_at,
     id
   );
