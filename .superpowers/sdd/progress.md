@@ -866,6 +866,24 @@ Branch: `main` (committed directly)
 
 **Phase 14 complete. All architectural backlog items resolved. Project has 100% backlog coverage.**
 
+## Phase 14 Codex Review — All Findings Resolved
+
+Commit: `(pending)` — fix: address all Codex review findings for Phase 14 + topic fix
+
+| # | Severity | Finding | Resolution |
+|---|----------|---------|------------|
+| 1 | MEDIUM | `interests`/`competitors` request body not validated at runtime — non-array values cause `.join()` TypeError | Added `Array.isArray()` guards in `/api/trends/refresh-stream` and `/api/trends/collect` |
+| 2 | MEDIUM | API key exposed in process args via `curl -H "Authorization: Bearer $OPENROUTER_API_KEY"` in `fallback-strategy.md` | Replaced with `check_environment.py --format summary` pipeline (avoids process-arg key leakage) |
+| 3 | MEDIUM | `researchTrends()` missing emotion adaptation context section — agent may misuse "信息价值" | Added complete emotion adaptation section matching `trend-research.ts` and `refresh-stream` |
+| 4 | LOW | Search keywords hardcoded `2026` in 3 locations — will bias results next year | Replaced with `new Date().getFullYear()` in all 3 endpoints |
+| 5 | LOW | `emotionColor()` in Topics.svelte missing "信息价值" — topics display with fallback text color | Added `"信息价值": "#8b5cf6"` (purple) to color map |
+
+### Verification
+
+- `npx tsc --noEmit` — ✅ 0 errors
+- `npx vitest run` — ✅ 444/444 pass (69 files)
+- 4 files changed: `api.ts`, `trend-research.ts`, `fallback-strategy.md`, `Topics.svelte`
+
 ## FINAL STATUS — All 14 Phases Complete 🎉
 
 | Phase | Description | Status |
