@@ -662,9 +662,10 @@ ${memoryContext}
       args.push("--resume", resumeSessionId);
     }
 
-    if (session.model) {
-      args.push("--model", session.model);
-    }
+    // 始终显式指定模型：否则 CLI 会回落到用户 settings.json 的默认 model
+    // （主会话 /model 设置如 "k3[1m]" 对 AutoViral spawn 的独立 CLI 进程无效，
+    //  会导致每个 agent 回合立即报错退出、流水线假死 —— 2026-07-17 根因）
+    args.push("--model", session.model ?? "sonnet");
 
     const cliCmd = resolveClaudeCommand();
     const proc = spawn(cliCmd, args, {
@@ -1007,9 +1008,8 @@ ${memoryContext}
         args.push("--resume", resumeEvalSessionId);
       }
 
-      if (session.model) {
-        args.push("--model", session.model);
-      }
+      // 始终显式指定模型（同 spawnCli，避免回落到用户默认 model 导致回合即死）
+      args.push("--model", session.model ?? "sonnet");
 
       const cliCmd = resolveClaudeCommand();
       const proc = spawn(cliCmd, args, {
