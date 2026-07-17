@@ -1,12 +1,13 @@
 import { Hono } from "hono";
 import { existsSync } from "node:fs";
-import { readFile, writeFile, appendFile, mkdir, readdir, rm, rename, unlink } from "node:fs/promises";
+import { readFile, writeFile, appendFile, mkdir, readdir, rm, rename, unlink, stat } from "node:fs/promises";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { join, extname, basename, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import yaml from "js-yaml";
 import { loadConfig, saveConfig, dataDir, getConfigDir, type AnalyticsSource } from "../config.js";
+import { getDb } from "../db/connection.js";
 import { exportBackup, importBackup } from "../db/backup.js";
 import { migrateLegacyWorks } from "../db/migrate-legacy.js";
 import {
@@ -46,14 +47,16 @@ import { collectTrends, listTopics, getTopic } from "../services/trend-research.
 import { getAccount } from "../db/accounts-repo.js";
 import { buildTonePrompt } from "../services/tone-profile.js";
 import { updateTopic, deleteTopic } from "../db/topics-repo.js";
-import { createArticle, listArticlesByWork } from "../db/articles-repo.js";
+import { createArticle, listArticlesByWork, updateArticle, listAllArticles } from "../db/articles-repo.js";
 import { createScript, listScriptsByWork } from "../db/scripts-repo.js";
 import { generateArticleFromTopic, generateScriptFromArticle } from "../services/content-generator.js";
 import { randomUUID } from "node:crypto";
 import { createTemplate, getTemplate, listTemplates, updateTemplate, deleteTemplate, type DbTemplate } from "../db/templates-repo.js";
+import { generateTemplates } from "../services/template-generator.js";
 import { createRenderJob, getRenderJob, listRenderJobs, updateRenderJob, type DbRenderJob } from "../db/render-jobs-repo.js";
 import { startRender } from "../services/video-factory.js";
 import { renderTimeline } from "../video/renderer.js";
+import { escapeDrawtext, escapeFilterPath, lineHeightFor, normalizeColorForFfmpeg, resolveFontPaths, wrapTextLines } from "../video/draw-utils.js";
 import { validateTemplate, TimelineValidationError } from "../video/schema.js";
 import { applyVariables, fillDefaults } from "../video/variables.js";
 import type { Timeline } from "../video/types.js";
@@ -61,6 +64,9 @@ import { publishRoutes } from "./publish-api.js";
 import { publishWorkRoutes } from "./routes/publish.js";
 import { accountsRoutes } from "./routes/accounts.js";
 import { calendarRoutes } from "./routes/calendar.js";
+import { budgetRoutes } from "./routes/budget.js";
+import { dataSourceRoutes } from "./routes/data-sources.js";
+import { stockAssetRoutes } from "./routes/stock-assets.js";
 import {
   listPublishRecords,
 } from "../db/publish-records-repo.js";
@@ -184,6 +190,12 @@ apiRoutes.get("/api/config", async (c) => {
     researchEnabled: config.research?.enabled ?? false,
     researchCron: config.research?.schedule ?? "0 9 * * *",
     memorySyncEnabled: config.memory?.syncEnabled ?? false,
+    chanjingAppId: config.chanjing?.appId ?? "",
+    chanjingSecretKey: config.chanjing?.secretKey ?? "",
+    bailianApiKey: config.bailian?.apiKey ?? "",
+    pexelsApiKey: config.pexels?.apiKey ?? "",
+    pixabayApiKey: config.pixabay?.apiKey ?? "",
+    unsplashAccessKey: config.unsplash?.accessKey ?? "",
     ...flattenAnalytics(config),
   });
 });
@@ -224,6 +236,26 @@ apiRoutes.put("/api/config", async (c) => {
     config.memory.syncEnabled = body.memorySyncEnabled as boolean;
   }
 
+  if (body.chanjingAppId !== undefined || body.chanjingSecretKey !== undefined) {
+    if (!config.chanjing) config.chanjing = { appId: "", secretKey: "" };
+    if (body.chanjingAppId !== undefined) config.chanjing.appId = body.chanjingAppId as string;
+    if (body.chanjingSecretKey !== undefined) config.chanjing.secretKey = body.chanjingSecretKey as string;
+  }
+  if (body.bailianApiKey !== undefined) {
+    config.bailian = { apiKey: body.bailianApiKey as string };
+  }
+  if (body.pexelsApiKey !== undefined) {
+    if (!config.pexels) config.pexels = { apiKey: "" };
+    config.pexels.apiKey = body.pexelsApiKey as string;
+  }
+  if (body.pixabayApiKey !== undefined) {
+    if (!config.pixabay) config.pixabay = { apiKey: "" };
+    config.pixabay.apiKey = body.pixabayApiKey as string;
+  }
+  if (body.unsplashAccessKey !== undefined) {
+    if (!config.unsplash) config.unsplash = { accessKey: "" };
+    config.unsplash.accessKey = body.unsplashAccessKey as string;
+  }
   config.analytics = parseAnalytics(body);
 
   await saveConfig(config);
@@ -247,21 +279,21 @@ apiRoutes.get("/api/works", async (c) => {
           /\.(png|jpe?g|webp|gif)$/i.test(a) && a.startsWith("output/")
         );
         if (outputImage) {
-          return { ...w, coverImage: `/api/works/${w.id}/assets/${outputImage.split("/").map(encodeURIComponent).join("/")}` };
+          return { ...w, coverImage: `/api/works/${w.id}/assets/${outputImage.replace(/\\/g, "/").split("/").map(encodeURIComponent).join("/")}` };
         }
         // 2. Any asset image
         const firstImage = assets.find((a: string) =>
           /\.(png|jpe?g|webp|gif)$/i.test(a)
         );
         if (firstImage) {
-          return { ...w, coverImage: `/api/works/${w.id}/assets/${firstImage.split("/").map(encodeURIComponent).join("/")}` };
+          return { ...w, coverImage: `/api/works/${w.id}/assets/${firstImage.replace(/\\/g, "/").split("/").map(encodeURIComponent).join("/")}` };
         }
         // 3. Final video — fallback, rendered as <video> on frontend
         const finalVideo = assets.find((a: string) =>
           /\.(mp4|mov|webm)$/i.test(a) && /final/i.test(a)
         );
         if (finalVideo) {
-          return { ...w, coverImage: `/api/works/${w.id}/assets/${finalVideo.split("/").map(encodeURIComponent).join("/")}`, coverIsVideo: true };
+          return { ...w, coverImage: `/api/works/${w.id}/assets/${finalVideo.replace(/\\/g, "/").split("/").map(encodeURIComponent).join("/")}`, coverIsVideo: true };
         }
       } catch {}
       return w;
@@ -283,6 +315,8 @@ apiRoutes.post("/api/works", async (c) => {
       videoSearchQuery?: string;
       platforms: string[];
       topicHint?: string;
+      templateId?: string;
+      digitalHumanId?: string;
     }>();
     if (!body.title || !body.type || !body.platforms) {
       return c.json({ error: "title, type, and platforms are required" }, 400);
@@ -295,6 +329,8 @@ apiRoutes.post("/api/works", async (c) => {
       videoSearchQuery: body.videoSearchQuery,
       platforms: body.platforms,
       topicHint: body.topicHint,
+      templateId: body.templateId,
+      digitalHumanId: body.digitalHumanId,
     });
     return c.json(work, 201);
   } catch (err) {
@@ -356,7 +392,7 @@ apiRoutes.get("/api/works/:id/assets/*", async (c) => {
   // Extract the nested path after /assets/
   const url = new URL(c.req.url);
   const prefix = `/api/works/${id}/assets/`;
-  const nestedPath = url.pathname.slice(prefix.length);
+  const nestedPath = decodeURIComponent(url.pathname.slice(prefix.length)).replace(/\\/g, "/");
   if (!nestedPath) return c.json({ error: "Asset path required" }, 400);
 
   try {
@@ -407,6 +443,38 @@ apiRoutes.get("/api/works/:id/articles", async (c) => {
   const id = c.req.param("id");
   const articles = listArticlesByWork(id);
   return c.json({ articles });
+});
+
+// GET /api/articles - list all articles
+apiRoutes.get("/api/articles", async (c) => {
+  const limit = Math.min(parseInt(c.req.query("limit") ?? "100", 10) || 100, 500);
+  const articles = listAllArticles(limit);
+  return c.json({ articles });
+});
+
+// GET /api/articles/:id - get a single article
+apiRoutes.get("/api/articles/:id", async (c) => {
+  const id = parseInt(c.req.param("id"), 10);
+  if (Number.isNaN(id)) return c.json({ error: "Invalid id" }, 400);
+  const { getArticle } = await import("../db/articles-repo.js");
+  const article = getArticle(id);
+  if (!article) return c.json({ error: "Article not found" }, 404);
+  return c.json(article);
+});
+
+// PUT /api/articles/:id - update an article (edit + save)
+apiRoutes.put("/api/articles/:id", async (c) => {
+  const id = parseInt(c.req.param("id"), 10);
+  if (Number.isNaN(id)) return c.json({ error: "Invalid id" }, 400);
+  const body = await c.req.json<{ title?: string; content?: string; platform?: string; status?: string }>();
+  const updated = updateArticle(id, {
+    ...(body.title !== undefined ? { title: body.title } : {}),
+    ...(body.content !== undefined ? { content: body.content } : {}),
+    ...(body.platform !== undefined ? { platform: body.platform } : {}),
+    ...(body.status !== undefined ? { status: body.status as any } : {}),
+  });
+  if (!updated) return c.json({ error: "Article not found" }, 404);
+  return c.json(updated);
 });
 
 // GET /api/works/:id/scripts — PRD: list scripts for a work
@@ -604,6 +672,35 @@ apiRoutes.get("/api/shared-assets", async (c) => {
   return c.json(assets);
 });
 
+// GET /api/shared-assets/templates/:id/:file - serve template-specific assets (poster.png, preview.mp4)
+apiRoutes.get("/api/shared-assets/templates/:id/:file", async (c) => {
+  const id = c.req.param("id");
+  const file = c.req.param("file");
+  if (!/^[a-zA-Z0-9_-]+$/.test(id)) return c.json({ error: "Invalid template id" }, 400);
+  if (!/^[a-zA-Z0-9._-]+$/.test(file)) return c.json({ error: "Invalid filename" }, 400);
+  try {
+    const filePath = join(TEMPLATE_DIR, id, file);
+    const data = await readFile(filePath);
+    const ext = extname(file).toLowerCase();
+    const mimeMap: Record<string, string> = {
+      ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+      ".gif": "image/gif", ".webp": "image/webp",
+      ".mp4": "video/mp4", ".webm": "video/webm", ".mov": "video/quicktime",
+    };
+    const mime = mimeMap[ext] ?? "application/octet-stream";
+    return new Response(data, {
+      headers: {
+        "Content-Type": mime,
+        "Content-Length": String(data.length),
+        "Cache-Control": "public, max-age=3600",
+      },
+    });
+  } catch (e: any) {
+    if (e.code === "ENOENT") return c.json({ error: "File not found" }, 404);
+    return c.json({ error: "Failed to read file" }, 500);
+  }
+});
+
 apiRoutes.get("/api/shared-assets/:category/:file", async (c) => {
   const category = c.req.param("category");
   const file = c.req.param("file");
@@ -756,10 +853,11 @@ async function researchTrends(platforms: string[]): Promise<{ collected: string[
         `用户指定了以下关注领域：**${interests.join("、")}**`,
         ``,
         `**强制规则：**`,
-        `1. 至少 70% 的推荐话题必须直接属于用户关注的领域或其紧密相关子领域`,
+        `1. **100% 的推荐话题必须直接属于用户关注的领域或其紧密相关子领域。禁止返回任何与关注领域无关的泛热门话题。**`,
         `2. 每个关注领域至少覆盖 2-3 个话题。如果一个领域太大（如"科技"），请拆分为具体子方向`,
-        `3. 不相关的泛热门话题最多占 30%，用于补充视野`,
-        `4. 如果用户领域偏专业/技术，用该领域的专业视角找趋势，不要强行套用娱乐化情绪模板`,
+        `3. 如果某个关注领域在当前平台热搜中完全没有相关条目，请用 WebSearch 深度搜索该领域`,
+          `4. 每个话题的 title 中必须包含该关注领域的具体关键词，不能是泛化的热门话题`,
+        `5. 如果用户领域偏专业/技术，用该领域的专业视角找趋势，不要强行套用娱乐化情绪模板`,
       ].join("\n")
     : '';
 
@@ -770,8 +868,15 @@ async function researchTrends(platforms: string[]): Promise<{ collected: string[
     const scriptData = await runTrendScript(platform);
     // BUGFIX: search keywords must include user interests
     const year = new Date().getFullYear();
+    // Generate multi-dimensional search keywords for deep domain research
     const interestSearchTerms = interests.length
-      ? interests.map(i => `"${platformLabel} ${i} 最新 ${year}"`).join(" ")
+      ? interests.flatMap(i => [
+          "\"" + i + " 趋势 " + year + "\"",
+          "\"" + i + " 最新政策 " + year + "\"",
+          "\"" + i + " 教程 干货\"",
+          "\"" + i + " 案例 分析\"",
+          "\"" + i + " 争议 热议\"",
+        ]).join(" ")
       : "";
     const dataClause = scriptData
       ? `\n以下是通过 API 获取的 ${platformLabel} 实时热搜数据。请筛选其中与用户关注领域相关的条目：\n\`\`\`json\n${scriptData.slice(0, 4000)}\n\`\`\`\n`
@@ -936,9 +1041,9 @@ apiRoutes.post("/api/trends/refresh-stream", async (c) => {
           ``,
           `**强制规则：**`,
           `1. 至少 70% 的推荐话题必须直接属于用户关注的领域或其紧密相关子领域`,
-          `2. 每个关注领域至少覆盖 2-3 个话题。如果一个领域太大，请拆分为具体子方向`,
+          `2. 每个关注领域至少覆盖 3-5 个话题。如果一个领域太大，请拆分为具体子方向`,
           `3. 不相关的泛热门话题最多占 30%，用于补充视野`,
-          `4. 如果用户领域偏专业/技术，用该领域的专业视角找趋势`,
+          `5. 如果用户领域偏专业/技术，用该领域的专业视角找趋势`,
         ].join("\n")
       : '';
     const competitorClause = competitors.length > 0
@@ -949,8 +1054,15 @@ apiRoutes.post("/api/trends/refresh-stream", async (c) => {
     const scriptData = await runTrendScript(platform);
     // BUGFIX: search keywords must include user interests
     const year = new Date().getFullYear();
+    // Generate multi-dimensional search keywords for deep domain research
     const interestSearchTerms = interests.length
-      ? interests.map(i => `"${platformLabel} ${i} 最新 ${year}"`).join(" ")
+      ? interests.flatMap(i => [
+          "\"" + i + " 趋势 " + year + "\"",
+          "\"" + i + " 最新政策 " + year + "\"",
+          "\"" + i + " 教程 干货\"",
+          "\"" + i + " 案例 分析\"",
+          "\"" + i + " 争议 热议\"",
+        ]).join(" ")
       : "";
     const dataClause = scriptData
       ? `\n以下是通过 API 获取的 ${platformLabel} 实时热搜数据。请筛选其中与用户关注领域相关的条目：\n\`\`\`json\n${scriptData.slice(0, 4000)}\n\`\`\`\n`
@@ -1074,15 +1186,21 @@ apiRoutes.post("/api/works/:id/session", async (c) => {
     const pendingStep = steps.find(([, s]) => s.status === "pending" || s.status === "active");
     const stepName = pendingStep ? pendingStep[1].name : steps[0]?.[1]?.name ?? "创作";
 
+    const hasTemplate = !!work.templateId;
+    const hasDigitalHuman = !!work.digitalHumanId;
+
     const prompt = [
       `你是一个内容创作助手。你正在帮助用户创作: "${work.title}" (类型: ${work.type})。`,
       `目标平台: ${work.platforms.map((p: any) => typeof p === "string" ? p : p.platform).join(", ")}。`,
       work.topicHint ? `选题方向: ${work.topicHint}` : "",
+      hasTemplate ? `使用模板: ${work.templateId}` : "",
+      hasDigitalHuman ? `使用数字人: ${work.digitalHumanId}` : "",
       toneInjection,
       ``,
       `当前步骤: "${stepName}"。`,
-      `请先向用户确认：简要说明这个步骤你将做什么，询问用户是否有特定方向或要求，等用户确认后再开始工作。`,
-      `不要直接开始执行，先和用户沟通。`,
+      hasTemplate || hasDigitalHuman
+        ? `**自动化模式**：用户已预先设定好模板和数字人，请直接执行当前步骤，不要询问用户确认。执行完毕后自动进入下一步骤。`
+        : `请先向用户确认：简要说明这个步骤你将做什么，询问用户是否有特定方向或要求，等用户确认后再开始工作。不要直接开始执行，先和用户沟通。`,
     ].filter(Boolean).join("\n");
 
     const config = await loadConfig();
@@ -1140,11 +1258,28 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
       }
     }
 
+    const isAutoMode = !!(work.templateId || work.digitalHumanId);
+    const autoModeDirective = isAutoMode
+      ? [
+          ``,
+          `## AUTOMATED MODE`,
+          `This work is running in automated mode (template: ${work.templateId ?? "N/A"}, digital human: ${work.digitalHumanId ?? "N/A"}).`,
+          `DO NOT ask the user to choose from options. Automatically select the best option and proceed.`,
+          `DO NOT wait for user confirmation between steps. Execute each step completely and move to the next one automatically.`,
+          `After completing this step, automatically trigger the next pipeline step via:`,
+          `\`curl -X POST http://localhost:3271/api/works/${id}/pipeline/advance -H "Content-Type: application/json" -d '{"completedStep":"${step}","nextStep":"NEXT_STEP"}'\``,
+          ``,
+        ].join("\n")
+      : "";
+
     const promptParts = [
       `You are working on a content piece: "${work.title}" (type: ${work.type}).`,
       work.contentCategory ? `Content category: ${work.contentCategory}.` : "",
       `Platforms: ${work.platforms.map((p: any) => typeof p === "string" ? p : p.platform).join(", ")}.`,
       work.topicHint ? `Topic hint: ${work.topicHint}` : "",
+      work.templateId ? `Template: ${work.templateId}` : "",
+      work.digitalHumanId ? `Digital Human: ${work.digitalHumanId}` : "",
+      autoModeDirective,
       ``,
     ];
 
@@ -1564,6 +1699,52 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
         };
         const method = assetMethod[work.contentCategory as string];
         if (method) promptParts.push(method);
+
+        // Universal image quality directives for image-text content
+        promptParts.push([
+          ``,
+          `## 图片质量要求（适用于所有图文内容）`,
+          ``,
+          `### AI 生图质量标准`,
+          `如果使用 AI 生图 API（/api/generate/image），prompt 中必须包含：`,
+          `1. **画质关键词**：high quality, professional, detailed, 4K, sharp focus, masterpiece`,
+          `2. **构图要求**：rule of thirds, balanced composition, clean background`,
+          `3. **光影要求**：natural lighting, soft shadows, professional color grading`,
+          `4. **风格统一**：同一组图片必须使用相同的风格描述词（如 "minimalist flat illustration" 或 "realistic photography style"）`,
+          `5. **尺寸**：竖版 1080x1440 或 1080x1350（小红书/抖音图文标准比例 3:4）`,
+          ``,
+          `### ffmpeg 文字卡片质量标准`,
+          `如果使用 ffmpeg 生成文字卡片（封面），必须达到以下标准：`,
+          `1. **分辨率**：1080x1440（竖版高清）`,
+          `2. **背景**：使用渐变色背景（不要纯黑/纯白），推荐配色：`,
+          `   - 深蓝渐变: "linear-gradient(#1a2a6c, #b21f1f, #fdbb2d)" 效果`,
+          `   - 用 ffmpeg 生成：先创建纯色背景，再用 overlay 添加文字`,
+          `3. **字体**：使用系统中文字体（SimHei 或 Microsoft YaHei），字号 48-72px`,
+          `4. **文字效果**：添加描边（borderw=2）和阴影（shadow），确保可读性`,
+          `5. **布局**：文字居中，留白充足，不要堆砌`,
+          `6. **命令模板**：`,
+          `   ffmpeg -f lavfi -i color=c=0x1a2a6c:s=1080x1440 -vf \\`,
+          `   "drawtext=text='标题文字':fontfile='C:/Windows/Fonts/msyh.ttc':fontsize=56:fontcolor=white:`,
+          `   borderw=3:bordercolor=black@0.5:shadowx=2:shadowy=2:shadowcolor=black@0.3:`,
+          `   x=(w-text_w)/2:y=(h-text_h)/2" -frames:v 1 -y cover.png`,
+          ``,
+          `### 搜索图片质量标准`,
+          `1. 搜索关键词加上 "高清" "4K" "wallpaper" 等画质限定词`,
+          `2. 下载后检查图片分辨率，低于 800px 宽度的弃用重搜`,
+          `3. 用 ffmpeg 统一调整为 1080x1440（裁剪而非拉伸）：`,
+          `   ffmpeg -i input.jpg -vf "crop=1080:1440:(in_w-1080)/2:0,scale=1080:1440" -y output.jpg`,
+          `4. 统一调色使整组图片色调一致`,
+          ``,
+          `### 最终排版质量标准`,
+          `1. 图文排版使用 HTML+CSS 生成（比 ffmpeg 更灵活美观）`,
+          `2. 推荐使用方案：生成 HTML 文件 -> 用 playwright 截图 -> 得到高质量图片`,
+          `3. CSS 样式参考：`,
+          `   - 卡片式布局，圆角 12px，阴影 box-shadow`,
+          `   - 正文字号 28-32px，行高 1.8，颜色 #333`,
+          `   - 背景使用浅色系（#f8f9fa 或纯白），强调色用主题色`,
+          `   - 每页内容不超过 200 字，配图占 40-50% 面积`,
+          ``,
+        ].join("\n"));
       }
     }
 
@@ -2322,24 +2503,158 @@ apiRoutes.post("/api/topics/:id/convert", async (c) => {
     return c.json({ error: err instanceof Error ? err.message : "DB write failed" }, 500);
   }
 
-  return c.json({ workId: work.id });
+  // Auto-start the pipeline: mark research as done (we already have the article+script)
+  // and trigger the next step (plan)
+  try {
+    const workObj = await getWork(work.id);
+    if (workObj) {
+      // Mark research step as done since we have the article+script already
+      const pipeline = workObj.pipeline;
+      if (pipeline["research"]) {
+        pipeline["research"].status = "done";
+        pipeline["research"].completedAt = new Date().toISOString();
+        pipeline["research"].note = "Auto-generated from topic conversion";
+      }
+      // Mark plan step as active
+      if (pipeline["plan"]) {
+        pipeline["plan"].status = "active";
+        pipeline["plan"].startedAt = new Date().toISOString();
+      }
+      await storeUpdateWork(work.id, { status: "planning", pipeline });
+    }
+  } catch (err) {
+    console.error("[convert] Failed to auto-start pipeline:", err);
+  }
+
+  return c.json({ workId: work.id, autoStarted: true });
 });
+
+// POST /api/topics/batch-convert - Convert multiple topics to works with auto-pipeline
+apiRoutes.post("/api/topics/batch-convert", async (c) => {
+  const body = await c.req.json<{
+    topicIds: number[];
+    templateId?: string;
+    digitalHumanId?: string;
+    platforms?: string[];
+    type?: "short-video" | "image-text";
+    autoPipeline?: boolean;
+  }>().catch(() => ({ topicIds: [] } as any));
+
+  if (!body.topicIds?.length) return c.json({ error: "topicIds is required" }, 400);
+  const platforms = body.platforms ?? ["douyin", "xiaohongshu"];
+  const type = body.type ?? "short-video";
+  const results: { topicId: number; workId?: string; error?: string }[] = [];
+
+  for (const topicId of body.topicIds) {
+    try {
+      const topic = getTopic(topicId);
+      if (!topic) { results.push({ topicId, error: "Topic not found" }); continue; }
+
+      const work = await createWork({
+        title: topic.title,
+        type,
+        contentCategory: topic.emotion_type as any,
+        platforms,
+        topicHint: [topic.title, topic.description, `情绪：${topic.emotion_type}/${topic.emotion_subtype}`, `标签：${topic.tags.join(",")}`].filter(Boolean).join("\n"),
+        templateId: body.templateId,
+        digitalHumanId: body.digitalHumanId,
+      });
+
+      // Generate article and script
+      const platform = platforms[0] ?? "douyin";
+      const article = await generateArticleFromTopic(topic, platform);
+      const script = await generateScriptFromArticle(article, 180);
+
+      try {
+        createArticle({ work_id: work.id, topic_id: topic.id, title: article.title, content: article.content, platform, status: "ready" });
+        createScript({ work_id: work.id, content: script as unknown as Record<string, unknown>, duration: script.duration, status: "ready" });
+        updateTopic(topic.id, { status: "converted", work_id: work.id });
+      } catch (err) {
+        console.error(`[batch-convert] DB write failed for topic ${topicId}:`, err);
+      }
+
+      // Auto-start pipeline: mark research as done, trigger plan
+      try {
+        const workObj = await getWork(work.id);
+        if (workObj) {
+          const pipeline = workObj.pipeline;
+          if (pipeline["research"]) {
+            pipeline["research"].status = "done";
+            pipeline["research"].completedAt = new Date().toISOString();
+            pipeline["research"].note = "Auto-generated from batch conversion";
+          }
+          if (pipeline["plan"]) {
+            pipeline["plan"].status = "active";
+            pipeline["plan"].startedAt = new Date().toISOString();
+          }
+          await storeUpdateWork(work.id, { status: "planning", pipeline });
+        }
+      } catch (err) {
+        console.error(`[batch-convert] Failed to auto-start pipeline for topic ${topicId}:`, err);
+      }
+
+      results.push({ topicId, workId: work.id });
+    } catch (err) {
+      results.push({ topicId, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  return c.json({ results, count: results.length });
+});
+
+// GET /api/digital-humans/avatars/list - simple list for dropdowns
+// (already exists above, but add a lightweight version for batch UI)
 
 // ---------------------------------------------------------------------------
 // Manual trend collection trigger
 // ---------------------------------------------------------------------------
 
+// In-memory tracking for async trend collection jobs
+const trendJobs = new Map<string, { status: string; platform: string; interests: string[]; collected: number; error?: string; startedAt: number }>();
+
+// POST /api/trends/collect - start async trend collection (returns job immediately)
 apiRoutes.post("/api/trends/collect", async (c) => {
   const config = await loadConfig();
   const body = await c.req.json<{ platform?: string; interests?: string[]; accountId?: string }>().catch(() => ({}));
-  const platform = (body as any).platform ?? config.research?.platforms?.[0] ?? "douyin";
+  // Collect across ALL configured platforms, not just one
+  const allPlatforms = config.research?.platforms?.length
+    ? config.research.platforms
+    : ["douyin", "xiaohongshu", "bilibili", "zhihu", "kuaishou"];
+  // If user specified a single platform in the request, use just that one
+  const platforms = (body as any).platform
+    ? [(body as any).platform]
+    : allPlatforms;
   const reqInterests = (body as any).interests ?? config.interests ?? [];
   const interests = Array.isArray(reqInterests) ? reqInterests : [];
   const accountId = (body as any).accountId as string | undefined;
   const account = accountId ? getAccount(accountId) : undefined;
-  const results = await collectTrends([platform], interests, account?.tone_profile);
-  const total = results.reduce((sum, r) => sum + r.topics.length, 0);
-  return c.json({ collected: total, platform, topics: results.flatMap(r => r.topics.map(t => ({ id: t.id, title: t.title, heat: t.heat }))) });
+
+  const jobId = "trend_" + Date.now();
+  trendJobs.set(jobId, { status: "running", platform: platforms.join(","), interests, collected: 0, startedAt: Date.now() });
+
+  // Run collection asynchronously (fire and forget)
+  collectTrends(platforms, interests, account?.tone_profile)
+    .then((results) => {
+      const total = results.reduce((sum, r) => sum + r.topics.length, 0);
+      const job = trendJobs.get(jobId);
+      if (job) { job.status = "done"; job.collected = total; }
+    })
+    .catch((err) => {
+      const job = trendJobs.get(jobId);
+      if (job) { job.status = "error"; job.error = err instanceof Error ? err.message : String(err); }
+    });
+
+  return c.json({ jobId, status: "running", platform: platforms.join(","), message: "调研已启动，请稍后查看结果" });
+});
+
+// GET /api/trends/collect/status/:jobId - poll async collection status
+apiRoutes.get("/api/trends/collect/status/:jobId", async (c) => {
+  const jobId = c.req.param("jobId");
+  const job = trendJobs.get(jobId);
+  if (!job) return c.json({ error: "Job not found" }, 404);
+  // Auto-cleanup jobs older than 10 minutes
+  if (Date.now() - job.startedAt > 600000) { trendJobs.delete(jobId); return c.json({ error: "Job expired" }, 404); }
+  return c.json({ jobId, status: job.status, platform: job.platform, collected: job.collected, error: job.error });
 });
 
 // ---------------------------------------------------------------------------
@@ -2359,6 +2674,30 @@ apiRoutes.get("/api/digital-humans/status", async (c) => {
 });
 
 // GET /api/digital-humans/avatars
+// GET /api/digital-humans/config-status - check chanjing/bailian credential status
+apiRoutes.get("/api/digital-humans/config-status", async (c) => {
+  const config = await loadConfig();
+  const chanjing = !!(config.chanjing?.appId && config.chanjing?.secretKey);
+  const bailian = !!config.bailian?.apiKey;
+  return c.json({ chanjing, bailian });
+});
+
+// POST /api/digital-humans/test-connection - test chanjing API connectivity
+apiRoutes.post("/api/digital-humans/test-connection", async (c) => {
+  const config = await loadConfig();
+  if (!config.chanjing?.appId || !config.chanjing?.secretKey) {
+    return c.json({ success: false, error: "未配置蝉镜 AppID / SecretKey，请先在设置中填写" }, 400);
+  }
+  try {
+    const { ChanjingClient } = await import("../services/chanjing-client.js");
+    const client = new ChanjingClient();
+    await client.getAccessToken();
+    return c.json({ success: true, message: "蝉镜 API 连接成功" });
+  } catch (err) {
+    return c.json({ success: false, error: err instanceof Error ? err.message : String(err) }, 500);
+  }
+});
+
 apiRoutes.get("/api/digital-humans/avatars", async (c) => {
   return c.json({ avatars: avatarsRepo.listAvatars() });
 });
@@ -2598,6 +2937,71 @@ function templateToApi(t: DbTemplate) {
   };
 }
 
+// POST /api/templates/generate - start async AI template generation (DB-backed, survives page switches)
+apiRoutes.post("/api/templates/generate", async (c) => {
+  const body = await c.req.json<{ reference?: string; count?: number; contentForm?: string }>().catch(() => ({ reference: undefined, count: undefined, contentForm: undefined }));
+  const jobId = "tplgen_" + Date.now();
+  const count = body.count ?? 5;
+
+  // Persist job to DB so it survives page switches / component unmounts
+  try {
+    const db = getDb();
+    db.prepare("INSERT INTO template_gen_jobs (id, status, count, generated) VALUES (?, 'running', ?, 0)").run(jobId, count);
+  } catch {
+    // If table doesn't exist yet (migration not run), fall back to in-memory
+  }
+
+  // Run generation asynchronously (fire and forget)
+  generateTemplates({
+    reference: body.reference,
+    count: body.count,
+    contentForm: body.contentForm as "hot_comment" | "knowledge" | "industry" | "insight" | undefined,
+  })
+    .then((templates) => {
+      try {
+        const db = getDb();
+        db.prepare("UPDATE template_gen_jobs SET status = 'done', generated = ?, updated_at = datetime('now') WHERE id = ?").run(templates.length, jobId);
+      } catch {}
+    })
+    .catch((err) => {
+      try {
+        const db = getDb();
+        db.prepare("UPDATE template_gen_jobs SET status = 'error', error = ?, updated_at = datetime('now') WHERE id = ?").run(err instanceof Error ? err.message : String(err), jobId);
+      } catch {}
+    });
+
+  return c.json({ jobId, status: "running", message: "模板生成已启动，可切换页面，稍后回来查看结果" });
+});
+
+// GET /api/templates/generate/status/:jobId - poll async template generation status (DB-backed)
+apiRoutes.get("/api/templates/generate/status/:jobId", async (c) => {
+  const jobId = c.req.param("jobId");
+  try {
+    const db = getDb();
+    const row = db.prepare("SELECT * FROM template_gen_jobs WHERE id = ?").get(jobId) as Record<string, unknown> | undefined;
+    if (!row) return c.json({ error: "Job not found" }, 404);
+    return c.json({ jobId, status: row.status, generated: row.generated, error: row.error });
+  } catch {
+    return c.json({ error: "Job tracking not available" }, 500);
+  }
+});
+
+// GET /api/templates/generate/active - check if there's any running job (for page re-entry)
+apiRoutes.get("/api/templates/generate/active", async (c) => {
+  try {
+    const db = getDb();
+    // Clean up jobs older than 20 minutes that are still "running" (likely crashed).
+    // Template generation runs in batches of 3 (each ~4 min), so 10 templates can
+    // legitimately take ~16 minutes.
+    db.prepare("UPDATE template_gen_jobs SET status = 'error', error = 'Job timed out (no status update in 20 min)' WHERE status = 'running' AND created_at < datetime('now', '-20 minutes')").run();
+    const row = db.prepare("SELECT * FROM template_gen_jobs WHERE status = 'running' ORDER BY created_at DESC LIMIT 1").get() as Record<string, unknown> | undefined;
+    if (!row) return c.json({ active: false });
+    return c.json({ active: true, jobId: row.id, count: row.count });
+  } catch {
+    return c.json({ active: false });
+  }
+});
+
 apiRoutes.get("/api/templates", async (c) => {
   const status = c.req.query("status") as DbTemplate["status"] | undefined;
   const contentForm = c.req.query("contentForm") || undefined;
@@ -2641,6 +3045,56 @@ apiRoutes.put("/api/templates/:id", async (c) => {
   if (!existing) return c.json({ error: "Template not found" }, 404);
   try {
     const body = await c.req.json();
+    // Normalize canvas: ensure width, height, fps are numbers
+    if (body.canvas) {
+      if (typeof body.canvas.width !== "number") body.canvas.width = 1080;
+      if (typeof body.canvas.height !== "number") body.canvas.height = 1920;
+      if (typeof body.canvas.fps !== "number") body.canvas.fps = 30;
+      if (!body.canvas.backgroundColor) body.canvas.backgroundColor = "#0a0a0a";
+    }
+    // Normalize layers: ensure id, start, duration, position, size exist
+    if (Array.isArray(body.layers)) {
+      body.layers = body.layers.map((layer: any, i: number) => {
+        const l = { ...layer };
+        if (!l.id || typeof l.id !== "string") l.id = `layer_${i}`;
+        if (typeof l.start !== "number") l.start = 0;
+        if (typeof l.duration !== "number") l.duration = 10;
+        if (!l.position || typeof l.position !== "object") l.position = { x: 0, y: 0 };
+        else {
+          if (typeof l.position.x !== "number") l.position.x = 0;
+          if (typeof l.position.y !== "number") l.position.y = 0;
+        }
+        if (l.type === "text") {
+          if (!l.content && l.text) l.content = l.text;
+          if (!l.content) l.content = "";
+          const style = l.style;
+          if (style) {
+            if (style.fontSize && !l.fontSize) l.fontSize = style.fontSize;
+            if (style.color && !l.color) l.color = style.color;
+            if (style.align && !l.align) l.align = style.align;
+            delete l.style;
+          }
+          if (typeof l.fontSize !== "number") l.fontSize = 40;
+          if (!l.color) l.color = "#FFFFFF";
+          if (!l.align) l.align = "left";
+        }
+        if (l.type === "shape") {
+          if (!l.shape) l.shape = "rect";
+          if (!l.fill && l.color) l.fill = l.color;
+          if (!l.fill) l.fill = "#FFFFFF";
+          if (!l.size || typeof l.size !== "object") l.size = { width: 100, height: 100 };
+          else {
+            if (typeof l.size.width !== "number") l.size.width = 100;
+            if (typeof l.size.height !== "number") l.size.height = 100;
+          }
+          delete l.color;
+        }
+        if ((l.type === "image" || l.type === "video") && (!l.size || typeof l.size !== "object")) {
+          l.size = { width: 100, height: 100 };
+        }
+        return l;
+      });
+    }
     const validated = validateTemplate({ ...existing, ...body, id });
     const updated = updateTemplate(id, {
       name: validated.name,
@@ -2668,6 +3122,137 @@ apiRoutes.delete("/api/templates/:id", async (c) => {
   return c.json({ deleted: true });
 });
 
+// GET /api/templates/:id/poster - generate a rich poster from template layers
+apiRoutes.get("/api/templates/:id/poster", async (c) => {
+  const id = c.req.param("id");
+  if (!/^[a-zA-Z0-9_-]+$/.test(id)) return c.json({ error: "Invalid template id" }, 400);
+  const template = getTemplate(id);
+  if (!template) return c.json({ error: "Template not found" }, 404);
+
+  const posterDir = join(TEMPLATE_DIR, id);
+  await mkdir(posterDir, { recursive: true });
+  const posterPath = join(posterDir, "poster.png");
+  const videoPosterPath = join(posterDir, "poster.mp4");
+
+  // If video poster already exists, serve it as the poster
+  if (existsSync(videoPosterPath)) {
+    // Extract a mid-clip frame as PNG (first frame may predate layer entrance animations)
+    try {
+      await execFileAsync("ffmpeg", ["-ss", "2.5", "-i", videoPosterPath, "-frames:v", "1", "-y", posterPath], { timeout: 10000 });
+      return c.json({ posterUrl: `/api/shared-assets/templates/${id}/poster.png` });
+    } catch {}
+  }
+  // If poster exists AND is newer than template's last update, serve cached version
+  if (existsSync(posterPath)) {
+    try {
+      const posterStat = await stat(posterPath);
+      const tplUpdatedAt = template.updated_at ? new Date(template.updated_at).getTime() : 0;
+      if (posterStat.mtimeMs > tplUpdatedAt) {
+        return c.json({ posterUrl: `/api/shared-assets/templates/${id}/poster.png` });
+      }
+    } catch {}
+    // Poster is stale, delete and regenerate
+    try { await unlink(posterPath); } catch {}
+  }
+
+  // Try rendering a proper preview using the template's layers
+  try {
+    const { renderTemplatePreview } = await import("../services/template-generator.js");
+    const result = await renderTemplatePreview(id);
+    // renderTemplatePreview generates a 5-second video; extract a mid-clip frame
+    // as poster (t=0 may predate staggered entrance animations and look empty)
+    const previewVideoPath = join(dataDir, "templates", `${id}-preview.mp4`);
+    if (existsSync(previewVideoPath)) {
+      await execFileAsync("ffmpeg", ["-ss", "2.5", "-i", previewVideoPath, "-frames:v", "1", "-y", posterPath], { timeout: 10000 });
+      return c.json({ posterUrl: `/api/shared-assets/templates/${id}/poster.png` });
+    }
+    // If video path is returned but doesn't exist at expected location, try it directly
+    return c.json({ posterUrl: result.previewUrl });
+  } catch (renderErr) {
+    console.error("[poster] renderTemplatePreview failed:", renderErr instanceof Error ? renderErr.message : renderErr);
+  }
+
+  // Fallback: generate a multi-element poster using ffmpeg drawtext + drawbox
+  const width = template.canvas?.width ?? 1080;
+  const height = template.canvas?.height ?? 1920;
+  const bgColorRaw = template.canvas?.backgroundColor ?? "#0a0a0a";
+  const bgColor = normalizeColorForFfmpeg(bgColorRaw);
+  const fontPaths = await resolveFontPaths();
+  const fontPath = escapeFilterPath(fontPaths.bold);
+
+  // Build a filter chain that draws all text and shape layers
+  const filterParts: string[] = [];
+  // Background is already the color input
+  let filterIdx = 0;
+
+  if (Array.isArray(template.layers)) {
+    for (const layer of template.layers) {
+      const l = layer as Record<string, unknown>;
+      const lType = l.type as string;
+      const lStart = (l.start as number) ?? 0;
+      const lPos = l.position as { x?: number; y?: number } | string | undefined;
+      const lSize = l.size as { width?: number; height?: number } | undefined;
+
+      if (lType === "shape") {
+        const shape = (l.shape as string) ?? "rect";
+        const fill = (l.fill as string) ?? (l.color as string) ?? "#FFFFFF";
+        const fillHex = normalizeColorForFfmpeg(fill, bgColorRaw);
+        const sw = lSize?.width ?? 100;
+        const sh = lSize?.height ?? 100;
+        let px = 0, py = 0;
+        if (lPos && typeof lPos === "object") { px = lPos.x ?? 0; py = lPos.y ?? 0; }
+        filterParts.push(`drawbox=x=${px}:y=${py}:w=${sw}:h=${sh}:color=${fillHex}:t=fill`);
+      } else if (lType === "text") {
+        let text = (l.content as string) ?? (l.text as string) ?? template.name ?? "";
+        // Resolve variable placeholders
+        if (template.variables) {
+          for (const v of template.variables) {
+            if (v.default !== undefined) {
+              text = text.replace(new RegExp(`{{${v.name}}}`, "g"), String(v.default));
+            }
+          }
+        }
+        text = text.replace(/{{[^}]+}}/g, "");
+        const fontSize = (l.fontSize as number) ?? ((l.style as any)?.fontSize as number) ?? 40;
+        const color = (l.color as string) ?? ((l.style as any)?.color as string) ?? "#FFFFFF";
+        const colorHex = normalizeColorForFfmpeg(color);
+        let px = 80, py = 200;
+        if (lPos && typeof lPos === "object") { px = lPos.x ?? 80; py = lPos.y ?? 200; }
+        // drawtext 不支持自动换行，按可用宽度拆成多行分别绘制
+        const lines = wrapTextLines(text, fontSize, lSize?.width);
+        const lineH = lineHeightFor(fontSize);
+        lines.forEach((line, i) => {
+          const safeLine = escapeDrawtext(line);
+          filterParts.push(`drawtext=fontfile='${fontPath}':text='${safeLine}':fontsize=${fontSize}:fontcolor=${colorHex}:x=${px}:y=${py + i * lineH}:borderw=1:bordercolor=0x000000@0.5`);
+        });
+      }
+    }
+  }
+
+  const filterStr = filterParts.length > 0 ? filterParts.join(",") : "null";
+
+  try {
+    await execFileAsync("ffmpeg", [
+      "-f", "lavfi", "-i", "color=c=" + bgColor + ":s=" + width + "x" + height + ":d=1",
+      "-vf", filterStr,
+      "-frames:v", "1",
+      "-y", posterPath,
+    ], { timeout: 15000 });
+    return c.json({ posterUrl: `/api/shared-assets/templates/${id}/poster.png` });
+  } catch (err) {
+    // Last resort: solid color
+    try {
+      await execFileAsync("ffmpeg", [
+        "-f", "lavfi", "-i", "color=c=" + bgColor + ":s=" + width + "x" + height,
+        "-frames:v", "1", "-y", posterPath,
+      ], { timeout: 10000 });
+      return c.json({ posterUrl: `/api/shared-assets/templates/${id}/poster.png` });
+    } catch {
+      return c.json({ error: "Failed to generate poster" }, 500);
+    }
+  }
+});
+
 // POST /api/templates/:id/preview — render a 5-second preview
 apiRoutes.post("/api/templates/:id/preview", async (c) => {
   const id = c.req.param("id");
@@ -2688,30 +3273,63 @@ apiRoutes.post("/api/templates/:id/preview", async (c) => {
     const hostVideo = variableValues.host_video ?? defaultHostVideo;
     const voiceAudio = variableValues.voice_audio ?? defaultVoiceAudio;
 
-    if (typeof hostVideo !== "string" || !existsSync(hostVideo)) {
-      return c.json({ error: `host_video not found: ${hostVideo}` }, 400);
-    }
-    if (typeof voiceAudio !== "string" || !existsSync(voiceAudio)) {
-      return c.json({ error: `voice_audio not found: ${voiceAudio}` }, 400);
-    }
+    const hasHostVideo = typeof hostVideo === "string" && existsSync(hostVideo);
+    const hasVoiceAudio = typeof voiceAudio === "string" && existsSync(voiceAudio);
 
-    variableValues.host_video = hostVideo;
-    variableValues.voice_audio = voiceAudio;
-    const baseTimeline: Record<string, unknown> = {
-      canvas: template.canvas,
-      layers: template.layers,
-      audio: template.audio,
-      transitions: template.transitions,
-    };
-    if (template.subtitles && typeof template.subtitles === "object" && "source" in template.subtitles) {
-      baseTimeline.subtitles = template.subtitles;
+    if (hasHostVideo && hasVoiceAudio) {
+      // Full preview with actual assets
+      variableValues.host_video = hostVideo;
+      variableValues.voice_audio = voiceAudio;
+      const baseTimeline: Record<string, unknown> = {
+        canvas: template.canvas,
+        layers: template.layers,
+        audio: template.audio,
+        transitions: template.transitions,
+      };
+      if (template.subtitles && typeof template.subtitles === "object" && "source" in template.subtitles) {
+        baseTimeline.subtitles = template.subtitles;
+      }
+      const timeline = applyVariables(baseTimeline, variableValues) as unknown as Timeline;
+      await renderTimeline(timeline, { outputPath: tmpPath, preview: true, previewDuration: 5 });
+      await rename(tmpPath, outputPath);
+      updateTemplate(id, { preview_url: `/api/shared-assets/templates/${id}/preview.mp4` });
+      return c.json({ previewUrl: `/api/shared-assets/templates/${id}/preview.mp4` });
+    } else {
+      // Source-free fallback: generate a poster image instead of video
+      const posterPath = join(previewDir, "poster.png");
+      const bgColorRaw = (template.canvas as any)?.backgroundColor ?? "0x1a1a2e";
+      const bgColor = bgColorRaw.startsWith("#") ? "0x" + bgColorRaw.slice(1) : bgColorRaw;
+      const tWidth = (template.canvas as any)?.width ?? 1080;
+      const tHeight = (template.canvas as any)?.height ?? 1920;
+      let overlayText = template.name ?? "Template Preview";
+      if (Array.isArray(template.layers)) {
+        for (const layer of template.layers) {
+          if ((layer as any)?.type === "text" && (layer as any)?.text) {
+            overlayText = String((layer as any).text).slice(0, 40);
+            break;
+          }
+        }
+      }
+      const fontPath = process.platform === "win32"
+        ? "C\:/Windows/Fonts/msyh.ttc"
+        : "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf";
+      const safeText = overlayText.replace(/'/g, "\'");
+      try {
+        await execFileAsync("ffmpeg", [
+          "-f", "lavfi", "-i", "color=c=" + bgColor + ":s=" + tWidth + "x" + tHeight,
+          "-vf", "drawtext=fontfile='" + fontPath + "':text='" + safeText + "':fontsize=56:fontcolor=white:borderw=2:bordercolor=black@0.5:x=(w-text_w)/2:y=(h-text_h)/2",
+          "-frames:v", "1", "-y", posterPath,
+        ], { timeout: 10000 });
+      } catch {
+        // Last resort: solid color image
+        await execFileAsync("ffmpeg", [
+          "-f", "lavfi", "-i", "color=c=" + bgColor + ":s=" + tWidth + "x" + tHeight,
+          "-frames:v", "1", "-y", posterPath,
+        ], { timeout: 10000 });
+      }
+      updateTemplate(id, { preview_url: `/api/shared-assets/templates/${id}/poster.png` });
+      return c.json({ previewUrl: `/api/shared-assets/templates/${id}/poster.png` });
     }
-    const timeline = applyVariables(baseTimeline, variableValues) as unknown as Timeline;
-
-    await renderTimeline(timeline, { outputPath: tmpPath, preview: true, previewDuration: 5 });
-    await rename(tmpPath, outputPath);
-    updateTemplate(id, { preview_url: `/api/shared-assets/templates/${id}/preview.mp4` });
-    return c.json({ previewUrl: `/api/shared-assets/templates/${id}/preview.mp4` });
   } catch (err) {
     try { await unlink(tmpPath); } catch {}
     return c.json({ error: err instanceof Error ? err.message : "Preview failed" }, 500);
@@ -2802,3 +3420,6 @@ apiRoutes.route("/api/publish", publishRoutes);
 apiRoutes.route("/api/works/:id/publish", publishWorkRoutes);
 apiRoutes.route("/api/accounts", accountsRoutes);
 apiRoutes.route("/api/calendar", calendarRoutes);
+apiRoutes.route("/api/budget", budgetRoutes);
+apiRoutes.route("/api/data-sources", dataSourceRoutes);
+apiRoutes.route("/api/stock-assets", stockAssetRoutes);

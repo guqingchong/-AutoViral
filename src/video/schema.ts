@@ -51,6 +51,8 @@ export function validateLayer(layer: unknown): TimelineLayer {
         fontSize: assertNumber((l.fontSize as number) ?? 48, "layer.fontSize", 8, 512),
         color: (l.color as string) ?? "#FFFFFF",
         align: (l.align as "left" | "center" | "right") ?? "center",
+        // text 层 size 可选：提供时用于自动换行与对齐计算
+        size: l.size ? validateSize(l.size) : undefined,
         animations: validateAnimations(l.animations),
       } as TimelineLayer;
     case "shape":
