@@ -30,7 +30,7 @@
     width?: number; height?: number; author?: string; description?: string;
     license?: string;
   }
-  interface StockResultGroup { provider: string; items: StockItem[]; total: number; }
+  interface StockResultGroup { provider: string; items: StockItem[]; total: number; error?: string; }
 
   const categories: AssetLibraryItem["category"][] = ["characters", "scenes", "music", "templates", "branding", "general"];
   const sources: AssetLibraryItem["source"][] = ["upload", "pexels", "pixabay", "unsplash", "self-generated", "unknown"];
@@ -96,13 +96,25 @@
       } else {
         stockResults = data.results ?? [];
         const configuredProviders = data.providers ?? [];
-        if (stockResults.length === 0) {
-          const unconfigured = ["pexels", "pixabay", "unsplash"].filter(p => !configuredProviders.includes(p));
-          if (unconfigured.length > 0) {
-            message = `未找到结果。Openverse（免费）未返回数据，且以下素材源未配置 API Key: ${unconfigured.join(", ")}。请点击下方按钮在设置中配置 API Key 以获得更多素材。`;
+        // 各源错误（网络不可达 / Key 无效）逐条展示，比"未找到结果"更可行动
+        const sourceErrors = stockResults.filter((g) => g.error);
+        const totalItems = stockResults.reduce((n, g) => n + (g.items?.length ?? 0), 0);
+        if (sourceErrors.length > 0) {
+          const lines = sourceErrors.map((g) => `${g.provider}: ${g.error}`);
+          if (totalItems > 0) {
+            message = `部分素材源不可用 —— ${lines.join("；")}`;
           } else {
-            message = "未找到结果，请尝试其他关键词。";
+            const unconfigured = ["pexels", "pixabay", "unsplash"].filter(p => !configuredProviders.includes(p));
+            const suffix = unconfigured.length > 0
+              ? `；另外 ${unconfigured.join(", ")} 未配置 API Key（设置页可填）`
+              : "";
+            message = `素材源不可用 —— ${lines.join("；")}${suffix}`;
           }
+        } else if (totalItems === 0) {
+          const unconfigured = ["pexels", "pixabay", "unsplash"].filter(p => !configuredProviders.includes(p));
+          message = unconfigured.length > 0
+            ? `未找到结果。以下素材源未配置 API Key: ${unconfigured.join(", ")}（设置页可填，免费注册）。`
+            : "未找到结果，请尝试其他关键词。";
         }
       }
     } catch (err) {
