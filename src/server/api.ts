@@ -260,6 +260,14 @@ apiRoutes.put("/api/config", async (c) => {
   config.analytics = parseAnalytics(body);
 
   await saveConfig(config);
+  // 字段级保存日志（脱敏，只记长度）——诊断"用户以为已保存但 key 为空"类问题
+  log("info", "api", "config_saved", "-", {
+    pexelsApiKey: (config.pexels?.apiKey ?? "").length,
+    pixabayApiKey: (config.pixabay?.apiKey ?? "").length,
+    unsplashAccessKey: (config.unsplash?.accessKey ?? "").length,
+    minimaxKey: (config.minimax?.apiKey ?? "").length,
+    bailianApiKey: (config.bailian?.apiKey ?? "").length,
+  });
   return c.json(config);
 });
 
