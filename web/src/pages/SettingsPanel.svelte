@@ -5,6 +5,8 @@
 
   let loading = $state(false);
   let saving = $state(false);
+  let saveMessage = $state("");
+  let saveMessageType = $state<"success" | "error">("success");
 
   // Config fields
   let jimengAccessKey = $state("");
@@ -71,8 +73,9 @@
 
   async function saveConfig() {
     saving = true;
+    saveMessage = "";
     try {
-      await fetch("/api/config", {
+      const res = await fetch("/api/config", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -93,10 +96,35 @@
           memorySyncEnabled,
         }),
       });
-    } catch {
-      // ignore
+      // 此前不检查 res.ok：HTTP 500 也静默通过，用户误以为已保存 —— 2026-07-21 根因
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error(errBody.error ?? `服务器返回 HTTP ${res.status}`);
+      }
+      // 回读校验：确认 key 真正落盘，杜绝"显示已保存实际为空"
+      const verify = await (await fetch("/api/config")).json();
+      const keyChecks: Array<[string, string, string]> = [
+        ["Pexels", pexelsApiKey, verify.pexelsApiKey ?? ""],
+        ["Pixabay", pixabayApiKey, verify.pixabayApiKey ?? ""],
+        ["Unsplash", unsplashAccessKey, verify.unsplashAccessKey ?? ""],
+      ];
+      const mismatches = keyChecks
+        .filter(([, local, remote]) => local.trim() !== remote)
+        .map(([name]) => name);
+      if (mismatches.length > 0) {
+        throw new Error(`${mismatches.join("、")} Key 未能写入，请重试或联系管理员`);
+      }
+      saveMessageType = "success";
+      const configured = keyChecks.filter(([, , remote]) => remote).map(([name]) => name);
+      saveMessage = configured.length > 0
+        ? `已保存 ✓（素材源已配置：${configured.join("、")}）`
+        : "已保存 ✓";
+    } catch (err) {
+      saveMessageType = "error";
+      saveMessage = "保存失败：" + (err instanceof Error ? err.message : String(err));
     } finally {
       saving = false;
+      setTimeout(() => { saveMessage = ""; }, 6000);
     }
   }
 
@@ -360,6 +388,9 @@
         </div>
 
         <div class="panel-footer">
+          {#if saveMessage}
+            <span class="save-msg" class:save-ok={saveMessageType === "success"} class:save-err={saveMessageType === "error"}>{saveMessage}</span>
+          {/if}
           <button class="save-btn" onclick={saveConfig} disabled={saving}>
             {saving ? "保存中..." : "保存设置"}
           </button>
@@ -630,10 +661,22 @@
     padding: 1rem 1.5rem;
     border-top: 1px solid rgba(255, 255, 255, 0.06);
     flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
   }
 
+  .save-msg {
+    flex: 1;
+    font-size: 0.78rem;
+    line-height: 1.4;
+  }
+
+  .save-msg.save-ok { color: #34d399; }
+  .save-msg.save-err { color: #fb7185; }
+
   .save-btn {
-    width: 100%;
+    min-width: 140px;
     padding: 0.65rem 1rem;
     border-radius: 10px;
     border: none;

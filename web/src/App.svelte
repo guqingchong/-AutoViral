@@ -145,7 +145,7 @@
     saving = true;
     settingsMessage = "";
     try {
-      await fetch("/api/config", {
+      const res = await fetch("/api/config", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -155,10 +155,18 @@
           chanjingAppId, chanjingSecretKey,
         }),
       });
+      // 检查 HTTP 状态：此前 500 也显示"已保存"，掩盖了保存失败
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      // 回读校验：确认 key 真正落盘（与 SettingsPanel 一致的防呆）
+      const verify = await (await fetch("/api/config")).json();
+      if (pexelsApiKey.trim() !== (verify.pexelsApiKey ?? "")) {
+        throw new Error("Pexels Key 未能写入，请重试");
+      }
       settingsMessage = tt("settingsSaved");
       setTimeout(() => { settingsMessage = ""; }, 3000);
-    } catch {
-      settingsMessage = tt("settingsSaveFailed");
+    } catch (err) {
+      settingsMessage = tt("settingsSaveFailed") + (err instanceof Error ? ` (${err.message})` : "");
+      setTimeout(() => { settingsMessage = ""; }, 6000);
     } finally {
       saving = false;
     }
@@ -176,33 +184,41 @@
     setLanguage(next);
   }
 
-  onMount(async () => {
-    const current = document.documentElement.getAttribute("data-theme") as "light" | "dark" | null;
-    theme = current ?? "dark";
-    const unsub = subscribe(() => { lang = getLanguage(); });
+  /** 从服务器加载设置字段（onMount 与每次打开设置弹窗时调用） */
+  async function loadSettings() {
     try {
       const c = await fetchConfig();
       interval = c.interval;
       model = c.model;
       autoRun = c.autoRun;
-      // Load stock API keys and jimeng keys
-      try {
-        const res = await fetch("/api/config");
-        if (res.ok) {
-          const data = await res.json();
-          pexelsApiKey = data.pexelsApiKey ?? "";
-          pixabayApiKey = data.pixabayApiKey ?? "";
-          unsplashAccessKey = data.unsplashAccessKey ?? "";
-          jimengAccessKey = data.jimengAccessKey ?? "";
-          jimengSecretKey = data.jimengSecretKey ?? "";
-          chanjingAppId = data.chanjingAppId ?? "";
-          chanjingSecretKey = data.chanjingSecretKey ?? "";
-        }
-      } catch {}
+      const res = await fetch("/api/config");
+      if (res.ok) {
+        const data = await res.json();
+        pexelsApiKey = data.pexelsApiKey ?? "";
+        pixabayApiKey = data.pixabayApiKey ?? "";
+        unsplashAccessKey = data.unsplashAccessKey ?? "";
+        jimengAccessKey = data.jimengAccessKey ?? "";
+        jimengSecretKey = data.jimengSecretKey ?? "";
+        chanjingAppId = data.chanjingAppId ?? "";
+        chanjingSecretKey = data.chanjingSecretKey ?? "";
+      }
     } catch {}
+  }
+
+  onMount(async () => {
+    const current = document.documentElement.getAttribute("data-theme") as "light" | "dark" | null;
+    theme = current ?? "dark";
+    const unsub = subscribe(() => { lang = getLanguage(); });
+    await loadSettings();
     return () => {
       unsub();
     };
+  });
+
+  // 每次打开设置弹窗时重新拉取最新配置——防止"页面停留时的旧空值
+  // 覆盖别处刚保存的新 key"（2026-07-21 Pexels key 丢失根因之一）
+  $effect(() => {
+    if (showSettings) loadSettings();
   });
 
   const navItems = [
