@@ -19,6 +19,38 @@
   let batchTemplateId = $state<string>("");
   let batchDigitalHumanId = $state<string>("");
   let batchType = $state<"short-video" | "image-text">("short-video");
+  // 视频制作控制条件（全自动模式）：时长/风格/素材样式/配音风格
+  let batchDuration = $state<number>(60);
+  let batchContentForm = $state<string>("knowledge");
+  let batchVideoSource = $state<string>("search");
+  let batchVoiceStyle = $state<string>("male-qn-qingse");
+  const DURATION_OPTIONS = [
+    { value: 30, label: "约 30 秒" },
+    { value: 60, label: "约 1 分钟" },
+    { value: 90, label: "约 1 分半" },
+    { value: 120, label: "约 2 分钟" },
+    { value: 180, label: "约 3 分钟" },
+  ];
+  const CONTENT_FORM_OPTIONS = [
+    { value: "knowledge", label: "知识科普" },
+    { value: "hot_comment", label: "热点评述" },
+    { value: "industry", label: "行业洞察" },
+    { value: "insight", label: "观点输出" },
+  ];
+  const VIDEO_SOURCE_OPTIONS = [
+    { value: "search", label: "素材库搜索（真实视频素材）" },
+    { value: "ai-generate", label: "AI 生成素材" },
+  ];
+  const VOICE_OPTIONS = [
+    { value: "male-qn-qingse", label: "清朗男声" },
+    { value: "male-qn-jingying", label: "精英男声" },
+    { value: "presenter_male", label: "新闻男声" },
+    { value: "presenter_female", label: "新闻女声" },
+    { value: "female-shaonv", label: "甜美女声" },
+    { value: "female-yujie", label: "成熟女声" },
+    { value: "audiobook_male_1", label: "有声书男声" },
+    { value: "audiobook_female_1", label: "有声书女声" },
+  ];
   let templates = $state<any[]>([]);
   let avatars = $state<any[]>([]);
   let batchConverting = $state(false);
@@ -191,6 +223,10 @@
           type: batchType,
           platforms: ["douyin", "xiaohongshu"],
           autoPipeline: true,
+          duration: batchType === "short-video" ? batchDuration : undefined,
+          contentForm: batchType === "short-video" ? batchContentForm : undefined,
+          videoSource: batchType === "short-video" ? batchVideoSource : undefined,
+          voiceStyle: batchType === "short-video" ? batchVoiceStyle : undefined,
         }),
       });
       const data = await res.json();
@@ -570,6 +606,47 @@
               <p class="batch-hint">暂无数字人，可前往数字人页面创建</p>
             {/if}
           </div>
+          {#if batchType === "short-video"}
+            <div class="batch-field-group">
+              <p class="batch-group-title">视频制作控制</p>
+              <div class="batch-field-row">
+                <div class="batch-field">
+                  <label>视频时长</label>
+                  <select bind:value={batchDuration}>
+                    {#each DURATION_OPTIONS as o}
+                      <option value={o.value}>{o.label}</option>
+                    {/each}
+                  </select>
+                </div>
+                <div class="batch-field">
+                  <label>视频风格</label>
+                  <select bind:value={batchContentForm}>
+                    {#each CONTENT_FORM_OPTIONS as o}
+                      <option value={o.value}>{o.label}</option>
+                    {/each}
+                  </select>
+                </div>
+              </div>
+              <div class="batch-field-row">
+                <div class="batch-field">
+                  <label>素材样式</label>
+                  <select bind:value={batchVideoSource}>
+                    {#each VIDEO_SOURCE_OPTIONS as o}
+                      <option value={o.value}>{o.label}</option>
+                    {/each}
+                  </select>
+                </div>
+                <div class="batch-field">
+                  <label>配音风格</label>
+                  <select bind:value={batchVoiceStyle}>
+                    {#each VOICE_OPTIONS as o}
+                      <option value={o.value}>{o.label}</option>
+                    {/each}
+                  </select>
+                </div>
+              </div>
+            </div>
+          {/if}
           <div class="batch-info">
             <p>将选中的 <strong>{selectedTopicIds.size}</strong> 个选题批量转为作品。</p>
             {#if batchTemplateId || batchDigitalHumanId}
@@ -1217,6 +1294,9 @@
     padding: 0.45rem 0.6rem;
     font-size: 0.82rem;
   }
+  .batch-field-group { display: flex; flex-direction: column; gap: 0.6rem; padding: 0.7rem; background: var(--bg-inset); border-radius: 6px; border: 1px solid var(--border-subtle, var(--border)); }
+  .batch-group-title { font-size: 0.78rem; font-weight: 700; color: var(--text-secondary); margin: 0; }
+  .batch-field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.7rem; }
   .batch-hint { font-size: 0.72rem; color: var(--text-dim); margin: 0; }
   .batch-info { padding: 0.6rem; background: var(--bg-inset); border-radius: 4px; }
   .batch-info p { font-size: 0.8rem; margin: 0 0 0.35rem; color: var(--text-secondary); }

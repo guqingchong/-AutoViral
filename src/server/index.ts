@@ -25,6 +25,7 @@ import { closeDb } from "../db/connection.js";
 import { migrateLegacyWorks } from "../db/migrate-legacy.js";
 import { recoverStuckJobs, startPublishCron } from "../services/publish-service.js";
 import { recoverStuckRenderJobs } from "../services/video-factory.js";
+import { reconcileWorkStates } from "../services/reconcile.js";
 import { registerAllPublishers } from "../services/publishers/factory.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -99,6 +100,18 @@ export async function startServer(port: number): Promise<{ server: Server }> {
 
   // 0.6. Recover render jobs that were stuck "running" or "pending" from a prior crash
   recoverStuckRenderJobs();
+
+  // 0.6b. Reconcile work states (render_jobs/pipeline_steps → works.status).
+  // Fixes works stuck in "assembling" although the final video already exists,
+  // then re-run every 5 minutes as a safety net.
+  await reconcileWorkStates("startup").catch((err) =>
+    console.error("[reconcile] startup run failed:", err),
+  );
+  setInterval(() => {
+    reconcileWorkStates("periodic").catch((err) =>
+      console.error("[reconcile] periodic run failed:", err),
+    );
+  }, 300_000);
 
   // 0.7. Start periodic stuck-job sweep (every 5 minutes)
   startPublishCron();

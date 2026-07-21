@@ -550,6 +550,13 @@ CREATE TABLE IF NOT EXISTS template_gen_jobs (
 ALTER TABLE articles ADD COLUMN updated_at TEXT;
 `,
   },
+  {
+    version: 13,
+    name: "work_review_comment",
+    sql: `
+ALTER TABLE works ADD COLUMN review_comment TEXT;
+`,
+  },
 ];
 
 export function migrate(): void {
