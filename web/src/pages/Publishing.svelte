@@ -133,7 +133,7 @@
         onchange={() => { message = ""; }}
       >
         <option value="">-- {t("selectWork")} --</option>
-        {#each works.filter((w) => w.status === "ready" || w.status === "published" || w.status === "draft") as work}
+        {#each works.filter((w) => w.status === "reviewing" || w.status === "published" || w.status === "draft") as work}
           <option value={work.id}>
             {work.title} — {work.status} — {work.type}
           </option>
@@ -150,7 +150,7 @@
         </div>
         <div class="info-card">
           <span class="info-label">{t("status")}</span>
-          <span class="info-value status-badge" class:ready={selectedWork.status === "ready"}>{selectedWork.status}</span>
+          <span class="info-value status-badge" class:ready={selectedWork.status === "reviewing"}>{selectedWork.status}</span>
         </div>
       </section>
 

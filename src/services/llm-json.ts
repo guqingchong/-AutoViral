@@ -9,6 +9,12 @@ import { spawn } from "node:child_process";
 export interface LlmJsonOptions {
   model?: string;
   timeoutMs?: number;
+  /** 最大尝试次数（含首次），默认 3。限流/超时/解析失败均会指数退避重试。 */
+  maxAttempts?: number;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 /**
@@ -31,7 +37,37 @@ function extractJsonFromText(text: string): unknown | null {
   }
 }
 
+/**
+ * 带重试的 JSON 生成入口。
+ * 背景（2026-07-21 Bug3）：批量创作并发 2 个 item 时，第二个 item 的
+ * `claude -p` 进程因订阅并发限流以非零码退出且无 stdout，直接被判失败。
+ * 这里对瞬态失败（非零退出、超时、JSON 提取失败）做指数退避重试，
+ * 配合批量链路的串行队列（CONCURRENCY=1）消除限流。
+ */
 export async function runJsonPrompt<T>(prompt: string, opts: LlmJsonOptions = {}): Promise<T> {
+  const maxAttempts = Math.max(1, opts.maxAttempts ?? 3);
+  const backoffs = [5_000, 15_000, 30_000];
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await runJsonPromptOnce<T>(prompt, opts);
+    } catch (err) {
+      lastError = err;
+      // 永久性错误（如 CLI 不存在、spawn 失败）重试无意义，直接抛出
+      if ((err as { noRetry?: boolean })?.noRetry) break;
+      if (attempt < maxAttempts) {
+        const wait = backoffs[attempt - 1] ?? 30_000;
+        console.warn(
+          `[llm-json] attempt ${attempt}/${maxAttempts} failed: ${err instanceof Error ? err.message.slice(0, 200) : String(err)}; retrying in ${wait / 1000}s`,
+        );
+        await sleep(wait);
+      }
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+function runJsonPromptOnce<T>(prompt: string, opts: LlmJsonOptions = {}): Promise<T> {
   return new Promise((resolve, reject) => {
     const cli = resolveClaudeCommand();
     // 关键约束：--allowedTools "" 禁用全部工具。
@@ -61,6 +97,12 @@ export async function runJsonPrompt<T>(prompt: string, opts: LlmJsonOptions = {}
     // Close stdin immediately to prevent 3s wait for stdin data
     try { proc.stdin?.end(); } catch { /* ignore */ }
 
+    // 超时句柄：进程退出（成功或失败）时必须清理，避免 settle 后再次 reject/kill
+    const timeout = setTimeout(() => {
+      try { proc.kill(); } catch { /* ignore */ }
+      reject(new Error("LLM JSON prompt timeout"));
+    }, opts.timeoutMs ?? 180_000);
+
     let stdout = "";
     let stderr = "";
     proc.stdout?.on("data", (d: Buffer) => {
@@ -71,6 +113,7 @@ export async function runJsonPrompt<T>(prompt: string, opts: LlmJsonOptions = {}
     });
 
     proc.on("exit", (code) => {
+      clearTimeout(timeout);
       // If CLI exited with error and no stdout, reject immediately
       if (code !== 0 && !stdout.trim()) {
         return reject(new Error(
@@ -119,11 +162,11 @@ export async function runJsonPrompt<T>(prompt: string, opts: LlmJsonOptions = {}
       resolve(parsed as T);
     });
 
-    proc.on("error", reject);
-
-    setTimeout(() => {
-      try { proc.kill(); } catch { /* ignore */ }
-      reject(new Error("LLM JSON prompt timeout"));
-    }, opts.timeoutMs ?? 180_000);
+    proc.on("error", (err) => {
+      clearTimeout(timeout);
+      // spawn 级错误（命令不存在/权限拒绝）属永久性故障，标记为不可重试
+      (err as Error & { noRetry?: boolean }).noRetry = true;
+      reject(err);
+    });
   });
 }

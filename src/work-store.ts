@@ -66,6 +66,7 @@ export interface Work {
   evalAttempts?: Record<string, number>;
   estimatedCost?: number;
   actualCost?: number;
+  reviewComment?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -84,6 +85,10 @@ export interface WorkSummary {
   digitalHumanId?: string;
   /** 流水线各阶段状态（作品卡片实时进度条） */
   pipeline?: Array<{ key: string; name: string; status: string }>;
+  /** 审核预览视频 URL（成片，区别于封面图 coverImage） */
+  previewUrl?: string;
+  /** 最近一次发布中心打回的审核意见 */
+  reviewComment?: string;
   updatedAt: string;
 }
 
@@ -179,6 +184,7 @@ function dbWorkToWork(w: DbWork, steps?: DbPipelineStep[]): Work {
     evalAttempts: w.eval_attempts,
     estimatedCost: w.estimated_cost,
     actualCost: w.actual_cost,
+    reviewComment: w.review_comment,
     createdAt: w.created_at,
     updatedAt: w.updated_at,
   };
@@ -208,6 +214,7 @@ export async function listWorks(): Promise<WorkSummary[]> {
     templateId: w.template_id,
     digitalHumanId: w.digital_human_id,
     pipeline: getWorkSteps(w.id).map((s) => ({ key: s.step_key, name: s.name, status: s.status as string })),
+    reviewComment: w.review_comment,
     updatedAt: w.updated_at,
   }));
 }
@@ -304,6 +311,7 @@ export async function updateWork(id: string, updates: Partial<Work>): Promise<Wo
   if (updates.accountId !== undefined) dbUpdates.account_id = updates.accountId;
   if (updates.estimatedCost !== undefined) dbUpdates.estimated_cost = updates.estimatedCost;
   if (updates.actualCost !== undefined) dbUpdates.actual_cost = updates.actualCost;
+  if (updates.reviewComment !== undefined) dbUpdates.review_comment = updates.reviewComment;
   if (updates.pipeline !== undefined) {
     // Sync steps back to DB
     for (const [key, step] of Object.entries(updates.pipeline)) {
@@ -433,3 +441,61 @@ export async function loadAllEvalResults(id: string, step: string): Promise<Eval
   }
   return results;
 }
+
+// ── Status derivation (single source of truth for works.status) ─────────────
+
+/**
+ * works.status 的数值排序（用于"只允许向前修复"的对账判断）。
+ * published/failed 为终态，派生逻辑永不覆盖。
+ */
+const STATUS_ORDER: Record<WorkStatus, number> = {
+  draft: 0,
+  researching: 1,
+  planning: 2,
+  assetting: 3,
+  assembling: 4,
+  reviewing: 5,
+  published: 6,
+  failed: 6,
+};
+
+/** 流水线 step key → works.status（material-search 归入 researching） */
+const STEP_TO_STATUS: Record<string, WorkStatus> = {
+  "material-search": "researching",
+  research: "researching",
+  plan: "planning",
+  assets: "assetting",
+  assembly: "assembling",
+};
+
+export function statusOrder(s: WorkStatus): number {
+  return STATUS_ORDER[s] ?? 0;
+}
+
+/**
+ * 从流水线步骤状态推导 works.status。
+ * 规则：
+ * - published / failed 是终态，永远保持不变；
+ * - 全部步骤 done/skipped → reviewing（成品待审核）；
+ * - 第一个 active/evaluating/eval_blocked 步骤决定状态（素材搜索归 researching）；
+ * - 全部 pending → 保持当前状态（通常为 draft）。
+ */
+export function deriveStatusFromPipeline(
+  pipeline: Record<string, PipelineStep>,
+  current: WorkStatus,
+): WorkStatus {
+  if (current === "published" || current === "failed") return current;
+  const steps = Object.entries(pipeline);
+  if (steps.length === 0) return current;
+
+  const isFinished = (s: PipelineStep) => s.status === "done" || s.status === "skipped";
+  if (steps.every(([, s]) => isFinished(s))) return "reviewing";
+
+  const activeEntry = steps.find(
+    ([, s]) => s.status === "active" || s.status === "evaluating" || s.status === "eval_blocked",
+  );
+  if (activeEntry) return STEP_TO_STATUS[activeEntry[0]] ?? current;
+
+  return current;
+}
+

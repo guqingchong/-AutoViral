@@ -37,6 +37,7 @@ export interface DbWork {
   tags: string[];
   estimated_cost?: number;         // PRD: 预估成本
   actual_cost?: number;            // PRD: 实际成本
+  review_comment?: string;         // 发布中心最近一次打回的审核意见
   created_at: string;
   updated_at: string;
 }

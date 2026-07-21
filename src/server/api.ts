@@ -15,6 +15,7 @@ import {
   updateWork as storeUpdateWork, deleteWork as storeDeleteWork,
   listAssets, getAssetPath, saveStepHistory, loadStepHistory,
   saveWorkChat, saveEvalResult, loadAllEvalResults,
+  deriveStatusFromPipeline,
   type Work, type PipelineStep, type EvalResult,
 } from "../work-store.js";
 import { MemoryClient } from "../memory.js";
@@ -266,35 +267,38 @@ apiRoutes.put("/api/config", async (c) => {
 // Work API
 // ---------------------------------------------------------------------------
 
-// GET /api/works — list works with cover image from first asset
+// GET /api/works — list works with cover image and preview video
 apiRoutes.get("/api/works", async (c) => {
   try {
     const works = await listWorks();
-    // Attach coverImage: prefer output image, then any image, then final video as last resort
+    // coverImage 用于卡片封面（图片优先，轻量）；
+    // previewUrl 用于发布中心审核预览（成片视频优先，保证审核能看到视频）。
+    // 此前预览复用封面逻辑导致"任意图片压制成片视频"、永远无法播放 —— 2026-07-21 Bug6。
+    const toUrl = (workId: string, rel: string) =>
+      `/api/works/${workId}/assets/${rel.replace(/\\/g, "/").split("/").map(encodeURIComponent).join("/")}`;
+    const isImage = (a: string) => /\.(png|jpe?g|webp|gif)$/i.test(a);
+    const isVideo = (a: string) => /\.(mp4|mov|webm)$/i.test(a);
     const enriched = await Promise.all(works.map(async (w) => {
       try {
         const assets = await listAssets(w.id);
-        // 1. Output image (thumbnail/cover)
-        const outputImage = assets.find((a: string) =>
-          /\.(png|jpe?g|webp|gif)$/i.test(a) && a.startsWith("output/")
-        );
-        if (outputImage) {
-          return { ...w, coverImage: `/api/works/${w.id}/assets/${outputImage.replace(/\\/g, "/").split("/").map(encodeURIComponent).join("/")}` };
+        // 成片视频：output/ 下文件名含 final 的优先，其次任意含 final 的视频
+        const videos = assets.filter(isVideo);
+        const finalVideo =
+          videos.find((a: string) => a.startsWith("output/") && /final/i.test(a)) ??
+          videos.find((a: string) => /final/i.test(a));
+        const previewUrl = finalVideo ? toUrl(w.id, finalVideo) : undefined;
+
+        // 封面：output 图片 → 任意图片 → 成片视频（前端渲染为 <video> 封面）
+        const coverImageAsset =
+          assets.find((a: string) => isImage(a) && a.startsWith("output/")) ??
+          assets.find(isImage);
+        if (coverImageAsset) {
+          return { ...w, coverImage: toUrl(w.id, coverImageAsset), previewUrl };
         }
-        // 2. Any asset image
-        const firstImage = assets.find((a: string) =>
-          /\.(png|jpe?g|webp|gif)$/i.test(a)
-        );
-        if (firstImage) {
-          return { ...w, coverImage: `/api/works/${w.id}/assets/${firstImage.replace(/\\/g, "/").split("/").map(encodeURIComponent).join("/")}` };
-        }
-        // 3. Final video — fallback, rendered as <video> on frontend
-        const finalVideo = assets.find((a: string) =>
-          /\.(mp4|mov|webm)$/i.test(a) && /final/i.test(a)
-        );
         if (finalVideo) {
-          return { ...w, coverImage: `/api/works/${w.id}/assets/${finalVideo.replace(/\\/g, "/").split("/").map(encodeURIComponent).join("/")}`, coverIsVideo: true };
+          return { ...w, coverImage: toUrl(w.id, finalVideo), coverIsVideo: true, previewUrl };
         }
+        return { ...w, previewUrl };
       } catch {}
       return w;
     }));
@@ -372,6 +376,83 @@ apiRoutes.delete("/api/works/:id", async (c) => {
     return c.json({ deleted: true });
   } catch {
     return c.json({ error: "Work not found" }, 404);
+  }
+});
+
+// POST /api/works/:id/reject — 发布中心"打回修改"。
+// 与历史上的"PUT 状态置 assembling"不同，本端点真正驱动重做：
+// 1) 持久化审核意见（works.review_comment）；
+// 2) 流水线重置：目标阶段 → active，其后阶段 → pending，之前阶段 → done；
+// 3) works.status 跟随流水线派生（planning/assetting/assembling），不再滞留待审核列表；
+// 4) 审核意见直达 AI：会话活跃则发指令；会话已死则重建全自动会话并注入打回上下文。
+apiRoutes.post("/api/works/:id/reject", async (c) => {
+  const id = c.req.param("id");
+  try {
+    const body = await c.req.json<{ stage?: string; comment?: string }>().catch(() => ({} as any));
+    const stage = body.stage;
+    const comment = (body.comment ?? "").trim();
+    if (!stage || !comment) return c.json({ error: "stage and comment are required" }, 400);
+
+    const work = await getWork(id);
+    if (!work) return c.json({ error: "Work not found" }, 404);
+
+    const stepKeys = Object.keys(work.pipeline);
+    if (!stepKeys.includes(stage)) {
+      return c.json({ error: `Unknown stage: ${stage}. Available: ${stepKeys.join(", ")}` }, 400);
+    }
+
+    // 1. 重置流水线
+    const stageIdx = stepKeys.indexOf(stage);
+    const now = new Date().toISOString();
+    for (let i = 0; i < stepKeys.length; i++) {
+      const key = stepKeys[i];
+      if (i < stageIdx) {
+        if (work.pipeline[key].status !== "done" && work.pipeline[key].status !== "skipped") {
+          work.pipeline[key].status = "done";
+          work.pipeline[key].completedAt = work.pipeline[key].completedAt ?? now;
+        }
+      } else if (i === stageIdx) {
+        work.pipeline[key] = { ...work.pipeline[key], status: "active", startedAt: now, completedAt: undefined };
+      } else {
+        work.pipeline[key] = { ...work.pipeline[key], status: "pending", startedAt: undefined, completedAt: undefined };
+      }
+    }
+
+    // 2. 意见入库 + 状态派生
+    const newStatus = deriveStatusFromPipeline(work.pipeline, work.status);
+    await storeUpdateWork(id, { pipeline: work.pipeline, status: newStatus, reviewComment: comment });
+    broadcastPipelineUpdate(id, work.pipeline);
+    log("info", "api", "work_rejected", id, { stage, status: newStatus });
+
+    // 3. 审核意见直达 AI
+    const stageName = work.pipeline[stage].name ?? stage;
+    const rejectInstruction = [
+      `## 审核打回（人工复审未通过）`,
+      ``,
+      `审核意见：${comment}`,
+      ``,
+      `请从「${stageName}」阶段重新执行：根据以上审核意见修改该阶段产出，完成后调用 pipeline/advance 推进，并依次完成后续所有阶段直至成片。不要询问确认，直接开始。`,
+    ].join("\n");
+
+    let delivery: "message" | "session" | "none" = "none";
+    if (wsBridge) {
+      const session = wsBridge.getSession(id);
+      if (session?.cliProcess) {
+        await wsBridge.sendMessage(id, rejectInstruction);
+        delivery = "message";
+      } else {
+        try {
+          await startWorkSession(id, rejectInstruction);
+          delivery = "session";
+        } catch (err) {
+          log("error", "api", "reject_session_start_failed", id, { error: (err as Error).message });
+        }
+      }
+    }
+
+    return c.json({ ok: true, status: newStatus, pipeline: work.pipeline, delivery });
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : "Reject error" }, 500);
   }
 });
 
@@ -1165,8 +1246,9 @@ apiRoutes.post("/api/works/:id/abort", async (c) => {
 /**
  * 启动作品的 agent 创作会话（有模板/数字人时为全自动模式，否则为确认模式）。
  * POST /api/works/:id/session 与批量自动流水线共用。
+ * extraInstruction：额外指令（如发布中心打回的审核意见），拼入开场 prompt。
  */
-async function startWorkSession(id: string): Promise<{ status: string; step?: string }> {
+async function startWorkSession(id: string, extraInstruction?: string): Promise<{ status: string; step?: string }> {
   if (!wsBridge) throw new Error("WsBridge not initialized");
   const existing = wsBridge.getSession(id);
   if (existing?.cliProcess) return { status: "already_running" };
@@ -1196,6 +1278,7 @@ async function startWorkSession(id: string): Promise<{ status: string; step?: st
     hasTemplate ? `使用模板: ${work.templateId}` : "",
     hasDigitalHuman ? `使用数字人: ${work.digitalHumanId}` : "",
     toneInjection,
+    extraInstruction ?? "",
     ``,
     `当前步骤: "${stepName}"（key: ${currentStepKey}）。流水线阶段顺序: ${stepKeys.join(" → ")}。`,
     hasTemplate || hasDigitalHuman
@@ -2093,7 +2176,7 @@ apiRoutes.post("/api/works/:id/pipeline/advance", async (c) => {
     // ── Evaluation gate ─────────────────────────────────────────────────
     if (work.evaluationMode && work.pipeline[completedStep]?.status !== "evaluating") {
       work.pipeline[completedStep].status = "evaluating" as any;
-      await storeUpdateWork(id, { pipeline: work.pipeline });
+      await storeUpdateWork(id, { pipeline: work.pipeline, status: deriveStatusFromPipeline(work.pipeline, work.status) });
       broadcastPipelineUpdate(id, work.pipeline);
 
       // Start evaluation asynchronously (don't await — return immediately)
@@ -2159,7 +2242,9 @@ apiRoutes.post("/api/works/:id/pipeline/advance", async (c) => {
       }
     }
 
-    await storeUpdateWork(id, { pipeline: work.pipeline });
+    // 流水线推进时同步 works.status（此前只写 pipeline_steps，导致卡片状态标签
+    // 与进度条长期脱节 —— 2026-07-21 Bug2 根因）。派生是只前进、不覆盖终态的。
+    await storeUpdateWork(id, { pipeline: work.pipeline, status: deriveStatusFromPipeline(work.pipeline, work.status) });
 
     // Memory sync (keep existing logic)
     if (completedStep) {
@@ -2213,7 +2298,7 @@ apiRoutes.post("/api/works/:id/eval/force-pass", async (c) => {
     work.pipeline[nextStep].status = "active";
     work.pipeline[nextStep].startedAt = new Date().toISOString();
   }
-  await storeUpdateWork(id, { pipeline: work.pipeline });
+  await storeUpdateWork(id, { pipeline: work.pipeline, status: deriveStatusFromPipeline(work.pipeline, work.status) });
   broadcastPipelineUpdate(id, work.pipeline);
   return c.json({ ok: true, pipeline: work.pipeline });
 });
@@ -2228,7 +2313,7 @@ apiRoutes.post("/api/works/:id/eval/retry", async (c) => {
   if (!step) return c.json({ error: "step required" }, 400);
   work.pipeline[step].status = "active";
   const evalAttempts = { ...(work.evalAttempts ?? {}), [step]: 0 };
-  await storeUpdateWork(id, { pipeline: work.pipeline, evalAttempts } as any);
+  await storeUpdateWork(id, { pipeline: work.pipeline, evalAttempts, status: deriveStatusFromPipeline(work.pipeline, work.status) } as any);
   broadcastPipelineUpdate(id, work.pipeline);
   if (wsBridge && guidance) {
     await wsBridge.sendMessage(id, `## 用户指导\n\n${guidance}\n\n请根据以上指导修改当前阶段的产出，完成后重新提交。`);
@@ -2573,6 +2658,8 @@ interface BatchConvertItem {
   /** queued → creating → generating → starting → running / done / error */
   stage: string;
   error?: string;
+  /** item 级自动重试计数（配合 LLM 层重试，应对会话启动失败等非 LLM 错误） */
+  retryCount?: number;
 }
 interface BatchConvertJob {
   id: string;
@@ -2584,83 +2671,138 @@ interface BatchConvertJob {
 }
 const batchConvertJobs = new Map<string, BatchConvertJob>();
 
+/** 批量创作的控制条件（全自动模式下决定视频形态） */
+interface BatchConvertOptions {
+  templateId?: string;
+  digitalHumanId?: string;
+  platforms?: string[];
+  type?: "short-video" | "image-text";
+  /** 视频时长（秒），默认 180 */
+  duration?: number;
+  /** 视频风格：hot_comment | knowledge | industry | insight */
+  contentForm?: string;
+  /** 素材样式：search | ai-generate */
+  videoSource?: string;
+  /** 素材搜索关键词（缺省用选题标题） */
+  videoSearchQuery?: string;
+  /** 配音风格（MiniMax voice_id） */
+  voiceStyle?: string;
+}
+
+const CONTENT_FORM_LABELS: Record<string, string> = {
+  hot_comment: "热点评述",
+  knowledge: "知识科普",
+  industry: "行业洞察",
+  insight: "观点输出",
+};
+
 async function runBatchConvert(
   job: BatchConvertJob,
-  body: { templateId?: string; digitalHumanId?: string; platforms?: string[]; type?: "short-video" | "image-text" },
+  body: BatchConvertOptions,
 ): Promise<void> {
   const platforms = body.platforms ?? ["douyin", "xiaohongshu"];
   const type = body.type ?? "short-video";
+  const duration = body.duration && body.duration > 0 ? body.duration : 180;
 
-  // 并行创作：2 条处理链同时跑（每条链内含 2 次 LLM 调用 + 会话启动）。
-  // 并发度 2 是 LLM 订阅并发与本机 CPU（后续 FFmpeg 渲染）的保守平衡。
-  const CONCURRENCY = 2;
+  // 串行队列：一次只处理一个选题。
+  // 2026-07-21 Bug3 根因：并发 2 条链同时 spawn `claude -p`，LLM 订阅并发
+  // 限流使第二个任务直接失败。串行 + llm-json 层指数退避重试 + item 级
+  // 失败重排（各 1 次）替代并发，换取批量任务的总体成功率。
+  const CONCURRENCY = 1;
   const queue = [...job.items];
+
+  // 视频制作控制条件 → 注入 topicHint，随 startWorkSession 的 prompt 直达 agent
+  const controlLines: string[] = [];
+  if (type === "short-video") {
+    controlLines.push(`视频时长: 约${duration}秒`);
+    if (body.contentForm) controlLines.push(`视频风格: ${CONTENT_FORM_LABELS[body.contentForm] ?? body.contentForm}`);
+    if (body.videoSource) controlLines.push(`素材样式: ${body.videoSource === "ai-generate" ? "AI 生成素材" : "素材库搜索"}`);
+    if (body.voiceStyle) controlLines.push(`配音风格: 使用配音音色 voice_id="${body.voiceStyle}"（配音时必须使用该音色）`);
+  }
 
   const processItem = async (item: BatchConvertItem): Promise<void> => {
     try {
-      item.stage = "creating";
       const topic = getTopic(item.topicId);
       if (!topic) { item.stage = "error"; item.error = "选题不存在"; return; }
       item.title = topic.title;
 
-      const work = await createWork({
-        title: topic.title,
-        type,
-        contentCategory: topic.emotion_type as any,
-        platforms,
-        topicHint: [topic.title, topic.description, `情绪：${topic.emotion_type}/${topic.emotion_subtype}`, `标签：${topic.tags.join(",")}`].filter(Boolean).join("\n"),
-        templateId: body.templateId,
-        digitalHumanId: body.digitalHumanId,
-      });
-      item.workId = work.id;
+      // 幂等续跑：重排的 item 已持有 workId 时，跳过创建/文案阶段，直接重试启动
+      if (!item.workId) {
+        item.stage = "creating";
+        const work = await createWork({
+          title: topic.title,
+          type,
+          contentCategory: topic.emotion_type as any,
+          contentForm: body.contentForm,
+          videoSource: type === "short-video" ? (body.videoSource as any) : undefined,
+          videoSearchQuery: type === "short-video" && body.videoSource === "search"
+            ? (body.videoSearchQuery ?? topic.title)
+            : undefined,
+          platforms,
+          topicHint: [topic.title, topic.description, `情绪：${topic.emotion_type}/${topic.emotion_subtype}`, `标签：${topic.tags.join(",")}`, ...controlLines].filter(Boolean).join("\n"),
+          templateId: body.templateId,
+          digitalHumanId: body.digitalHumanId,
+        });
+        item.workId = work.id;
 
-      item.stage = "generating";
-      const platform = platforms[0] ?? "douyin";
-      const article = await generateArticleFromTopic(topic, platform);
-      const script = await generateScriptFromArticle(article, 180);
+        item.stage = "generating";
+        const platform = platforms[0] ?? "douyin";
+        const article = await generateArticleFromTopic(topic, platform);
+        const script = await generateScriptFromArticle(article, duration);
 
-      try {
-        createArticle({ work_id: work.id, topic_id: topic.id, title: article.title, content: article.content, platform, status: "ready" });
-        createScript({ work_id: work.id, content: script as unknown as Record<string, unknown>, duration: script.duration, status: "ready" });
-        updateTopic(topic.id, { status: "converted", work_id: work.id });
-      } catch (err) {
-        console.error(`[batch-convert] DB write failed for topic ${item.topicId}:`, err);
-      }
-
-      // Mark research as done, plan as active
-      try {
-        const workObj = await getWork(work.id);
-        if (workObj) {
-          const pipeline = workObj.pipeline;
-          if (pipeline["research"]) {
-            pipeline["research"].status = "done";
-            pipeline["research"].completedAt = new Date().toISOString();
-            pipeline["research"].note = "Auto-generated from batch conversion";
-          }
-          if (pipeline["plan"]) {
-            pipeline["plan"].status = "active";
-            pipeline["plan"].startedAt = new Date().toISOString();
-          }
-          await storeUpdateWork(work.id, { status: "planning", pipeline });
+        try {
+          createArticle({ work_id: work.id, topic_id: topic.id, title: article.title, content: article.content, platform, status: "ready" });
+          createScript({ work_id: work.id, content: script as unknown as Record<string, unknown>, duration: script.duration, status: "ready" });
+          updateTopic(topic.id, { status: "converted", work_id: work.id });
+        } catch (err) {
+          console.error(`[batch-convert] DB write failed for topic ${item.topicId}:`, err);
         }
-      } catch (err) {
-        console.error(`[batch-convert] Failed to auto-start pipeline for topic ${item.topicId}:`, err);
+
+        // Mark research as done, plan as active
+        try {
+          const workObj = await getWork(work.id);
+          if (workObj) {
+            const pipeline = workObj.pipeline;
+            if (pipeline["research"]) {
+              pipeline["research"].status = "done";
+              pipeline["research"].completedAt = new Date().toISOString();
+              pipeline["research"].note = "Auto-generated from batch conversion";
+            }
+            if (pipeline["plan"]) {
+              pipeline["plan"].status = "active";
+              pipeline["plan"].startedAt = new Date().toISOString();
+            }
+            await storeUpdateWork(work.id, { status: "planning", pipeline });
+          }
+        } catch (err) {
+          console.error(`[batch-convert] Failed to auto-start pipeline for topic ${item.topicId}:`, err);
+        }
       }
 
       // 全自动模式：真正启动 agent 会话，让流水线自动执行后续阶段
       if (job.autoPipeline) {
         item.stage = "starting";
         try {
-          await startWorkSession(work.id);
+          await startWorkSession(item.workId!);
           item.stage = "running";
         } catch (err) {
-          item.stage = "error";
-          item.error = "会话启动失败：" + (err instanceof Error ? err.message : String(err));
+          // 抛出给外层 catch 统一走 item 级重排
+          throw new Error("会话启动失败：" + (err instanceof Error ? err.message : String(err)));
         }
       } else {
         item.stage = "done";
       }
     } catch (err) {
+      // item 级自动重试（1 次）：LLM 层已有指数退避重试，这里兜底会话启动
+      // 失败、DB 抖动等非 LLM 瞬态错误。重排回队尾，不阻塞其他选题。
+      if ((item.retryCount ?? 0) < 1) {
+        item.retryCount = (item.retryCount ?? 0) + 1;
+        item.stage = "queued";
+        item.error = undefined;
+        console.warn(`[batch-convert] topic ${item.topicId} failed (attempt ${item.retryCount}), re-queued:`, err);
+        queue.push(item);
+        return;
+      }
       item.stage = "error";
       item.error = err instanceof Error ? err.message : String(err);
     }
@@ -2687,6 +2829,11 @@ apiRoutes.post("/api/topics/batch-convert", async (c) => {
     platforms?: string[];
     type?: "short-video" | "image-text";
     autoPipeline?: boolean;
+    duration?: number;
+    contentForm?: string;
+    videoSource?: string;
+    videoSearchQuery?: string;
+    voiceStyle?: string;
   }>().catch(() => ({ topicIds: [] } as any));
 
   if (!body.topicIds?.length) return c.json({ error: "topicIds is required" }, 400);

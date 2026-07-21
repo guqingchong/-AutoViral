@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { t } from "../lib/i18n.js";
-  import { fetchWorks, publishWorkToPlatform, fetchWorkPublishRecords, type WorkSummary, type PublishRecord } from "../lib/api.js";
+  import { fetchWorks, publishWorkToPlatform, fetchWorkPublishRecords, rejectWork, type WorkSummary, type PublishRecord } from "../lib/api.js";
 
   const PLATFORMS = [
     { key: "douyin", label: "抖音", type: "video" },
@@ -25,6 +25,8 @@
   let reviewWorks = $state<WorkSummary[]>([]);
   let selectedWorkId = $state("");
   let reviewComment = $state("");
+  let rejectStage = $state("assembly");
+  let rejecting = $state(false);
   let publishing = $state<Record<string, boolean>>({});
   let publishRecords = $state<PublishRecord[]>([]);
   let showArticlePreview = $state(false);
@@ -56,6 +58,13 @@
 
   const selectedWork = $derived(works.find((w) => w.id === selectedWorkId));
 
+  /** 打回重做的可选阶段（与流水线 step key 对齐） */
+  const REJECT_STAGES = [
+    { key: "plan", label: "策划/文案" },
+    { key: "assets", label: "素材" },
+    { key: "assembly", label: "合成" },
+  ];
+
   function showMessage(type: "success" | "error", text: string) {
     messageType = type;
     message = text;
@@ -65,8 +74,9 @@
   async function loadWorks() {
     try {
       works = await fetchWorks();
-      // Works in "reviewing" status go to review queue
-      reviewWorks = works.filter((w) => w.status === "reviewing" || w.status === "assembling");
+      // 待审核队列只收"制作完成待审"的作品（reviewing）。
+      // 此前把 assembling（合成中）也纳入，导致半成品混入且无法预览 —— Bug5。
+      reviewWorks = works.filter((w) => w.status === "reviewing");
     } catch {}
   }
 
@@ -133,18 +143,22 @@
       showMessage("error", "请填写审核意见");
       return;
     }
+    rejecting = true;
     try {
-      await fetch(`/api/works/${selectedWorkId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "assembling", reviewComment }),
-      });
-      showMessage("success", "已打回修改，审核意见已提交");
+      // 打回到指定阶段重做：意见入库 + 流水线重置 + 意见直达 AI（不再只是改状态）
+      const result = await rejectWork(selectedWorkId, rejectStage, reviewComment.trim());
+      const stageLabel = REJECT_STAGES.find((s) => s.key === rejectStage)?.label ?? rejectStage;
+      showMessage("success",
+        result.delivery === "none"
+          ? `已打回到「${stageLabel}」，审核意见已保存（AI 会话未在线，将在作品页手动继续）`
+          : `已打回到「${stageLabel}」，AI 正在按审核意见重做，完成后自动回到待审核`);
       reviewComment = "";
       selectedWorkId = "";
       await loadWorks();
     } catch (err) {
       showMessage("error", "打回失败: " + String(err));
+    } finally {
+      rejecting = false;
     }
   }
 
@@ -180,6 +194,7 @@
   function selectWork(workId: string) {
     selectedWorkId = workId;
     reviewComment = "";
+    rejectStage = "assembly";
     loadRecords();
     loadArticle(workId);
   }
@@ -266,7 +281,11 @@
   onMount(async () => {
     await Promise.all([loadWorks(), loadAccounts(), loadCredentialStatus()]);
     if (!destroyed) loading = false;
-    return () => { destroyed = true; };
+    // 轮询刷新：打回重做的作品完成后（状态回 reviewing）自动回到待审核列表
+    const timer = setInterval(() => {
+      if (!destroyed && !selectedWorkId) loadWorks();
+    }, 10_000);
+    return () => { destroyed = true; clearInterval(timer); };
   });
 </script>
 
@@ -330,9 +349,11 @@
           <span class="badge type-{selectedWork?.type}">{selectedWork?.type === "image-text" ? "图文" : "短视频"}</span>
         </div>
 
-        <!-- Preview area -->
+        <!-- Preview area: 成片视频优先（审核必须能播放视频），图片封面兜底 -->
         <div class="preview-area">
-          {#if selectedWork?.coverImage}
+          {#if selectedWork?.previewUrl}
+            <video src={selectedWork.previewUrl} controls></video>
+          {:else if selectedWork?.coverImage}
             {#if selectedWork?.coverIsVideo}
               <video src={selectedWork.coverImage} controls></video>
             {:else}
@@ -364,12 +385,24 @@
         <!-- Review actions -->
         <div class="review-actions">
           <div class="review-input">
-            <textarea bind:value={reviewComment} placeholder="审核意见（如有修改意见请填写并点击打回修改）" rows="3"></textarea>
+            <textarea bind:value={reviewComment} placeholder="审核意见（如有修改意见请填写并点击打回修改，意见将直达 AI 驱动重做）" rows="3"></textarea>
           </div>
           <div class="review-btns">
-            <button class="btn-reject" onclick={handleReject} disabled={!reviewComment.trim()}>打回修改</button>
+            <label class="reject-stage-label">打回到
+              <select bind:value={rejectStage} class="reject-stage-select">
+                {#each REJECT_STAGES as s}
+                  <option value={s.key}>{s.label}阶段</option>
+                {/each}
+              </select>
+            </label>
+            <button class="btn-reject" onclick={handleReject} disabled={!reviewComment.trim() || rejecting}>
+              {rejecting ? "打回中…" : "打回修改"}
+            </button>
             <button class="btn-approve" onclick={handleApprove}>审核通过</button>
           </div>
+          {#if selectedWork?.reviewComment}
+            <p class="last-review-comment">上次打回意见：{selectedWork.reviewComment}</p>
+          {/if}
         </div>
 
         <!-- Publishing -->
@@ -589,7 +622,10 @@
 
   .review-actions { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: var(--card-radius); padding: 1rem; margin-bottom: 1rem; }
   .review-input textarea { width: 100%; background: var(--bg-inset); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 0.5rem; font-size: 0.85rem; resize: vertical; }
-  .review-btns { display: flex; gap: 0.5rem; margin-top: 0.75rem; }
+  .review-btns { display: flex; gap: 0.5rem; margin-top: 0.75rem; align-items: center; }
+  .reject-stage-label { display: flex; align-items: center; gap: 0.4rem; font-size: 0.78rem; color: var(--text-secondary); }
+  .reject-stage-select { background: var(--bg-inset); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 0.35rem 0.5rem; font-size: 0.78rem; }
+  .last-review-comment { margin: 0.6rem 0 0; font-size: 0.75rem; color: var(--text-dim); border-left: 2px solid var(--border); padding-left: 0.5rem; }
   .btn-reject { padding: 0.5rem 1.2rem; border: 1px solid var(--error); border-radius: 4px; background: none; color: var(--error); cursor: pointer; font-size: 0.82rem; font-weight: 600; }
   .btn-reject:disabled { opacity: 0.4; cursor: not-allowed; }
   .btn-approve { padding: 0.5rem 1.2rem; border: none; border-radius: 4px; background: var(--success); color: #fff; cursor: pointer; font-size: 0.82rem; font-weight: 600; }

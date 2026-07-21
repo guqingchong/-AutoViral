@@ -182,6 +182,10 @@ export interface WorkSummary {
   platforms: string[];
   coverImage?: string;
   coverIsVideo?: boolean;
+  /** 审核预览视频 URL（成片，发布中心审核预览优先使用） */
+  previewUrl?: string;
+  /** 最近一次发布中心打回的审核意见 */
+  reviewComment?: string;
   accountId?: string;
   topicId?: number;
   templateId?: string;
@@ -234,6 +238,19 @@ export async function fetchWorks(): Promise<WorkSummary[]> {
 
 export async function fetchWork(id: string): Promise<Work> {
   return request<Work>(`/api/works/${encodeURIComponent(id)}`);
+}
+
+/** 发布中心打回修改：指定重做阶段 + 审核意见，意见直达 AI 并驱动重做 */
+export async function rejectWork(
+  id: string,
+  stage: string,
+  comment: string,
+): Promise<{ ok: boolean; status: WorkStatus; delivery: "message" | "session" | "none" }> {
+  return request(`/api/works/${encodeURIComponent(id)}/reject`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ stage, comment }),
+  });
 }
 
 export async function createWorkApi(input: {

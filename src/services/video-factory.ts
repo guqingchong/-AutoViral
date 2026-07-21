@@ -80,7 +80,13 @@ async function runRenderLoop(jobId: string, template: DbTemplate, req: RenderReq
   try {
     const work = await getWork(req.workId);
     if (work) {
-      await updateWork(req.workId, { status: "assembling" });
+      // 同步两套状态机：works.status 与 pipeline_steps.assembly（此前只写前者，
+      // 导致作品卡片状态标签与进度条脱节 —— 2026-07-21 Bug2 根因）
+      const pipeline = work.pipeline;
+      if (pipeline["assembly"] && pipeline["assembly"].status !== "done") {
+        pipeline["assembly"] = { ...pipeline["assembly"], status: "active", startedAt: pipeline["assembly"].startedAt ?? new Date().toISOString() };
+      }
+      await updateWork(req.workId, { status: "assembling", pipeline });
     }
   } catch (err) {
     console.error("Failed to set work status to assembling:", err);
@@ -141,7 +147,17 @@ async function runRenderLoop(jobId: string, template: DbTemplate, req: RenderReq
     try {
       const work = await getWork(req.workId);
       if (work) {
-        await updateWork(req.workId, { status: failed ? "failed" : "reviewing" });
+        // 渲染成功 → 同步 assembly 步骤为 done（进度条与状态标签一致）；
+        // 渲染失败 → 步骤保持 active 并在 note 中记录错误，便于排查。
+        const pipeline = work.pipeline;
+        if (pipeline["assembly"]) {
+          if (failed) {
+            pipeline["assembly"] = { ...pipeline["assembly"], note: `渲染失败: ${errorMessage ?? "unknown"}` };
+          } else {
+            pipeline["assembly"] = { ...pipeline["assembly"], status: "done", completedAt: new Date().toISOString() };
+          }
+        }
+        await updateWork(req.workId, { status: failed ? "failed" : "reviewing", pipeline });
       }
     } catch (workErr) {
       console.error("Failed to update work status after render:", workErr);
