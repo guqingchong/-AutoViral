@@ -467,29 +467,20 @@ export interface DigitalHumanJob {
 }
 
 export interface InstanceView {
-  state: "stopped" | "starting" | "ready" | "stopping" | "failed" | "unknown";
+  state: "ready" | "offline";
   gpuHourlyRateYuan: number;
-  idleShutdownMinutes: number;
+  idleReminderMinutes: number;
   lastActivityAt: string | null;
-  readySince: string | null;
-  error: string | null;
+  idleMinutes: number;
+  consoleUrl: string;
 }
 
 export interface DigitalHumanConfigStatus {
-  autodlConfigured: boolean;
   heygemConfigured: boolean;
 }
 
 export async function fetchInstanceStatus(): Promise<InstanceView> {
   return get<InstanceView>("/api/digital-humans/instance/status");
-}
-
-export async function powerOnInstance(): Promise<InstanceView> {
-  return request<InstanceView>("/api/digital-humans/instance/power-on", { method: "POST" });
-}
-
-export async function powerOffInstance(): Promise<InstanceView> {
-  return request<InstanceView>("/api/digital-humans/instance/power-off", { method: "POST" });
 }
 
 export async function fetchDigitalHumanConfigStatus(): Promise<DigitalHumanConfigStatus> {

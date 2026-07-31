@@ -4,8 +4,8 @@
  *
  * 前置条件（详见 docs/heygem-instance-setup.md）：
  *   1. 已按手册完成实例镜像改造（端口 6006 + Bearer Token）并固化私有镜像
- *   2. AutoViral 配置已填：autodl.token / autodl.instanceUuid / autodl.publicBaseUrl / heygem.apiToken
- *   3. 实例处于关机状态（本脚本会自行开机，结束后自动关机）
+ *   2. AutoViral 配置已填：heygem.baseUrl / heygem.apiToken / heygem.gpuHourlyRateYuan
+ *   3. 已在 AutoDL 控制台手动开机实例，且 HeyGem API 已就绪
  *
  * 运行：npx tsx scripts/test-heygem-live.ts
  *
@@ -15,6 +15,7 @@
  *
  * 注意：本脚本使用真实用户配置与数据库（~/.autoviral 或 AUTOVIRAL_DATA_DIR），
  *       会在库里留下一个测试形象和一个已完成任务，可在前端页面手动删除。
+ *       脚本不会开关机实例——结束后如不再使用，请记得去 AutoDL 控制台手动关机。
  */
 
 import { readFile, stat } from "node:fs/promises";
@@ -27,13 +28,9 @@ const POLL_INTERVAL_MS = 10_000;
 const POLL_TIMEOUT_MS = 30 * 60_000; // 真实渲染最多等 30 分钟
 const MIN_OUTPUT_BYTES = 100 * 1024; // 产物至少 100KB
 
-let instanceStarted = false;
-
 function fail(message: string): never {
   console.error(`\n[FAIL] ${message}`);
-  if (instanceStarted) {
-    console.error("[提示] 实例可能仍在开机计费，请前往 AutoDL 控制台确认实例已关机");
-  }
+  console.error("[提示] 如实例已开机且不再使用，请前往 AutoDL 控制台手动关机，避免持续计费");
   process.exit(1);
 }
 
@@ -43,34 +40,33 @@ function step(message: string): void {
 
 async function main(): Promise<void> {
   step("第 0 步：加载配置与数据库");
-  const { loadConfig, getConfig } = await import("../src/config.js");
+  const { loadConfig } = await import("../src/config.js");
   const { migrate } = await import("../src/db/migrate.js");
   const config = await loadConfig();
   migrate();
-  if (!config.autodl?.token || !config.autodl.instanceUuid || !config.autodl.publicBaseUrl) {
-    fail("缺少 autodl 配置（token / instanceUuid / publicBaseUrl），请先在设置页填写");
+  if (!config.heygem?.baseUrl) {
+    fail("缺少 heygem.baseUrl 配置（实例 6006 端口公网地址），请先在设置页填写");
   }
   if (!config.heygem?.apiToken) {
     fail("缺少 heygem.apiToken 配置，请先在设置页填写");
   }
-  if (!(config.autodl.gpuHourlyRateYuan > 0)) {
-    fail("autodl.gpuHourlyRateYuan 未配置或为 0，无法断言 actual_cost > 0");
+  if (!(config.heygem.gpuHourlyRateYuan > 0)) {
+    fail("heygem.gpuHourlyRateYuan 未配置或为 0，无法断言 actual_cost > 0");
   }
   await stat(TEST_VIDEO).catch(() => fail(`形象源视频不存在：${TEST_VIDEO}（可用 HEYGEM_TEST_VIDEO 覆盖）`));
   await stat(TEST_AUDIO).catch(() => fail(`测试音频不存在：${TEST_AUDIO}（可用 HEYGEM_TEST_AUDIO 覆盖）`));
-  console.log(`配置 OK：实例 ${config.autodl.instanceUuid}，单价 ${config.autodl.gpuHourlyRateYuan} 元/小时`);
+  console.log(`配置 OK：实例地址 ${config.heygem.baseUrl}，单价 ${config.heygem.gpuHourlyRateYuan} 元/小时`);
   console.log(`素材：video=${TEST_VIDEO}`);
   console.log(`素材：audio=${TEST_AUDIO}`);
 
   const instance = await import("../src/services/instance-service.js");
   const dh = await import("../src/services/digital-human.js");
 
-  step("第 1 步：开机并等待实例就绪（真实等待，约 3-5 分钟）");
-  const onView = await instance.powerOn();
-  instanceStarted = true;
-  console.log(`开机结果：state=${onView.state}${onView.error ? `，error=${onView.error}` : ""}`);
-  if (onView.state !== "ready") {
-    fail(`实例未就绪：state=${onView.state}，error=${onView.error ?? "无"}`);
+  step("第 1 步：检查实例是否就绪（实例需已在 AutoDL 控制台手动开机）");
+  const view = await instance.getInstanceView();
+  console.log(`实例状态：state=${view.state}`);
+  if (view.state !== "ready") {
+    fail("请先到 AutoDL 控制台开机，并确认 heygem.baseUrl 配置正确");
   }
   console.log("[OK] 实例 ready");
 
@@ -104,20 +100,13 @@ async function main(): Promise<void> {
   }
   console.log(`[OK] 产物 ${done.result_local_path}（${(out.size / 1024).toFixed(1)} KB），成本 ${done.actual_cost} 元`);
 
-  step("第 4 步：关机并校验状态");
-  const offView = await instance.powerOff();
-  console.log(`关机结果：state=${offView.state}${offView.error ? `，error=${offView.error}` : ""}`);
-  if (offView.state !== "stopped") {
-    fail(`关机后状态应为 stopped，实际 ${offView.state}`);
-  }
-  console.log("[OK] 实例 stopped");
-
   console.log("\n========================================");
   console.log("PASS: HeyGem 端到端验收全部通过");
   console.log(`  - 形象：${avatar.id}`);
   console.log(`  - 任务：${done.id}（产物 ${done.result_local_path}）`);
   console.log("  - 可在前端预览该任务产物，确认无误后手动删除测试数据");
   console.log("========================================");
+  console.log("[提醒] 测试完成，如不再使用请记得前往 AutoDL 控制台关机，避免持续计费");
 
   const { closeDb } = await import("../src/db/connection.js");
   closeDb();
@@ -126,8 +115,6 @@ async function main(): Promise<void> {
 
 main().catch((err) => {
   console.error("\n[FAIL] 未捕获异常：", err);
-  if (instanceStarted) {
-    console.error("[提示] 实例可能仍在开机计费，请前往 AutoDL 控制台确认实例已关机");
-  }
+  console.error("[提示] 如实例已开机且不再使用，请前往 AutoDL 控制台手动关机，避免持续计费");
   process.exit(1);
 });

@@ -3,7 +3,7 @@
   import {
     fetchAvatars, uploadAvatar, deleteAvatarApi, fetchDigitalHumanJobs,
     submitDigitalHumanJob, refreshDigitalHumanJob, deleteDigitalHumanJob,
-    regenerateDigitalHumanJob, fetchInstanceStatus, powerOnInstance, powerOffInstance,
+    regenerateDigitalHumanJob, fetchInstanceStatus,
     ApiError, type Avatar, type DigitalHumanJob, type InstanceView,
   } from "../lib/api.js";
   import { t, getLanguage, subscribe } from "../lib/i18n.js";
@@ -12,32 +12,22 @@
   let avatars = $state<Avatar[]>([]);
   let jobs = $state<DigitalHumanJob[]>([]);
   let instance = $state<InstanceView | null>(null);
-  let nowTs = $state(Date.now());
   let uploadName = $state("");
   let uploadFiles = $state<FileList | null>(null);
   let audioUrl = $state("");
   let selectedAvatarId = $state("");
   let busy = $state(false);
-  let powerBusy = $state(false);
   let message = $state("");
 
   onMount(() => {
     const unsub = subscribe(() => { lang = getLanguage(); });
     load();
     loadInstance();
-    const timer = setInterval(() => { nowTs = Date.now(); loadInstance(); }, 10000);
+    const timer = setInterval(() => { loadInstance(); }, 10000);
     return () => { unsub(); clearInterval(timer); };
   });
 
   function tt(key: string): string { void lang; return t(key); }
-
-  // 本次已运行时长（如"已运行 42 分钟"），随定时器刷新显示
-  function runningDuration(): string | null {
-    void nowTs;
-    if (instance?.state !== "ready" || !instance.readySince) return null;
-    const mins = Math.max(0, Math.floor((Date.now() - new Date(instance.readySince).getTime()) / 60000));
-    return `${tt("runningFor")} ${mins} ${tt("minuteUnit")}`;
-  }
 
   async function load() {
     const [a, j] = await Promise.all([fetchAvatars(), fetchDigitalHumanJobs()]);
@@ -52,15 +42,7 @@
   }
 
   function instanceStateLabel(state: InstanceView["state"]): string {
-    const keyMap: Record<InstanceView["state"], string> = {
-      stopped: "instanceStateStopped",
-      starting: "instanceStateStarting",
-      ready: "instanceStateReady",
-      stopping: "instanceStateStopping",
-      failed: "instanceStateFailed",
-      unknown: "instanceStateUnknown",
-    };
-    return tt(keyMap[state] ?? "instanceStateUnknown");
+    return tt(state === "ready" ? "instanceStateReady" : "instanceStateOffline");
   }
 
   function avatarMediaUrl(a: Avatar): string | null {
@@ -69,28 +51,6 @@
       return `/api/digital-humans/avatars/${encodeURIComponent(a.id)}/media/${encodeURIComponent(mediaName)}`;
     }
     return a.preview_url ?? null;
-  }
-
-  async function handlePowerOn() {
-    powerBusy = true;
-    try {
-      instance = await powerOnInstance();
-    } catch (err) {
-      message = err instanceof Error ? err.message : String(err);
-    } finally {
-      powerBusy = false;
-    }
-  }
-
-  async function handlePowerOff() {
-    powerBusy = true;
-    try {
-      instance = await powerOffInstance();
-    } catch (err) {
-      message = err instanceof Error ? err.message : String(err);
-    } finally {
-      powerBusy = false;
-    }
   }
 
   async function handleUpload() {
@@ -182,22 +142,16 @@
         <span class="state-dot state-{instance.state}"></span>
         <span class="state-label">{instanceStateLabel(instance.state)}</span>
         <span class="meta">GPU ¥{instance.gpuHourlyRateYuan}{tt("perHour")}</span>
-        {#if runningDuration()}
-          <span class="meta">{runningDuration()}</span>
-        {/if}
-      {/if}
-      <span class="spacer"></span>
-      {#if instance?.state === "ready" || instance?.state === "stopping" || instance?.state === "failed"}
-        <button class="btn-sm" disabled={powerBusy || instance.state === "stopping"} onclick={handlePowerOff}>{tt("powerOff")}</button>
-      {:else}
-        <button class="btn-primary" disabled={powerBusy || instance?.state === "starting"} onclick={handlePowerOn}>{tt("powerOn")}</button>
       {/if}
     </div>
-    {#if instance?.state === "starting"}
-      <p class="hint">{tt("instanceStartingHint")}</p>
+    {#if instance?.state === "offline"}
+      <p class="hint">
+        {tt("instanceOfflineHint")}
+        <a href={instance.consoleUrl} target="_blank" rel="noopener">{tt("autodlConsole")}</a>
+      </p>
     {/if}
-    {#if instance?.error}
-      <p class="error-text">{instance.error}</p>
+    {#if instance && instance.state === "ready" && instance.idleMinutes >= instance.idleReminderMinutes}
+      <p class="idle-banner">{tt("idleReminder").replace("{n}", String(instance.idleMinutes))}</p>
     {/if}
   </section>
 
@@ -297,11 +251,11 @@
   .instance-head { display: flex; align-items: center; gap: 0.6rem; }
   .instance-head h2 { margin: 0; }
   .state-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
-  .state-dot.state-stopped, .state-dot.state-unknown { background: #6b6560; }
-  .state-dot.state-starting, .state-dot.state-stopping { background: #f59e0b; }
+  .state-dot.state-offline { background: #6b6560; }
   .state-dot.state-ready { background: #22c55e; }
-  .state-dot.state-failed { background: #ef4444; }
   .state-label { font-weight: 600; }
   .hint { font-size: var(--size-sm); color: var(--text-muted); margin-top: 0.5rem; }
+  .hint a { color: var(--accent); }
+  .idle-banner { font-size: var(--size-sm); color: #92600a; background: #fef3c7; border: 1px solid #f59e0b; border-radius: 4px; padding: 0.5rem 0.75rem; margin-top: 0.75rem; }
   .error-text { font-size: var(--size-sm); color: var(--error); margin-top: 0.5rem; }
 </style>
