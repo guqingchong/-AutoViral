@@ -5,6 +5,7 @@ vi.mock("../../src/services/heygem-client.js", () => ({
 }));
 vi.mock("../../src/services/instance-service.js", () => ({
   assertReady: vi.fn(), recordActivity: vi.fn(),
+  getInstanceView: vi.fn(), powerOn: vi.fn(), powerOff: vi.fn(),
 }));
 
 import { mkdtemp, writeFile, rm, access } from "node:fs/promises";
@@ -24,6 +25,8 @@ describe("digital-human API (heygem)", () => {
   let dir: string;
   let apiRoutes: any;
   let heygem: any;
+  let instance: any;
+  let configModule: any;
 
   // config.ts 的 dataDir 是模块加载时求值的常量，必须设 env + resetModules 后动态 import
   beforeEach(async () => {
@@ -34,11 +37,11 @@ describe("digital-human API (heygem)", () => {
     const { migrate } = await import("../../src/db/migrate.js");
     conn.resetInMemoryDb();
     migrate();
-    const configModule = await import("../../src/config.js");
+    configModule = await import("../../src/config.js");
     vi.spyOn(configModule, "loadConfig").mockResolvedValue(cfg);
     vi.spyOn(configModule, "getConfig").mockReturnValue(cfg);
     heygem = await import("../../src/services/heygem-client.js");
-    const instance = await import("../../src/services/instance-service.js");
+    instance = await import("../../src/services/instance-service.js");
     instance.assertReady.mockResolvedValue(undefined);
     ({ apiRoutes } = await import("../../src/server/api.js"));
   });
@@ -50,13 +53,28 @@ describe("digital-human API (heygem)", () => {
     vi.restoreAllMocks();
   });
 
-  it("uploads avatar video and runs a job end-to-end", async () => {
+  async function makeAvatar(): Promise<any> {
     const form = new FormData();
     form.append("name", "Host");
     form.append("file", new File([Buffer.from("fake-video")], "skin.mp4", { type: "video/mp4" }));
-    const res1 = await apiRoutes.request("/api/digital-humans/avatars", { method: "POST", body: form });
-    expect(res1.status).toBe(201);
-    const avatar = await res1.json();
+    const res = await apiRoutes.request("/api/digital-humans/avatars", { method: "POST", body: form });
+    expect(res.status).toBe(201);
+    return res.json();
+  }
+
+  async function makeJob(avatarId: string): Promise<any> {
+    heygem.submitJob.mockResolvedValueOnce("hg-api-1");
+    const res = await apiRoutes.request("/api/digital-humans/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ avatarId, audioUrl: "/a.wav", estimatedCost: 0.5 }),
+    });
+    expect(res.status).toBe(201);
+    return res.json();
+  }
+
+  it("uploads avatar video and runs a job end-to-end", async () => {
+    const avatar = await makeAvatar();
     expect(avatar.status).toBe("ready");
     expect(avatar.source).toBe("heygem");
 
@@ -81,11 +99,81 @@ describe("digital-human API (heygem)", () => {
     await access(refreshed.result_local_path);
   });
 
-  it("rejects non-video avatar upload", async () => {
+  it("rejects non-video avatar upload with 400", async () => {
     const form = new FormData();
     form.append("name", "Bad");
     form.append("file", new File([Buffer.from("x")], "photo.jpg", { type: "image/jpeg" }));
     const res = await apiRoutes.request("/api/digital-humans/avatars", { method: "POST", body: form });
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(400);
+  });
+
+  it("config-status reports autodl/heygem booleans", async () => {
+    const res = await apiRoutes.request("/api/digital-humans/config-status");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ autodlConfigured: true, heygemConfigured: true });
+
+    vi.spyOn(configModule, "loadConfig").mockResolvedValue({ ...cfg, autodl: undefined, heygem: undefined });
+    const res2 = await apiRoutes.request("/api/digital-humans/config-status");
+    expect(await res2.json()).toEqual({ autodlConfigured: false, heygemConfigured: false });
+  });
+
+  it("instance status returns InstanceView", async () => {
+    instance.getInstanceView.mockResolvedValue({ state: "ready", gpuHourlyRateYuan: 2.18, idleShutdownMinutes: 15, lastActivityAt: null, error: null });
+    const res = await apiRoutes.request("/api/digital-humans/instance/status");
+    expect(res.status).toBe(200);
+    expect((await res.json()).state).toBe("ready");
+  });
+
+  it("power-on returns InstanceView; failure returns 500", async () => {
+    instance.powerOn.mockResolvedValue({ state: "ready", gpuHourlyRateYuan: 2.18, idleShutdownMinutes: 15, lastActivityAt: null, error: null });
+    const res = await apiRoutes.request("/api/digital-humans/instance/power-on", { method: "POST" });
+    expect(res.status).toBe(200);
+    expect((await res.json()).state).toBe("ready");
+  });
+
+  it("power-off with active jobs returns 409", async () => {
+    instance.powerOff.mockRejectedValue(new Error("有 2 个任务在进行中，无法关机"));
+    const res = await apiRoutes.request("/api/digital-humans/instance/power-off", { method: "POST" });
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toContain("无法关机");
+  });
+
+  it("submit job returns 409 when instance not ready", async () => {
+    const avatar = await makeAvatar();
+    instance.assertReady.mockRejectedValue(new Error("实例未就绪，请先在页面开机"));
+    const res = await apiRoutes.request("/api/digital-humans/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ avatarId: avatar.id, audioUrl: "/a.wav" }),
+    });
+    expect(res.status).toBe(409);
+  });
+
+  it("DELETE job removes existing job and 404s on unknown id", async () => {
+    const avatar = await makeAvatar();
+    const job = await makeJob(avatar.id);
+
+    const res = await apiRoutes.request(`/api/digital-humans/jobs/${job.id}`, { method: "DELETE" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+
+    const res2 = await apiRoutes.request("/api/digital-humans/jobs/dhjob_missing", { method: "DELETE" });
+    expect(res2.status).toBe(404);
+  });
+
+  it("regenerate returns 201 with a new job; 404 on unknown id", async () => {
+    const avatar = await makeAvatar();
+    const job = await makeJob(avatar.id);
+
+    heygem.submitJob.mockResolvedValueOnce("hg-api-2");
+    const res = await apiRoutes.request(`/api/digital-humans/jobs/${job.id}/regenerate`, { method: "POST" });
+    expect(res.status).toBe(201);
+    const regen = await res.json();
+    expect(regen.id).not.toBe(job.id);
+    expect(regen.avatar_id).toBe(avatar.id);
+    expect(regen.provider_job_id).toBe("hg-api-2");
+
+    const res2 = await apiRoutes.request("/api/digital-humans/jobs/dhjob_missing/regenerate", { method: "POST" });
+    expect(res2.status).toBe(404);
   });
 });

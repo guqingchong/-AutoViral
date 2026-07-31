@@ -31,7 +31,10 @@ import {
   setDefaultAvatar,
   submitJob,
   refreshJob,
+  deleteJob,
+  regenerateJob,
 } from "../services/digital-human.js";
+import { getInstanceView, powerOn, powerOff } from "../services/instance-service.js";
 import {
   uploadAsset as uploadLibraryAsset,
   listAssets as listLibraryAssets,
@@ -190,9 +193,12 @@ apiRoutes.get("/api/config", async (c) => {
     researchEnabled: config.research?.enabled ?? false,
     researchCron: config.research?.schedule ?? "0 9 * * *",
     memorySyncEnabled: config.memory?.syncEnabled ?? false,
-    chanjingAppId: config.chanjing?.appId ?? "",
-    chanjingSecretKey: config.chanjing?.secretKey ?? "",
-    bailianApiKey: config.bailian?.apiKey ?? "",
+    autodlToken: config.autodl?.token ?? "",
+    autodlInstanceUuid: config.autodl?.instanceUuid ?? "",
+    autodlPublicBaseUrl: config.autodl?.publicBaseUrl ?? "",
+    autodlGpuHourlyRateYuan: config.autodl?.gpuHourlyRateYuan ?? 2.18,
+    autodlIdleShutdownMinutes: config.autodl?.idleShutdownMinutes ?? 15,
+    heygemApiToken: config.heygem?.apiToken ?? "",
     pexelsApiKey: config.pexels?.apiKey ?? "",
     pixabayApiKey: config.pixabay?.apiKey ?? "",
     unsplashAccessKey: config.unsplash?.accessKey ?? "",
@@ -236,13 +242,17 @@ apiRoutes.put("/api/config", async (c) => {
     config.memory.syncEnabled = body.memorySyncEnabled as boolean;
   }
 
-  if (body.chanjingAppId !== undefined || body.chanjingSecretKey !== undefined) {
-    if (!config.chanjing) config.chanjing = { appId: "", secretKey: "" };
-    if (body.chanjingAppId !== undefined) config.chanjing.appId = body.chanjingAppId as string;
-    if (body.chanjingSecretKey !== undefined) config.chanjing.secretKey = body.chanjingSecretKey as string;
+  if (body.autodlToken !== undefined || body.autodlInstanceUuid !== undefined || body.autodlPublicBaseUrl !== undefined
+    || body.autodlGpuHourlyRateYuan !== undefined || body.autodlIdleShutdownMinutes !== undefined) {
+    if (!config.autodl) config.autodl = { token: "", instanceUuid: "", publicBaseUrl: "", gpuHourlyRateYuan: 2.18, idleShutdownMinutes: 15 };
+    if (body.autodlToken !== undefined) config.autodl.token = body.autodlToken as string;
+    if (body.autodlInstanceUuid !== undefined) config.autodl.instanceUuid = body.autodlInstanceUuid as string;
+    if (body.autodlPublicBaseUrl !== undefined) config.autodl.publicBaseUrl = body.autodlPublicBaseUrl as string;
+    if (body.autodlGpuHourlyRateYuan !== undefined) config.autodl.gpuHourlyRateYuan = Number(body.autodlGpuHourlyRateYuan);
+    if (body.autodlIdleShutdownMinutes !== undefined) config.autodl.idleShutdownMinutes = Number(body.autodlIdleShutdownMinutes);
   }
-  if (body.bailianApiKey !== undefined) {
-    config.bailian = { apiKey: body.bailianApiKey as string };
+  if (body.heygemApiToken !== undefined) {
+    config.heygem = { apiToken: body.heygemApiToken as string };
   }
   if (body.pexelsApiKey !== undefined) {
     if (!config.pexels) config.pexels = { apiKey: "" };
@@ -265,7 +275,8 @@ apiRoutes.put("/api/config", async (c) => {
     pixabayApiKey: (config.pixabay?.apiKey ?? "").length,
     unsplashAccessKey: (config.unsplash?.accessKey ?? "").length,
     minimaxKey: (config.minimax?.apiKey ?? "").length,
-    bailianApiKey: (config.bailian?.apiKey ?? "").length,
+    autodlToken: (config.autodl?.token ?? "").length,
+    heygemApiToken: (config.heygem?.apiToken ?? "").length,
   });
   return c.json(config);
 });
@@ -2933,37 +2944,35 @@ apiRoutes.get("/api/trends/collect/status/:jobId", async (c) => {
 function avatarDir(id: string): string { return join(dataDir, "avatars", id); }
 function jobOutputDir(id: string): string { return join(dataDir, "digital-human-jobs", id); }
 
-// GET /api/digital-humans/status
-apiRoutes.get("/api/digital-humans/status", async (c) => {
+// GET /api/digital-humans/config-status - check autodl/heygem credential status
+apiRoutes.get("/api/digital-humans/config-status", async (c) => {
   const config = await loadConfig();
   return c.json({
-    chanjing: !!config.chanjing?.appId && !!config.chanjing?.secretKey,
-    bailian: !!config.bailian?.apiKey,
+    autodlConfigured: Boolean(config.autodl?.token && config.autodl?.instanceUuid && config.autodl?.publicBaseUrl),
+    heygemConfigured: Boolean(config.heygem?.apiToken),
   });
 });
 
-// GET /api/digital-humans/avatars
-// GET /api/digital-humans/config-status - check chanjing/bailian credential status
-apiRoutes.get("/api/digital-humans/config-status", async (c) => {
-  const config = await loadConfig();
-  const chanjing = !!(config.chanjing?.appId && config.chanjing?.secretKey);
-  const bailian = !!config.bailian?.apiKey;
-  return c.json({ chanjing, bailian });
+// GET /api/digital-humans/instance/status - current GPU instance view
+apiRoutes.get("/api/digital-humans/instance/status", async (c) => {
+  return c.json(await getInstanceView());
 });
 
-// POST /api/digital-humans/test-connection - test chanjing API connectivity
-apiRoutes.post("/api/digital-humans/test-connection", async (c) => {
-  const config = await loadConfig();
-  if (!config.chanjing?.appId || !config.chanjing?.secretKey) {
-    return c.json({ success: false, error: "未配置蝉镜 AppID / SecretKey，请先在设置中填写" }, 400);
-  }
+// POST /api/digital-humans/instance/power-on
+apiRoutes.post("/api/digital-humans/instance/power-on", async (c) => {
   try {
-    const { ChanjingClient } = await import("../services/chanjing-client.js");
-    const client = new ChanjingClient();
-    await client.getAccessToken();
-    return c.json({ success: true, message: "蝉镜 API 连接成功" });
+    return c.json(await powerOn());
   } catch (err) {
-    return c.json({ success: false, error: err instanceof Error ? err.message : String(err) }, 500);
+    return c.json({ error: (err as Error).message }, 500);
+  }
+});
+
+// POST /api/digital-humans/instance/power-off - 409 when jobs are still running
+apiRoutes.post("/api/digital-humans/instance/power-off", async (c) => {
+  try {
+    return c.json(await powerOff());
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 409);
   }
 });
 
@@ -2982,7 +2991,10 @@ apiRoutes.post("/api/digital-humans/avatars", async (c) => {
     const avatar = await createAvatarFromUpload(name, buffer, file.name);
     return c.json(avatar, 201);
   } catch (err) {
-    return c.json({ error: err instanceof Error ? err.message : "Avatar creation failed" }, 500);
+    const message = err instanceof Error ? err.message : "Avatar creation failed";
+    // 非视频文件属于客户端输入错误，返回 400 而非 500
+    if (message.includes("源视频")) return c.json({ error: message }, 400);
+    return c.json({ error: message }, 500);
   }
 });
 
@@ -3050,7 +3062,10 @@ apiRoutes.post("/api/digital-humans/jobs", async (c) => {
     const job = await submitJob({ avatarId, audioUrl, workId, scriptId, estimatedCost });
     return c.json(job, 201);
   } catch (err) {
-    return c.json({ error: err instanceof Error ? err.message : "Job submission failed" }, 500);
+    const message = err instanceof Error ? err.message : "Job submission failed";
+    // 实例未就绪属于状态冲突，返回 409 让前端引导开机
+    if (message.includes("开机")) return c.json({ error: message }, 409);
+    return c.json({ error: message }, 500);
   }
 });
 
@@ -3076,6 +3091,21 @@ apiRoutes.post("/api/digital-humans/jobs/:id/refresh", async (c) => {
     return c.json(job);
   } catch (err) {
     return c.json({ error: err instanceof Error ? err.message : "Refresh failed" }, 500);
+  }
+});
+
+// DELETE /api/digital-humans/jobs/:id
+apiRoutes.delete("/api/digital-humans/jobs/:id", async (c) => {
+  const ok = await deleteJob(c.req.param("id"));
+  return ok ? c.json({ ok: true }) : c.json({ error: "Job not found" }, 404);
+});
+
+// POST /api/digital-humans/jobs/:id/regenerate - resubmit with same params
+apiRoutes.post("/api/digital-humans/jobs/:id/regenerate", async (c) => {
+  try {
+    return c.json(await regenerateJob(c.req.param("id")), 201);
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 404);
   }
 });
 
