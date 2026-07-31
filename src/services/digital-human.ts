@@ -1,7 +1,7 @@
 import { mkdir, writeFile, rm } from "node:fs/promises";
-import { join, extname } from "node:path";
+import { join, extname, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
-import { dataDir, loadConfig, getConfig } from "../config.js";
+import { dataDir, getConfig } from "../config.js";
 import * as heygem from "./heygem-client.js";
 import { assertReady, recordActivity } from "./instance-service.js";
 import * as avatarsRepo from "../db/avatars-repo.js";
@@ -16,14 +16,6 @@ function generateId(prefix: string): string {
 }
 
 function now(): string { return new Date().toISOString(); }
-
-async function resolveMediaUrl(pathOrUrl: string): Promise<string> {
-  if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl;
-  const config = await loadConfig();
-  const base = `http://127.0.0.1:${config.port}`;
-  if (pathOrUrl.startsWith("/")) return `${base}${pathOrUrl}`;
-  return `${base}/${pathOrUrl}`;
-}
 
 function avatarDir(id: string): string { return join(dataDir, "avatars", id); }
 function avatarMediaPath(id: string, filename: string): string { return join(avatarDir(id), filename); }
@@ -40,7 +32,12 @@ function toLocalMediaPath(pathOrUrl: string): string {
   const pathname = new URL(pathOrUrl).pathname;
   const idx = pathname.indexOf("/api/");
   if (idx === -1) throw new Error("音频必须是本地文件路径或本服务 /api/ URL");
-  return join(dataDir, decodeURIComponent(pathname.slice(idx + "/api/".length)));
+  const root = resolve(dataDir);
+  const resolved = resolve(root, decodeURIComponent(pathname.slice(idx + "/api/".length)));
+  if (resolved !== root && !resolved.startsWith(root + sep)) {
+    throw new Error("音频路径越界：必须位于数据目录内");
+  }
+  return resolved;
 }
 
 export async function createAvatarFromUpload(name: string, data: Buffer, filename: string): Promise<DbAvatar> {
@@ -56,7 +53,7 @@ export async function createAvatarFromUpload(name: string, data: Buffer, filenam
     status: "ready",
     source: "heygem",
     reference_video_path: mediaPath,
-    preview_url: await resolveMediaUrl(publicAvatarMediaUrl(id, safeName)),
+    preview_url: publicAvatarMediaUrl(id, safeName),
     config: { originalName: filename, mediaName: safeName },
     created_at: now(),
     updated_at: now(),

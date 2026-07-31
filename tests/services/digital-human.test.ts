@@ -90,6 +90,14 @@ describe("digital-human heygem", () => {
     expect(heygem.submitJob).toHaveBeenCalledWith(join(dir, "works", "w1", "assets", "audio", "a.wav"), avatar.reference_video_path, "pingpong");
   });
 
+  it("submit rejects /api/ audio URL that escapes dataDir via .. segments", async () => {
+    const avatar = await makeAvatar();
+    await expect(
+      svc.submitJob({ avatarId: avatar.id, audioUrl: "http://127.0.0.1:3271/api/%2e%2e%2fconfig.yaml" }),
+    ).rejects.toThrow("越界");
+    expect(heygem.submitJob).not.toHaveBeenCalled();
+  });
+
   it("submit blocked when budget exceeded", async () => {
     const avatar = await makeAvatar();
     vi.spyOn(configModule, "getConfig").mockReturnValue({ ...cfg, budget: { monthlyLimitYuan: 0.01, dailyLimitYuan: 200, warningThresholdPercent: 80 } });
