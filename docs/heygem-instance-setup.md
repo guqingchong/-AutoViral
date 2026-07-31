@@ -74,7 +74,8 @@ vi api_server.py
 
 ```python
 import os
-from fastapi import Request, HTTPException
+from fastapi import Request
+from fastapi.responses import JSONResponse
 
 HEYGEM_API_TOKEN = os.environ.get("HEYGEM_API_TOKEN", "")
 ```
@@ -85,21 +86,12 @@ HEYGEM_API_TOKEN = os.environ.get("HEYGEM_API_TOKEN", "")
 @app.middleware("http")
 async def _auth_middleware(request: Request, call_next):
     if HEYGEM_API_TOKEN and request.headers.get("Authorization") != f"Bearer {HEYGEM_API_TOKEN}":
-        raise HTTPException(status_code=401, detail="unauthorized")
+        return JSONResponse(status_code=401, content={"detail": "unauthorized"})
     return await call_next(request)
 ```
 
 > 说明：只要环境变量 `HEYGEM_API_TOKEN` 非空，所有请求都必须带 `Authorization: Bearer <你的TOKEN>` 头，否则返回 401。
-> 如果保存后发现 401 响应格式异常（个别 FastAPI 版本在中间件里抛 HTTPException 不会被正常处理），把中间件换成下面的等价写法：
->
-> ```python
-> @app.middleware("http")
-> async def _auth_middleware(request: Request, call_next):
->     if HEYGEM_API_TOKEN and request.headers.get("Authorization") != f"Bearer {HEYGEM_API_TOKEN}":
->         from fastapi.responses import JSONResponse
->         return JSONResponse(status_code=401, content={"detail": "unauthorized"})
->     return await call_next(request)
-> ```
+> 注意：中间件里**必须**用 `return JSONResponse(...)` 直接返回 401，不能用 `raise HTTPException(401)`——`@app.middleware("http")` 注册的中间件运行在 FastAPI 异常处理器之外，raise 出来的 HTTPException 不会被转换成 401，而会变成 500 内部错误。
 
 ---
 
