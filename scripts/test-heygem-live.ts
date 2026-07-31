@@ -27,8 +27,13 @@ const POLL_INTERVAL_MS = 10_000;
 const POLL_TIMEOUT_MS = 30 * 60_000; // 真实渲染最多等 30 分钟
 const MIN_OUTPUT_BYTES = 100 * 1024; // 产物至少 100KB
 
+let instanceStarted = false;
+
 function fail(message: string): never {
   console.error(`\n[FAIL] ${message}`);
+  if (instanceStarted) {
+    console.error("[提示] 实例可能仍在开机计费，请前往 AutoDL 控制台确认实例已关机");
+  }
   process.exit(1);
 }
 
@@ -62,6 +67,7 @@ async function main(): Promise<void> {
 
   step("第 1 步：开机并等待实例就绪（真实等待，约 3-5 分钟）");
   const onView = await instance.powerOn();
+  instanceStarted = true;
   console.log(`开机结果：state=${onView.state}${onView.error ? `，error=${onView.error}` : ""}`);
   if (onView.state !== "ready") {
     fail(`实例未就绪：state=${onView.state}，error=${onView.error ?? "无"}`);
@@ -120,5 +126,8 @@ async function main(): Promise<void> {
 
 main().catch((err) => {
   console.error("\n[FAIL] 未捕获异常：", err);
+  if (instanceStarted) {
+    console.error("[提示] 实例可能仍在开机计费，请前往 AutoDL 控制台确认实例已关机");
+  }
   process.exit(1);
 });
