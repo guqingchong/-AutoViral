@@ -1,17 +1,15 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile, rm } from "node:fs/promises";
 import { join, extname } from "node:path";
 import { randomUUID } from "node:crypto";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-import { dataDir, loadConfig } from "../config.js";
-import { ChanjingClient } from "./chanjing-client.js";
-import { BailianClient } from "./bailian-client.js";
+import { dataDir, loadConfig, getConfig } from "../config.js";
+import * as heygem from "./heygem-client.js";
+import { assertReady, recordActivity } from "./instance-service.js";
 import * as avatarsRepo from "../db/avatars-repo.js";
 import * as jobsRepo from "../db/digital-human-jobs-repo.js";
 import { assertWithinBudget } from "./budget-service.js";
 import type { DbAvatar, DbDigitalHumanJob } from "../db/types.js";
 
-const execFileAsync = promisify(execFile);
+const VIDEO_EXTS = [".mp4", ".mov", ".webm", ".avi"];
 
 function generateId(prefix: string): string {
   return `${prefix}_${randomUUID()}`;
@@ -29,71 +27,42 @@ async function resolveMediaUrl(pathOrUrl: string): Promise<string> {
 
 function avatarDir(id: string): string { return join(dataDir, "avatars", id); }
 function avatarMediaPath(id: string, filename: string): string { return join(avatarDir(id), filename); }
-function avatarFramePath(id: string): string { return join(avatarDir(id), "frame.jpg"); }
 function jobOutputDir(id: string): string { return join(dataDir, "digital-human-jobs", id); }
 function jobOutputPath(id: string): string { return join(jobOutputDir(id), "output.mp4"); }
 
 function publicAvatarMediaUrl(avatarId: string, filename: string): string {
   return `/api/digital-humans/avatars/${encodeURIComponent(avatarId)}/media/${encodeURIComponent(filename)}`;
 }
-function publicAvatarFrameUrl(avatarId: string): string {
-  return `/api/digital-humans/avatars/${encodeURIComponent(avatarId)}/frame`;
+
+/** HeyGem 需要本地文件：非 http 直接当作本地路径；本服务 /api/ URL 映射回 dataDir 下的文件 */
+function toLocalMediaPath(pathOrUrl: string): string {
+  if (!/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl;
+  const pathname = new URL(pathOrUrl).pathname;
+  const idx = pathname.indexOf("/api/");
+  if (idx === -1) throw new Error("音频必须是本地文件路径或本服务 /api/ URL");
+  return join(dataDir, decodeURIComponent(pathname.slice(idx + "/api/".length)));
 }
 
 export async function createAvatarFromUpload(name: string, data: Buffer, filename: string): Promise<DbAvatar> {
+  const ext = extname(filename).toLowerCase();
+  if (!VIDEO_EXTS.includes(ext)) throw new Error("形象必须是源视频文件（mp4/mov/webm/avi）");
   const id = generateId("avatar");
   await mkdir(avatarDir(id), { recursive: true });
-  const ext = extname(filename).toLowerCase() || ".bin";
   const safeName = `media${ext}`;
   const mediaPath = avatarMediaPath(id, safeName);
   await writeFile(mediaPath, data);
-  const isVideo = [".mp4", ".mov", ".webm", ".avi"].includes(ext);
-  const previewUrl = await resolveMediaUrl(publicAvatarMediaUrl(id, safeName));
   const avatar: DbAvatar = {
     id, name,
-    status: isVideo ? "training" : "ready",
-    source: isVideo ? "chanjing" : "bailian",
+    status: "ready",
+    source: "heygem",
     reference_video_path: mediaPath,
-    preview_url: previewUrl,
+    preview_url: await resolveMediaUrl(publicAvatarMediaUrl(id, safeName)),
     config: { originalName: filename, mediaName: safeName },
     created_at: now(),
     updated_at: now(),
   };
   avatarsRepo.createAvatar(avatar);
-  if (isVideo) {
-    trainAvatarWithChanjing(id).catch((err) => {
-      console.error(`[digital-human] avatar training failed ${id}:`, err);
-      avatarsRepo.updateAvatar(id, { status: "failed", config: { ...avatar.config, trainingError: (err as Error).message } });
-    });
-  }
   return avatar;
-}
-
-export async function importAvatar(name: string, providerAvatarId: string): Promise<DbAvatar> {
-  const avatar: DbAvatar = {
-    id: generateId("avatar"), name, status: "ready", source: "chanjing",
-    provider_avatar_id: providerAvatarId, config: {}, created_at: now(), updated_at: now(),
-  };
-  avatarsRepo.createAvatar(avatar);
-  return avatar;
-}
-
-async function trainAvatarWithChanjing(avatarId: string): Promise<void> {
-  const avatar = avatarsRepo.getAvatar(avatarId);
-  if (!avatar || !avatar.reference_video_path) throw new Error("Avatar or reference video not found");
-  const mediaName = (avatar.config.mediaName as string) ?? "media.mp4";
-  const videoUrl = await resolveMediaUrl(publicAvatarMediaUrl(avatarId, mediaName));
-  const client = new ChanjingClient();
-  const result = await client.createAvatar({ name: avatar.name, videoUrl });
-  avatarsRepo.updateAvatar(avatarId, {
-    provider_avatar_id: result.avatarId,
-    status: result.status === "ready" ? "ready" : "training",
-    preview_url: result.previewUrl ?? avatar.preview_url,
-  });
-}
-
-export async function extractFirstFrame(videoPath: string, outPath: string): Promise<void> {
-  await execFileAsync("ffmpeg", ["-y", "-i", videoPath, "-ss", "00:00:00.100", "-vframes", "1", outPath], { timeout: 30000 });
 }
 
 export async function setDefaultAvatar(avatarId: string): Promise<DbAvatar | undefined> {
@@ -111,66 +80,32 @@ export async function submitJob(input: {
   audioUrl: string;
   scriptId?: number;
   estimatedCost?: number;
-  fallbackOnFailure?: boolean;
 }): Promise<DbDigitalHumanJob> {
   const avatar = avatarsRepo.getAvatar(input.avatarId);
   if (!avatar) throw new Error("Avatar not found");
+  if (!avatar.reference_video_path) throw new Error("形象缺少源视频文件");
   assertWithinBudget(input.estimatedCost ?? 0);
+  await assertReady();
+  const audioPath = toLocalMediaPath(input.audioUrl);
+  const providerJobId = await heygem.submitJob(audioPath, avatar.reference_video_path, "pingpong");
   const job: DbDigitalHumanJob = {
     id: generateId("dhjob"),
     work_id: input.workId,
     avatar_id: input.avatarId,
     audio_path: input.audioUrl,
     script_id: input.scriptId,
-    provider: "chanjing",
-    status: "pending",
-    progress: 0,
+    provider: "heygem",
+    status: "running",
+    progress: 10,
     estimated_cost: input.estimatedCost ?? 0,
     actual_cost: 0,
+    provider_job_id: providerJobId,
     created_at: now(),
     updated_at: now(),
   };
   jobsRepo.createJob(job);
-  dispatchJob(job.id, input.fallbackOnFailure ?? true).catch((err) => {
-    console.error(`[digital-human] dispatch error ${job.id}:`, err);
-    jobsRepo.updateJob(job.id, { status: "failed", error: (err as Error).message });
-  });
+  recordActivity();
   return job;
-}
-
-async function dispatchJob(jobId: string, allowFallback: boolean): Promise<void> {
-  const job = jobsRepo.getJob(jobId);
-  if (!job) throw new Error("Job not found");
-  const avatar = avatarsRepo.getAvatar(job.avatar_id);
-  if (!avatar) throw new Error("Avatar not found");
-  jobsRepo.updateJob(jobId, { status: "queued", progress: 10 });
-  try {
-    if (avatar.source === "chanjing" && avatar.provider_avatar_id) {
-      const client = new ChanjingClient();
-      const audioUrl = await resolveMediaUrl(job.audio_path);
-      const submit = await client.submitVideo(avatar.provider_avatar_id, audioUrl);
-      jobsRepo.updateJob(jobId, { provider_job_id: submit.jobId, status: "running", progress: 20 });
-      return;
-    }
-  } catch (err) {
-    if (!allowFallback) throw err;
-    console.warn(`[digital-human] ChanJing failed for ${jobId}, trying Bailian fallback:`, (err as Error).message);
-  }
-  await dispatchBailian(job, avatar);
-}
-
-async function dispatchBailian(job: DbDigitalHumanJob, avatar: DbAvatar): Promise<void> {
-  let imageUrl = avatar.preview_url;
-  if (avatar.reference_video_path && [".mp4", ".mov", ".webm", ".avi"].includes(extname(avatar.reference_video_path).toLowerCase())) {
-    const framePath = avatarFramePath(avatar.id);
-    await extractFirstFrame(avatar.reference_video_path, framePath);
-    imageUrl = await resolveMediaUrl(publicAvatarFrameUrl(avatar.id));
-  }
-  if (!imageUrl) throw new Error("No image source available for Bailian fallback");
-  const client = new BailianClient();
-  const audioUrl = await resolveMediaUrl(job.audio_path);
-  const taskId = await client.submitVideo(imageUrl, audioUrl);
-  jobsRepo.updateJob(job.id, { provider: "bailian", provider_job_id: taskId, status: "running", progress: 20 });
 }
 
 export async function refreshJob(jobId: string): Promise<DbDigitalHumanJob | undefined> {
@@ -178,38 +113,50 @@ export async function refreshJob(jobId: string): Promise<DbDigitalHumanJob | und
   if (!job || !job.provider_job_id) return job;
   if (job.status === "done" || job.status === "failed") return job;
   try {
-    if (job.provider === "chanjing") {
-      const client = new ChanjingClient();
-      const result = await client.queryVideo(job.provider_job_id);
-      if (result.status === "success") return await finalizeJob(job, result.videoUrl);
-      if (result.status === "failed") return jobsRepo.updateJob(jobId, { status: "failed", error: result.error ?? "ChanJing job failed", progress: result.progress });
-      return jobsRepo.updateJob(jobId, { status: "running", progress: result.progress });
-    } else {
-      const client = new BailianClient();
-      const result = await client.queryVideo(job.provider_job_id);
-      if (result.status === "SUCCEEDED") return await finalizeJob(job, result.videoUrl);
-      if (result.status === "FAILED") return jobsRepo.updateJob(jobId, { status: "failed", error: result.error ?? "Bailian job failed", progress: result.progress });
-      return jobsRepo.updateJob(jobId, { status: "running", progress: result.progress });
+    const info = await heygem.getJob(job.provider_job_id);
+    if (info.status === "succeeded") return await finalizeJob(job, info.processing_time_seconds);
+    if (info.status === "failed") {
+      return jobsRepo.updateJob(jobId, { status: "failed", error: info.error ?? "HeyGem 任务失败" });
     }
+    return jobsRepo.updateJob(jobId, { status: "running", progress: info.status === "queued" ? 10 : 50 });
   } catch (err) {
     return jobsRepo.updateJob(jobId, { status: "failed", error: (err as Error).message });
   }
 }
 
-async function finalizeJob(job: DbDigitalHumanJob, videoUrl?: string): Promise<DbDigitalHumanJob | undefined> {
-  if (!videoUrl) throw new Error("Provider returned success without video URL");
-  const dir = jobOutputDir(job.id);
-  await mkdir(dir, { recursive: true });
+async function finalizeJob(job: DbDigitalHumanJob, processingSeconds: number | null): Promise<DbDigitalHumanJob | undefined> {
+  await mkdir(jobOutputDir(job.id), { recursive: true });
   const dest = jobOutputPath(job.id);
-  const res = await fetch(videoUrl);
-  if (!res.ok) throw new Error(`Failed to download result: ${res.status}`);
-  await writeFile(dest, Buffer.from(await res.arrayBuffer()));
-  return jobsRepo.updateJob(job.id, {
+  await heygem.downloadResult(job.provider_job_id!, dest);
+  const rate = getConfig().autodl?.gpuHourlyRateYuan ?? 0;
+  const actualCost = processingSeconds !== null
+    ? Math.round(((processingSeconds * rate) / 3600) * 10000) / 10000
+    : job.estimated_cost;
+  const updated = jobsRepo.updateJob(job.id, {
     status: "done",
     progress: 100,
-    result_url: videoUrl,
+    result_url: `/api/digital-humans/jobs/${encodeURIComponent(job.id)}/output`,
     result_local_path: dest,
-    actual_cost: job.estimated_cost,
+    actual_cost: actualCost,
+  });
+  recordActivity();
+  return updated;
+}
+
+export async function deleteJob(jobId: string): Promise<boolean> {
+  await rm(jobOutputDir(jobId), { recursive: true, force: true });
+  return jobsRepo.deleteJob(jobId);
+}
+
+export async function regenerateJob(jobId: string): Promise<DbDigitalHumanJob> {
+  const job = jobsRepo.getJob(jobId);
+  if (!job) throw new Error("Job not found");
+  return submitJob({
+    workId: job.work_id,
+    avatarId: job.avatar_id,
+    audioUrl: job.audio_path,
+    scriptId: job.script_id,
+    estimatedCost: job.estimated_cost,
   });
 }
 
