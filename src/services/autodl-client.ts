@@ -2,9 +2,9 @@ import { loadConfig } from "../config.js";
 
 const HOST = "https://api.autodl.com";
 
-/** 开机后在实例上启动 HeyGem API（6006 端口 + Token），写入数据盘日志 */
+/** 开机后在实例上启动 HeyGem API（6006 端口 + Token）。Pro 实例无数据盘，日志写系统盘 */
 export const HEYGEM_START_COMMAND =
-  "cd /root/HeyGem-Linux-Python-Hack && nohup bash start_api.sh > /root/autodl-tmp/heygem_api.log 2>&1 &";
+  "mkdir -p /root/autodl-tmp && cd /root/HeyGem-Linux-Python-Hack && nohup bash start_api.sh > /root/heygem_api.log 2>&1 &";
 
 export type AutoDlInstanceStatus = "running" | "shutdown" | "starting" | "stopping" | "unknown";
 
