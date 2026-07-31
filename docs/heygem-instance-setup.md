@@ -2,6 +2,9 @@
 
 > 面向非专家操作者。每一步都可以直接复制粘贴执行。
 > 目的：把 AutoDL 上的 HeyGem 实例改造成 AutoViral 可用的形态（端口 6006 + Bearer Token 鉴权），并固化为私有镜像。
+>
+> **运行模式**：实例的开关机由你在 [AutoDL 控制台](https://www.autodl.com/console) **手动操作**（AutoViral 不调用 AutoDL API）。
+> AutoViral 只做状态提醒：每 30 秒健康探测显示实例在线/离线，实例空闲超过阈值时在数字人页面提示你及时关机，避免持续计费。
 
 ---
 
@@ -131,7 +134,9 @@ cd /root/HeyGem-Linux-Python-Hack && nohup bash start_api.sh > /root/heygem_api.
 
 ## 第 4 步：验证改造成功
 
-在**本地**终端执行（把 `<实例公网地址>` 换成 AutoDL 实例卡片上的「自定义服务」/公网地址，形如 `https://xxxx.region.autodl.com`，把 `<你的TOKEN>` 换成你的随机串）：
+实例卡片 →「快捷工具」→「自定义服务」，复制 6006 端口对应的公网地址（形如 `https://xxxx.region.autodl.com`，不带末尾 `/`）——这就是要填进 AutoViral 的 `heygem.baseUrl`。
+
+在**本地**终端执行（把 `<实例公网地址>` 换成上面复制的自定义服务地址，把 `<你的TOKEN>` 换成你的随机串）：
 
 ```bash
 curl -H "Authorization: Bearer <你的TOKEN>" https://<实例公网地址>/api/health
@@ -154,30 +159,29 @@ curl https://<实例公网地址>/api/health
 1. 回到 AutoDL 控制台 →「容器实例」。
 2. 先对实例执行「关机」（保存镜像要求关机状态；数据盘内容会保留）。
 3. 实例卡片 →「更多」→「保存镜像」，起个名字，例如 `heygem-6006-token-v1`。
-4. 以后每次从 AutoViral 开机，都会基于这个镜像拉起，端口和 Token 自动就位，**无需重复本手册**。
-
-> 注意：在 AutoViral 设置里填的实例必须是「用这个镜像开的实例」。如果你保存镜像后新开了一台实例，记得更新设置页的实例 ID。
+4. 以后每次在 AutoDL 控制台基于这个镜像开机，端口和 Token 自动就位，**无需重复本手册**。
 
 ---
 
 ## 第 6 步：在 AutoViral 设置页填写配置
 
-打开 AutoViral → 设置页，填写以下 4 项：
+打开 AutoViral → 设置页，填写以下 3 项：
 
 | 配置项 | 填什么 | 示例 |
 |--------|--------|------|
-| `autodl.token` | AutoDL 开发者 Token（AutoDL 控制台 → 账号设置 → 开发者 Token） | `eyJhbGci...` |
-| `autodl.instanceUuid` | 实例 ID（实例卡片上的 UUID） | `a1b2c3d4-...` |
-| `autodl.publicBaseUrl` | 实例公网地址（与第 4 步 curl 用的相同，不带末尾 `/`） | `https://xxxx.region.autodl.com` |
+| `heygem.baseUrl` | 实例 6006 端口公网地址（AutoDL 控制台实例卡片 →「快捷工具 → 自定义服务」获取，不带末尾 `/`） | `https://xxxx.region.autodl.com` |
 | `heygem.apiToken` | 第 0 步生成的随机串 | 与实例里 export 的一致 |
+| `heygem.gpuHourlyRateYuan` | GPU 每小时单价（与实例实际价格一致，用于估算任务成本） | `1.78` |
 
-同时确认 GPU 每小时单价（`gpuHourlyRateYuan`）和实例实际价格一致——它用于估算任务成本，验收脚本会断言 `actual_cost > 0`。
+可选：`heygem.idleReminderMinutes`（空闲提醒阈值，默认 15 分钟）——实例空闲超过该时长，数字人页面会提示你去控制台关机。
+
+> 注意：更换实例后公网地址会变，记得同步更新设置页的实例地址。旧版 `autodl.*` 配置会在启动时自动迁移为 `heygem.*`。
 
 ---
 
 ## 第 7 步：跑端到端验收脚本
 
-前置条件：本手册第 1-6 步全部完成，实例处于**关机**状态（脚本会自己开机）。
+前置条件：本手册第 1-6 步全部完成，且实例已在 AutoDL 控制台**手动开机**、HeyGem API 已就绪（脚本不会帮你开关机）。
 
 在 AutoViral 项目根目录执行：
 
@@ -192,7 +196,7 @@ npx tsx scripts/test-heygem-live.ts
 > HEYGEM_TEST_VIDEO=/path/to/video.mp4 HEYGEM_TEST_AUDIO=/path/to/audio.wav npx tsx scripts/test-heygem-live.ts
 > ```
 
-脚本流程：开机并等待就绪（真实等待 3-5 分钟）→ 注册形象 → 提交约 10 秒音频的合成任务 → 轮询至完成并校验产物（mp4 存在、>100KB、actual_cost > 0）→ 关机并校验 stopped。任一步失败以退出码 1 终止。
+脚本流程：检查实例健康（未就绪则提示先去控制台开机）→ 注册形象 → 提交约 10 秒音频的合成任务 → 轮询至完成并校验产物（mp4 存在、>100KB、actual_cost > 0）。任一步失败以退出码 1 终止。脚本结束后**不会关机**，如不再使用请记得去 AutoDL 控制台手动关机。
 
 全部输出 `PASS` 即端到端验收通过。
 
@@ -200,7 +204,7 @@ npx tsx scripts/test-heygem-live.ts
 
 ## 常见问题
 
-- **健康检查一直不过**：实例刚开机 HeyGem 加载模型要几分钟，脚本最多等 5 分钟；超时的话 SSH 进实例看 `tail -100 /root/heygem_api.log`。
+- **页面显示「实例离线」**：实例没开机，或刚开机 HeyGem 还在加载模型（需几分钟）。先去 [AutoDL 控制台](https://www.autodl.com/console) 开机；持续离线则 SSH 进实例看 `tail -100 /root/heygem_api.log`。
 - **401 unauthorized**：两端 Token 不一致，或实例是从旧镜像开的（没做第 5 步固化）。
-- **关机时报「有任务进行中」**：有合成任务没跑完，等它结束或在 AutoViral 里删除该任务后再关机。
+- **忘记关机一直在计费**：在 AutoViral 设置页把 `heygem.idleReminderMinutes` 调小，空闲提醒会更早出现；计费以 AutoDL 控制台为准，不用时及时手动关机。
 - **改坏了想回滚**：`cp api_server.py.bak api_server.py && cp start_api.sh.bak start_api.sh`，再重启服务即可。

@@ -41,11 +41,9 @@
   let unsplashAccessKey: string = $state("");
   let jimengAccessKey: string = $state("");
   let jimengSecretKey: string = $state("");
-  let autodlToken: string = $state("");
-  let autodlInstanceUuid: string = $state("");
-  let autodlPublicBaseUrl: string = $state("");
+  let heygemBaseUrl: string = $state("");
   let heygemApiToken: string = $state("");
-  let showAutodlToken: boolean = $state(false);
+  let heygemGpuHourlyRateYuan: number = $state(1.78);
   let showHeygemToken: boolean = $state(false);
   let showPexelsKey: boolean = $state(false);
   let showPixabayKey: boolean = $state(false);
@@ -155,7 +153,7 @@
           interval, model, autoRun,
           pexelsApiKey, pixabayApiKey, unsplashAccessKey,
           jimengAccessKey, jimengSecretKey,
-          autodlToken, autodlInstanceUuid, autodlPublicBaseUrl, heygemApiToken,
+          heygemBaseUrl, heygemApiToken, heygemGpuHourlyRateYuan,
         }),
       });
       // 检查 HTTP 状态：此前 500 也显示"已保存"，掩盖了保存失败
@@ -202,10 +200,9 @@
         unsplashAccessKey = data.unsplashAccessKey ?? "";
         jimengAccessKey = data.jimengAccessKey ?? "";
         jimengSecretKey = data.jimengSecretKey ?? "";
-        autodlToken = data.autodlToken ?? "";
-        autodlInstanceUuid = data.autodlInstanceUuid ?? "";
-        autodlPublicBaseUrl = data.autodlPublicBaseUrl ?? "";
+        heygemBaseUrl = data.heygemBaseUrl ?? "";
         heygemApiToken = data.heygemApiToken ?? "";
+        heygemGpuHourlyRateYuan = data.heygemGpuHourlyRateYuan ?? 1.78;
       }
     } catch {}
   }
@@ -420,19 +417,8 @@
           <span class="field-label-upper">数字人 API</span>
           <div class="stack">
             <label class="field-row">
-              <span class="field-label-sm">AutoDL Token</span>
-              <div class="key-input-row">
-                <input type={showAutodlToken ? "text" : "password"} bind:value={autodlToken} placeholder="AutoDL 平台 Token" class="key-input" />
-                <button class="key-toggle" onclick={() => showAutodlToken = !showAutodlToken}>{showAutodlToken ? "🙈" : "👁"}</button>
-              </div>
-            </label>
-            <label class="field-row">
-              <span class="field-label-sm">AutoDL 实例 UUID</span>
-              <input type="text" bind:value={autodlInstanceUuid} placeholder="GPU 实例 UUID" class="key-input" />
-            </label>
-            <label class="field-row">
-              <span class="field-label-sm">AutoDL 公网 Base URL</span>
-              <input type="text" bind:value={autodlPublicBaseUrl} placeholder="https://xxx.autodl.com" class="key-input" />
+              <span class="field-label-sm">HeyGem 实例地址</span>
+              <input type="text" bind:value={heygemBaseUrl} placeholder="https://xxx.region.autodl.com" class="key-input" />
             </label>
             <label class="field-row">
               <span class="field-label-sm">HeyGem API Token</span>
@@ -441,7 +427,11 @@
                 <button class="key-toggle" onclick={() => showHeygemToken = !showHeygemToken}>{showHeygemToken ? "🙈" : "👁"}</button>
               </div>
             </label>
-            <p class="hint-sm">AutoDL + HeyGem 用于数字人视频生成。配置后可在"数字人"页面开启实例并提交合成任务。</p>
+            <label class="field-row">
+              <span class="field-label-sm">GPU 时价（元/小时）</span>
+              <input type="number" step="0.01" min="0" bind:value={heygemGpuHourlyRateYuan} class="key-input" />
+            </label>
+            <p class="hint-sm">HeyGem 用于数字人视频生成。实例需在 AutoDL 控制台手动开关机；实例地址在控制台实例卡片「快捷工具 → 自定义服务」获取。</p>
           </div>
         </div>
 
