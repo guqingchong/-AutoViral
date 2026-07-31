@@ -3,6 +3,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 vi.mock("../../src/services/heygem-client.js", () => ({
   checkHealth: vi.fn(),
 }));
+vi.mock("../../src/services/tunnel-service.js", () => ({
+  ensureTunnel: vi.fn(),
+}));
 vi.mock("../../src/db/digital-human-jobs-repo.js", () => ({
   countActiveJobs: vi.fn(),
 }));
@@ -12,6 +15,7 @@ vi.mock("../../src/config.js", () => ({
 }));
 
 import * as heygem from "../../src/services/heygem-client.js";
+import * as tunnel from "../../src/services/tunnel-service.js";
 import * as configModule from "../../src/config.js";
 import {
   getInstanceView,
@@ -32,6 +36,7 @@ describe("instance-service (manual control)", () => {
     __resetForTests();
     (configModule.loadConfig as any).mockResolvedValue(cfg);
     (configModule.getConfig as any).mockReturnValue(cfg);
+    (tunnel.ensureTunnel as any).mockResolvedValue(false);
   });
   afterEach(() => {
     stopHealthLoop();
@@ -54,6 +59,35 @@ describe("instance-service (manual control)", () => {
     (heygem.checkHealth as any).mockResolvedValue(false);
     const view = await getInstanceView();
     expect(view.state).toBe("offline");
+  });
+
+  it("隧道掉线自愈：checkHealth 先失败，ensureTunnel 成功后重试为 ready", async () => {
+    (heygem.checkHealth as any)
+      .mockResolvedValueOnce(false)   // 首次探测失败（隧道断了）
+      .mockResolvedValueOnce(true);   // 隧道重建后重试成功
+    (tunnel.ensureTunnel as any).mockResolvedValueOnce(true);
+
+    const view = await getInstanceView();
+    expect(view.state).toBe("ready");
+    expect(tunnel.ensureTunnel).toHaveBeenCalledTimes(1);
+    expect(heygem.checkHealth).toHaveBeenCalledTimes(2);
+  });
+
+  it("隧道重建失败 → offline", async () => {
+    (heygem.checkHealth as any).mockResolvedValue(false);
+    (tunnel.ensureTunnel as any).mockResolvedValue(false);
+    const view = await getInstanceView();
+    expect(view.state).toBe("offline");
+    // ensureTunnel 失败后不再重试 checkHealth
+    expect(heygem.checkHealth).toHaveBeenCalledTimes(1);
+  });
+
+  it("未配置 heygem 时不尝试隧道自愈", async () => {
+    (configModule.getConfig as any).mockReturnValue({ heygem: undefined });
+    (heygem.checkHealth as any).mockResolvedValue(false);
+    const view = await getInstanceView();
+    expect(view.state).toBe("offline");
+    expect(tunnel.ensureTunnel).not.toHaveBeenCalled();
   });
 
   it("assertReady throws when offline, passes when ready", async () => {

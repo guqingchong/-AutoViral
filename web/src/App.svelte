@@ -44,6 +44,8 @@
   let heygemBaseUrl: string = $state("");
   let heygemApiToken: string = $state("");
   let heygemGpuHourlyRateYuan: number = $state(1.78);
+  let heygemTunnelHost: string = $state("");
+  let heygemTunnelPort: number = $state(28830);
   let showHeygemToken: boolean = $state(false);
   let showPexelsKey: boolean = $state(false);
   let showPixabayKey: boolean = $state(false);
@@ -154,6 +156,7 @@
           pexelsApiKey, pixabayApiKey, unsplashAccessKey,
           jimengAccessKey, jimengSecretKey,
           heygemBaseUrl, heygemApiToken, heygemGpuHourlyRateYuan,
+          heygemTunnelHost, heygemTunnelPort,
         }),
       });
       // 检查 HTTP 状态：此前 500 也显示"已保存"，掩盖了保存失败
@@ -203,6 +206,8 @@
         heygemBaseUrl = data.heygemBaseUrl ?? "";
         heygemApiToken = data.heygemApiToken ?? "";
         heygemGpuHourlyRateYuan = data.heygemGpuHourlyRateYuan ?? 1.78;
+        heygemTunnelHost = data.heygemTunnelHost ?? "";
+        heygemTunnelPort = data.heygemTunnelPort ?? 28830;
       }
     } catch {}
   }
@@ -418,7 +423,7 @@
           <div class="stack">
             <label class="field-row">
               <span class="field-label-sm">HeyGem 实例地址</span>
-              <input type="text" bind:value={heygemBaseUrl} placeholder="https://xxx.region.autodl.com" class="key-input" />
+              <input type="text" bind:value={heygemBaseUrl} placeholder="http://localhost:6006" class="key-input" />
             </label>
             <label class="field-row">
               <span class="field-label-sm">HeyGem API Token</span>
@@ -431,7 +436,15 @@
               <span class="field-label-sm">GPU 时价（元/小时）</span>
               <input type="number" step="0.01" min="0" bind:value={heygemGpuHourlyRateYuan} class="key-input" />
             </label>
-            <p class="hint-sm">HeyGem 用于数字人视频生成。实例需在 AutoDL 控制台手动开关机；实例地址在控制台实例卡片「快捷工具 → 自定义服务」获取。</p>
+            <label class="field-row">
+              <span class="field-label-sm">SSH 隧道主机</span>
+              <input type="text" bind:value={heygemTunnelHost} placeholder="connect.nmb1.seetacloud.com" class="key-input" />
+            </label>
+            <label class="field-row">
+              <span class="field-label-sm">SSH 隧道端口</span>
+              <input type="number" min="1" max="65535" bind:value={heygemTunnelPort} placeholder="28830" class="key-input" />
+            </label>
+            <p class="hint-sm">HeyGem 用于数字人视频生成。实例需在 AutoDL 控制台手动开关机；个人用户通过 SSH 隧道访问实例（隧道由 AutoViral 自动管理），实例地址填 http://localhost:6006。</p>
           </div>
         </div>
 

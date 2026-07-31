@@ -9,6 +9,23 @@ dotenv.config();
 
 let cachedConfig: Config | undefined;
 
+export interface HeygemTunnelConfig {
+  host: string;        // SSH 跳板主机（AutoDL 实例 SSH 地址）
+  port: number;        // SSH 端口
+  user: string;        // SSH 用户
+  localPort: number;   // 本地转发端口（heygem.baseUrl 指向它）
+  remotePort: number;  // 实例内 HeyGem API 端口
+}
+
+/** SSH 隧道默认值：AutoDL 个人用户无公网代理权限，只能通过 SSH 隧道访问实例服务 */
+export const HEYGEM_TUNNEL_DEFAULTS: HeygemTunnelConfig = {
+  host: "connect.nmb1.seetacloud.com",
+  port: 28830,
+  user: "root",
+  localPort: 6006,
+  remotePort: 6008,
+};
+
 export interface Config {
   port: number;
   model: string;
@@ -17,9 +34,10 @@ export interface Config {
   minimax?: { apiKey: string };
   heygem?: {
     apiToken: string;
-    baseUrl: string;              // 实例 6006 端口公网地址（AutoDL 控制台「自定义服务」）
+    baseUrl: string;              // 实例 API 地址（SSH 隧道模式默认 http://localhost:6006）
     gpuHourlyRateYuan: number;    // GPU 时价，用于成本估算
     idleReminderMinutes: number;  // 空闲提醒阈值（默认 15）
+    tunnel?: HeygemTunnelConfig;  // SSH 隧道（缺省时按 HEYGEM_TUNNEL_DEFAULTS 补全）
   };
   pexels?: { apiKey: string };
   pixabay?: { apiKey: string };
@@ -150,6 +168,7 @@ export async function loadConfig(): Promise<Config> {
         baseUrl: h?.baseUrl ?? "",
         gpuHourlyRateYuan: h?.gpuHourlyRateYuan ?? 1.78,
         idleReminderMinutes: h?.idleReminderMinutes ?? 15,
+        tunnel: h?.tunnel,
       };
     }
     if (process.env.HEYGEM_BASE_URL) {
@@ -159,7 +178,17 @@ export async function loadConfig(): Promise<Config> {
         baseUrl: process.env.HEYGEM_BASE_URL,
         gpuHourlyRateYuan: h?.gpuHourlyRateYuan ?? 1.78,
         idleReminderMinutes: h?.idleReminderMinutes ?? 15,
+        tunnel: h?.tunnel,
       };
+    }
+
+    // 旧配置兼容：heygem 存在但缺 tunnel 字段（或字段不全）时补默认值；
+    // SSH 隧道模式下 baseUrl 为空时默认指向本地隧道端口
+    if (config.heygem) {
+      config.heygem.tunnel = { ...HEYGEM_TUNNEL_DEFAULTS, ...(config.heygem.tunnel ?? {}) };
+      if (!config.heygem.baseUrl) {
+        config.heygem.baseUrl = `http://localhost:${config.heygem.tunnel.localPort}`;
+      }
     }
 
     cachedConfig = config;

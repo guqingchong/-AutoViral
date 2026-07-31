@@ -17,7 +17,10 @@ const cfg = {
   jimeng: { accessKey: "", secretKey: "" },
   research: { enabled: false, schedule: "", platforms: [] },
   budget: { monthlyLimitYuan: 2500, dailyLimitYuan: 200, warningThresholdPercent: 80 },
-  heygem: { apiToken: "s", baseUrl: "https://u", gpuHourlyRateYuan: 2.18, idleReminderMinutes: 15 },
+  heygem: {
+    apiToken: "s", baseUrl: "https://u", gpuHourlyRateYuan: 2.18, idleReminderMinutes: 15,
+    tunnel: { host: "connect.nmb1.seetacloud.com", port: 28830, user: "root", localPort: 6006, remotePort: 6008 },
+  },
 } as any;
 
 describe("digital-human API (heygem)", () => {
@@ -119,6 +122,44 @@ describe("digital-human API (heygem)", () => {
     vi.spyOn(configModule, "loadConfig").mockResolvedValue({ ...cfg, heygem: { ...cfg.heygem, baseUrl: "" } });
     const res3 = await apiRoutes.request("/api/digital-humans/config-status");
     expect(await res3.json()).toEqual({ heygemConfigured: false });
+
+    // tunnel.host 缺失也视为未配置
+    vi.spyOn(configModule, "loadConfig").mockResolvedValue({
+      ...cfg,
+      heygem: { ...cfg.heygem, tunnel: { ...cfg.heygem.tunnel, host: "" } },
+    });
+    const res4 = await apiRoutes.request("/api/digital-humans/config-status");
+    expect(await res4.json()).toEqual({ heygemConfigured: false });
+  });
+
+  it("GET/PUT /api/config 暴露 heygem 隧道扁平字段", async () => {
+    // GET /api/config 需要 analytics 字段（flattenAnalytics）
+    vi.spyOn(configModule, "loadConfig").mockResolvedValue({
+      ...cfg,
+      analytics: { enabled: false, collectInterval: 60, sources: [] },
+    });
+    const res = await apiRoutes.request("/api/config");
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.heygemTunnelHost).toBe("connect.nmb1.seetacloud.com");
+    expect(data.heygemTunnelPort).toBe(28830);
+
+    const put = await apiRoutes.request("/api/config", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ heygemTunnelHost: "connect.example.com", heygemTunnelPort: 30000 }),
+    });
+    expect(put.status).toBe(200);
+    const saved = await put.json();
+    expect(saved.heygem.tunnel.host).toBe("connect.example.com");
+    expect(saved.heygem.tunnel.port).toBe(30000);
+    // 其余 tunnel 字段补默认值
+    expect(saved.heygem.tunnel.user).toBe("root");
+    expect(saved.heygem.tunnel.localPort).toBe(6006);
+    expect(saved.heygem.tunnel.remotePort).toBe(6008);
+    // 恢复 cfg，避免影响后续用例
+    cfg.heygem.tunnel.host = "connect.nmb1.seetacloud.com";
+    cfg.heygem.tunnel.port = 28830;
   });
 
   it("instance status returns InstanceView", async () => {

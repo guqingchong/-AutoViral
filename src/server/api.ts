@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { join, extname, basename, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import yaml from "js-yaml";
-import { loadConfig, saveConfig, dataDir, getConfigDir, type AnalyticsSource } from "../config.js";
+import { loadConfig, saveConfig, dataDir, getConfigDir, HEYGEM_TUNNEL_DEFAULTS, type AnalyticsSource } from "../config.js";
 import { getDb } from "../db/connection.js";
 import { exportBackup, importBackup } from "../db/backup.js";
 import { migrateLegacyWorks } from "../db/migrate-legacy.js";
@@ -198,6 +198,8 @@ apiRoutes.get("/api/config", async (c) => {
     heygemApiToken: config.heygem?.apiToken ?? "",
     heygemGpuHourlyRateYuan: config.heygem?.gpuHourlyRateYuan ?? 1.78,
     heygemIdleReminderMinutes: config.heygem?.idleReminderMinutes ?? 15,
+    heygemTunnelHost: config.heygem?.tunnel?.host ?? HEYGEM_TUNNEL_DEFAULTS.host,
+    heygemTunnelPort: config.heygem?.tunnel?.port ?? HEYGEM_TUNNEL_DEFAULTS.port,
     pexelsApiKey: config.pexels?.apiKey ?? "",
     pixabayApiKey: config.pixabay?.apiKey ?? "",
     unsplashAccessKey: config.unsplash?.accessKey ?? "",
@@ -242,12 +244,19 @@ apiRoutes.put("/api/config", async (c) => {
   }
 
   if (body.heygemBaseUrl !== undefined || body.heygemApiToken !== undefined
-    || body.heygemGpuHourlyRateYuan !== undefined || body.heygemIdleReminderMinutes !== undefined) {
+    || body.heygemGpuHourlyRateYuan !== undefined || body.heygemIdleReminderMinutes !== undefined
+    || body.heygemTunnelHost !== undefined || body.heygemTunnelPort !== undefined) {
     if (!config.heygem) config.heygem = { apiToken: "", baseUrl: "", gpuHourlyRateYuan: 1.78, idleReminderMinutes: 15 };
     if (body.heygemBaseUrl !== undefined) config.heygem.baseUrl = body.heygemBaseUrl as string;
     if (body.heygemApiToken !== undefined) config.heygem.apiToken = body.heygemApiToken as string;
     if (body.heygemGpuHourlyRateYuan !== undefined) config.heygem.gpuHourlyRateYuan = Number(body.heygemGpuHourlyRateYuan);
     if (body.heygemIdleReminderMinutes !== undefined) config.heygem.idleReminderMinutes = Number(body.heygemIdleReminderMinutes);
+    if (body.heygemTunnelHost !== undefined || body.heygemTunnelPort !== undefined) {
+      // 其余 tunnel 字段（user/localPort/remotePort）用默认值
+      config.heygem.tunnel = { ...HEYGEM_TUNNEL_DEFAULTS, ...(config.heygem.tunnel ?? {}) };
+      if (body.heygemTunnelHost !== undefined) config.heygem.tunnel.host = body.heygemTunnelHost as string;
+      if (body.heygemTunnelPort !== undefined) config.heygem.tunnel.port = Number(body.heygemTunnelPort);
+    }
   }
   if (body.pexelsApiKey !== undefined) {
     if (!config.pexels) config.pexels = { apiKey: "" };
@@ -2950,7 +2959,9 @@ function jobOutputDir(id: string): string { return join(dataDir, "digital-human-
 apiRoutes.get("/api/digital-humans/config-status", async (c) => {
   const config = await loadConfig();
   return c.json({
-    heygemConfigured: Boolean(config.heygem?.baseUrl && config.heygem?.apiToken),
+    heygemConfigured: Boolean(
+      config.heygem?.baseUrl && config.heygem?.apiToken && config.heygem?.tunnel?.host
+    ),
   });
 });
 
