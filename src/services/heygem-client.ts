@@ -1,0 +1,64 @@
+import { readFile, writeFile } from "node:fs/promises";
+import { basename } from "node:path";
+import { loadConfig } from "../config.js";
+
+export interface HeyGemJobInfo {
+  job_id: string;
+  status: "queued" | "running" | "succeeded" | "failed";
+  processing_time_seconds: number | null;
+  error: string | null;
+}
+
+async function endpoint(): Promise<{ base: string; headers: Record<string, string> }> {
+  const config = await loadConfig();
+  const base = config.autodl?.publicBaseUrl?.replace(/\/$/, "");
+  if (!base) throw new Error("未配置实例公网地址（autodl.publicBaseUrl）");
+  const token = config.heygem?.apiToken;
+  if (!token) throw new Error("未配置 HeyGem API Token（heygem.apiToken）");
+  return { base, headers: { Authorization: `Bearer ${token}` } };
+}
+
+export async function checkHealth(): Promise<boolean> {
+  try {
+    const { base, headers } = await endpoint();
+    const res = await fetch(`${base}/api/health`, { headers, signal: AbortSignal.timeout(8000) });
+    if (!res.ok) return false;
+    const data = (await res.json()) as { status?: string };
+    return data.status === "ok";
+  } catch {
+    return false;
+  }
+}
+
+export async function submitJob(audioPath: string, videoPath: string, mode: "repeat" | "pingpong" = "pingpong"): Promise<string> {
+  const { base, headers } = await endpoint();
+  const form = new FormData();
+  form.append("audio_file", new Blob([await readFile(audioPath)]), basename(audioPath));
+  form.append("video_file", new Blob([await readFile(videoPath)]), basename(videoPath));
+  form.append("short_video_mode", mode);
+  const res = await fetch(`${base}/api/jobs`, { method: "POST", headers, body: form });
+  if (!res.ok) throw new Error(`HeyGem 提交失败: HTTP ${res.status}`);
+  const data = (await res.json()) as { job_id?: string };
+  if (!data.job_id) throw new Error("HeyGem 未返回 job_id");
+  return data.job_id;
+}
+
+export async function getJob(jobId: string): Promise<HeyGemJobInfo> {
+  const { base, headers } = await endpoint();
+  const res = await fetch(`${base}/api/jobs/${encodeURIComponent(jobId)}`, { headers });
+  if (!res.ok) throw new Error(`HeyGem 查询失败: HTTP ${res.status}`);
+  const data = (await res.json()) as HeyGemJobInfo;
+  return {
+    job_id: data.job_id,
+    status: data.status,
+    processing_time_seconds: data.processing_time_seconds ?? null,
+    error: data.error ?? null,
+  };
+}
+
+export async function downloadResult(jobId: string, destPath: string): Promise<void> {
+  const { base, headers } = await endpoint();
+  const res = await fetch(`${base}/api/jobs/${encodeURIComponent(jobId)}/result`, { headers });
+  if (!res.ok) throw new Error(`HeyGem 下载失败: HTTP ${res.status}`);
+  await writeFile(destPath, Buffer.from(await res.arrayBuffer()));
+}
