@@ -142,7 +142,7 @@ async function finalizeJob(job: DbDigitalHumanJob, processingSeconds: number | n
   await mkdir(jobOutputDir(job.id), { recursive: true });
   const dest = jobOutputPath(job.id);
   await heygem.downloadResult(job.provider_job_id!, dest);
-  const rate = getConfig().autodl?.gpuHourlyRateYuan ?? 0;
+  const rate = getConfig().heygem?.gpuHourlyRateYuan ?? 0;
   const actualCost = processingSeconds !== null
     ? Math.round(((processingSeconds * rate) / 3600) * 10000) / 10000
     : job.estimated_cost;

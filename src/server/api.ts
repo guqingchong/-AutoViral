@@ -35,7 +35,7 @@ import {
   regenerateJob,
   isValidAvatarId,
 } from "../services/digital-human.js";
-import { getInstanceView, powerOn, powerOff } from "../services/instance-service.js";
+import { getInstanceView } from "../services/instance-service.js";
 import {
   uploadAsset as uploadLibraryAsset,
   listAssets as listLibraryAssets,
@@ -194,12 +194,10 @@ apiRoutes.get("/api/config", async (c) => {
     researchEnabled: config.research?.enabled ?? false,
     researchCron: config.research?.schedule ?? "0 9 * * *",
     memorySyncEnabled: config.memory?.syncEnabled ?? false,
-    autodlToken: config.autodl?.token ?? "",
-    autodlInstanceUuid: config.autodl?.instanceUuid ?? "",
-    autodlPublicBaseUrl: config.autodl?.publicBaseUrl ?? "",
-    autodlGpuHourlyRateYuan: config.autodl?.gpuHourlyRateYuan ?? 2.18,
-    autodlIdleShutdownMinutes: config.autodl?.idleShutdownMinutes ?? 15,
+    heygemBaseUrl: config.heygem?.baseUrl ?? "",
     heygemApiToken: config.heygem?.apiToken ?? "",
+    heygemGpuHourlyRateYuan: config.heygem?.gpuHourlyRateYuan ?? 1.78,
+    heygemIdleReminderMinutes: config.heygem?.idleReminderMinutes ?? 15,
     pexelsApiKey: config.pexels?.apiKey ?? "",
     pixabayApiKey: config.pixabay?.apiKey ?? "",
     unsplashAccessKey: config.unsplash?.accessKey ?? "",
@@ -243,17 +241,13 @@ apiRoutes.put("/api/config", async (c) => {
     config.memory.syncEnabled = body.memorySyncEnabled as boolean;
   }
 
-  if (body.autodlToken !== undefined || body.autodlInstanceUuid !== undefined || body.autodlPublicBaseUrl !== undefined
-    || body.autodlGpuHourlyRateYuan !== undefined || body.autodlIdleShutdownMinutes !== undefined) {
-    if (!config.autodl) config.autodl = { token: "", instanceUuid: "", publicBaseUrl: "", gpuHourlyRateYuan: 2.18, idleShutdownMinutes: 15 };
-    if (body.autodlToken !== undefined) config.autodl.token = body.autodlToken as string;
-    if (body.autodlInstanceUuid !== undefined) config.autodl.instanceUuid = body.autodlInstanceUuid as string;
-    if (body.autodlPublicBaseUrl !== undefined) config.autodl.publicBaseUrl = body.autodlPublicBaseUrl as string;
-    if (body.autodlGpuHourlyRateYuan !== undefined) config.autodl.gpuHourlyRateYuan = Number(body.autodlGpuHourlyRateYuan);
-    if (body.autodlIdleShutdownMinutes !== undefined) config.autodl.idleShutdownMinutes = Number(body.autodlIdleShutdownMinutes);
-  }
-  if (body.heygemApiToken !== undefined) {
-    config.heygem = { apiToken: body.heygemApiToken as string };
+  if (body.heygemBaseUrl !== undefined || body.heygemApiToken !== undefined
+    || body.heygemGpuHourlyRateYuan !== undefined || body.heygemIdleReminderMinutes !== undefined) {
+    if (!config.heygem) config.heygem = { apiToken: "", baseUrl: "", gpuHourlyRateYuan: 1.78, idleReminderMinutes: 15 };
+    if (body.heygemBaseUrl !== undefined) config.heygem.baseUrl = body.heygemBaseUrl as string;
+    if (body.heygemApiToken !== undefined) config.heygem.apiToken = body.heygemApiToken as string;
+    if (body.heygemGpuHourlyRateYuan !== undefined) config.heygem.gpuHourlyRateYuan = Number(body.heygemGpuHourlyRateYuan);
+    if (body.heygemIdleReminderMinutes !== undefined) config.heygem.idleReminderMinutes = Number(body.heygemIdleReminderMinutes);
   }
   if (body.pexelsApiKey !== undefined) {
     if (!config.pexels) config.pexels = { apiKey: "" };
@@ -276,8 +270,8 @@ apiRoutes.put("/api/config", async (c) => {
     pixabayApiKey: (config.pixabay?.apiKey ?? "").length,
     unsplashAccessKey: (config.unsplash?.accessKey ?? "").length,
     minimaxKey: (config.minimax?.apiKey ?? "").length,
-    autodlToken: (config.autodl?.token ?? "").length,
     heygemApiToken: (config.heygem?.apiToken ?? "").length,
+    heygemBaseUrl: (config.heygem?.baseUrl ?? "").length,
   });
   return c.json(config);
 });
@@ -2952,36 +2946,17 @@ apiRoutes.get("/api/trends/collect/status/:jobId", async (c) => {
 function avatarDir(id: string): string { return join(dataDir, "avatars", id); }
 function jobOutputDir(id: string): string { return join(dataDir, "digital-human-jobs", id); }
 
-// GET /api/digital-humans/config-status - check autodl/heygem credential status
+// GET /api/digital-humans/config-status - check heygem credential status
 apiRoutes.get("/api/digital-humans/config-status", async (c) => {
   const config = await loadConfig();
   return c.json({
-    autodlConfigured: Boolean(config.autodl?.token && config.autodl?.instanceUuid && config.autodl?.publicBaseUrl),
-    heygemConfigured: Boolean(config.heygem?.apiToken),
+    heygemConfigured: Boolean(config.heygem?.baseUrl && config.heygem?.apiToken),
   });
 });
 
 // GET /api/digital-humans/instance/status - current GPU instance view
 apiRoutes.get("/api/digital-humans/instance/status", async (c) => {
   return c.json(await getInstanceView());
-});
-
-// POST /api/digital-humans/instance/power-on
-apiRoutes.post("/api/digital-humans/instance/power-on", async (c) => {
-  try {
-    return c.json(await powerOn());
-  } catch (err) {
-    return c.json({ error: (err as Error).message }, 500);
-  }
-});
-
-// POST /api/digital-humans/instance/power-off - 409 when jobs are still running
-apiRoutes.post("/api/digital-humans/instance/power-off", async (c) => {
-  try {
-    return c.json(await powerOff());
-  } catch (err) {
-    return c.json({ error: (err as Error).message }, 409);
-  }
 });
 
 apiRoutes.get("/api/digital-humans/avatars", async (c) => {

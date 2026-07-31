@@ -16,8 +16,7 @@ const cfg = {
   jimeng: { accessKey: "", secretKey: "" },
   research: { enabled: false, schedule: "", platforms: [] },
   budget: { monthlyLimitYuan: 2500, dailyLimitYuan: 200, warningThresholdPercent: 80 },
-  autodl: { token: "t", instanceUuid: "u", publicBaseUrl: "https://u", gpuHourlyRateYuan: 2.18, idleShutdownMinutes: 15 },
-  heygem: { apiToken: "s" },
+  heygem: { apiToken: "s", baseUrl: "https://u", gpuHourlyRateYuan: 2.18, idleReminderMinutes: 15 },
 } as any;
 
 describe("digital-human heygem", () => {

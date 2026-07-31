@@ -5,7 +5,7 @@ vi.mock("../../src/services/heygem-client.js", () => ({
 }));
 vi.mock("../../src/services/instance-service.js", () => ({
   assertReady: vi.fn(), recordActivity: vi.fn(),
-  getInstanceView: vi.fn(), powerOn: vi.fn(), powerOff: vi.fn(),
+  getInstanceView: vi.fn(),
 }));
 
 import { mkdtemp, writeFile, rm, access } from "node:fs/promises";
@@ -17,8 +17,7 @@ const cfg = {
   jimeng: { accessKey: "", secretKey: "" },
   research: { enabled: false, schedule: "", platforms: [] },
   budget: { monthlyLimitYuan: 2500, dailyLimitYuan: 200, warningThresholdPercent: 80 },
-  autodl: { token: "t", instanceUuid: "u", publicBaseUrl: "https://u", gpuHourlyRateYuan: 2.18, idleShutdownMinutes: 15 },
-  heygem: { apiToken: "s" },
+  heygem: { apiToken: "s", baseUrl: "https://u", gpuHourlyRateYuan: 2.18, idleReminderMinutes: 15 },
 } as any;
 
 describe("digital-human API (heygem)", () => {
@@ -107,40 +106,31 @@ describe("digital-human API (heygem)", () => {
     expect(res.status).toBe(400);
   });
 
-  it("config-status reports autodl/heygem booleans", async () => {
+  it("config-status reports heygemConfigured boolean", async () => {
     const res = await apiRoutes.request("/api/digital-humans/config-status");
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ autodlConfigured: true, heygemConfigured: true });
+    expect(await res.json()).toEqual({ heygemConfigured: true });
 
-    vi.spyOn(configModule, "loadConfig").mockResolvedValue({ ...cfg, autodl: undefined, heygem: undefined });
+    vi.spyOn(configModule, "loadConfig").mockResolvedValue({ ...cfg, heygem: undefined });
     const res2 = await apiRoutes.request("/api/digital-humans/config-status");
-    expect(await res2.json()).toEqual({ autodlConfigured: false, heygemConfigured: false });
+    expect(await res2.json()).toEqual({ heygemConfigured: false });
+
+    // baseUrl 缺失也视为未配置
+    vi.spyOn(configModule, "loadConfig").mockResolvedValue({ ...cfg, heygem: { ...cfg.heygem, baseUrl: "" } });
+    const res3 = await apiRoutes.request("/api/digital-humans/config-status");
+    expect(await res3.json()).toEqual({ heygemConfigured: false });
   });
 
   it("instance status returns InstanceView", async () => {
-    instance.getInstanceView.mockResolvedValue({ state: "ready", gpuHourlyRateYuan: 2.18, idleShutdownMinutes: 15, lastActivityAt: null, error: null });
+    instance.getInstanceView.mockResolvedValue({ state: "ready", gpuHourlyRateYuan: 2.18, idleReminderMinutes: 15, lastActivityAt: null, idleMinutes: 0, consoleUrl: "https://www.autodl.com/console" });
     const res = await apiRoutes.request("/api/digital-humans/instance/status");
     expect(res.status).toBe(200);
     expect((await res.json()).state).toBe("ready");
   });
 
-  it("power-on returns InstanceView; failure returns 500", async () => {
-    instance.powerOn.mockResolvedValue({ state: "ready", gpuHourlyRateYuan: 2.18, idleShutdownMinutes: 15, lastActivityAt: null, error: null });
-    const res = await apiRoutes.request("/api/digital-humans/instance/power-on", { method: "POST" });
-    expect(res.status).toBe(200);
-    expect((await res.json()).state).toBe("ready");
-  });
-
-  it("power-off with active jobs returns 409", async () => {
-    instance.powerOff.mockRejectedValue(new Error("有 2 个任务在进行中，无法关机"));
-    const res = await apiRoutes.request("/api/digital-humans/instance/power-off", { method: "POST" });
-    expect(res.status).toBe(409);
-    expect((await res.json()).error).toContain("无法关机");
-  });
-
   it("submit job returns 409 when instance not ready", async () => {
     const avatar = await makeAvatar();
-    instance.assertReady.mockRejectedValue(new Error("实例未就绪，请先在页面开机"));
+    instance.assertReady.mockRejectedValue(new Error("实例离线，请先到 AutoDL 控制台开机"));
     const res = await apiRoutes.request("/api/digital-humans/jobs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },

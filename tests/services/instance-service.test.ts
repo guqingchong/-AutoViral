@@ -1,10 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
-vi.mock("../../src/services/autodl-client.js", () => ({
-  getInstanceStatus: vi.fn(),
-  powerOnInstance: vi.fn(),
-  powerOffInstance: vi.fn(),
-}));
 vi.mock("../../src/services/heygem-client.js", () => ({
   checkHealth: vi.fn(),
 }));
@@ -16,192 +11,102 @@ vi.mock("../../src/config.js", () => ({
   getConfig: vi.fn(),
 }));
 
-import * as autodl from "../../src/services/autodl-client.js";
 import * as heygem from "../../src/services/heygem-client.js";
-import * as jobsRepo from "../../src/db/digital-human-jobs-repo.js";
 import * as configModule from "../../src/config.js";
 import {
   getInstanceView,
-  powerOn,
-  powerOff,
   recordActivity,
   assertReady,
-  startWatchdog,
-  stopWatchdog,
-  reconcileInstance,
+  startHealthLoop,
+  stopHealthLoop,
   __resetForTests,
 } from "../../src/services/instance-service.js";
 
 const cfg = {
-  autodl: { token: "t", instanceUuid: "u", publicBaseUrl: "https://u", gpuHourlyRateYuan: 2.18, idleShutdownMinutes: 15 },
+  heygem: { apiToken: "t", baseUrl: "https://u", gpuHourlyRateYuan: 1.78, idleReminderMinutes: 15 },
 } as any;
 
-describe("instance-service", () => {
+describe("instance-service (manual control)", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     __resetForTests();
     (configModule.loadConfig as any).mockResolvedValue(cfg);
     (configModule.getConfig as any).mockReturnValue(cfg);
-    (jobsRepo.countActiveJobs as any).mockReturnValue(0);
   });
   afterEach(() => {
-    stopWatchdog();
+    stopHealthLoop();
     vi.useRealTimers();
     vi.clearAllMocks();
   });
 
-  it("powerOn success: calls autodl then polls health until ready", async () => {
-    (autodl.powerOnInstance as any).mockResolvedValue(undefined);
+  it("healthy instance -> ready with config and consoleUrl", async () => {
     (heygem.checkHealth as any).mockResolvedValue(true);
-    const view = await powerOn();
-    expect(autodl.powerOnInstance).toHaveBeenCalledOnce();
-    expect(view.state).toBe("ready");
-  });
-
-  it("powerOn failure: health never ok -> failed with error", async () => {
-    (autodl.powerOnInstance as any).mockResolvedValue(undefined);
-    (heygem.checkHealth as any).mockResolvedValue(false);
-    const p = powerOn();
-    await vi.advanceTimersByTimeAsync(310_000);
-    const view = await p;
-    expect(view.state).toBe("failed");
-    expect(view.error).toContain("健康检查");
-  }, 15000);
-
-  it("powerOff rejected when jobs active", async () => {
-    (jobsRepo.countActiveJobs as any).mockReturnValue(2);
-    await expect(powerOff()).rejects.toThrow("任务");
-    expect(autodl.powerOffInstance).not.toHaveBeenCalled();
-  });
-
-  it("powerOff failure: rolls back to ready, records error, rethrows", async () => {
-    (autodl.powerOnInstance as any).mockResolvedValue(undefined);
-    (heygem.checkHealth as any).mockResolvedValue(true);
-    await powerOn();
-    (autodl.powerOffInstance as any).mockRejectedValue(new Error("AutoDL API 错误"));
-    await expect(powerOff()).rejects.toThrow("AutoDL API 错误");
     const view = await getInstanceView();
     expect(view.state).toBe("ready");
-    expect(view.error).toContain("AutoDL API 错误");
+    expect(view.gpuHourlyRateYuan).toBe(1.78);
+    expect(view.idleReminderMinutes).toBe(15);
+    expect(view.consoleUrl).toContain("autodl.com");
+    expect(view.lastActivityAt).toBeNull();
+    expect(view.idleMinutes).toBe(0);
   });
 
-  it("watchdog auto powers off after idle timeout", async () => {
-    (autodl.powerOnInstance as any).mockResolvedValue(undefined);
-    (heygem.checkHealth as any).mockResolvedValue(true);
-    await powerOn();
-    startWatchdog();
-    await vi.advanceTimersByTimeAsync(16 * 60_000);
-    expect(autodl.powerOffInstance).toHaveBeenCalled();
+  it("unhealthy instance -> offline", async () => {
+    (heygem.checkHealth as any).mockResolvedValue(false);
+    const view = await getInstanceView();
+    expect(view.state).toBe("offline");
   });
 
-  it("watchdog does not power off with active jobs", async () => {
-    (autodl.powerOnInstance as any).mockResolvedValue(undefined);
-    (heygem.checkHealth as any).mockResolvedValue(true);
-    (jobsRepo.countActiveJobs as any).mockReturnValue(1);
-    await powerOn();
-    startWatchdog();
-    await vi.advanceTimersByTimeAsync(16 * 60_000);
-    expect(autodl.powerOffInstance).not.toHaveBeenCalled();
-  });
-
-  it("assertReady throws when not ready", async () => {
+  it("assertReady throws when offline, passes when ready", async () => {
+    (heygem.checkHealth as any).mockResolvedValue(false);
+    await getInstanceView();
     await expect(assertReady()).rejects.toThrow("开机");
+
+    (heygem.checkHealth as any).mockResolvedValue(true);
+    await getInstanceView();
+    await expect(assertReady()).resolves.toBeUndefined();
   });
 
-  it("getInstanceView reflects config and activity", async () => {
-    (autodl.powerOnInstance as any).mockResolvedValue(undefined);
+  it("idleMinutes counts from lastActivity; 0 when no activity", async () => {
     (heygem.checkHealth as any).mockResolvedValue(true);
     const before = await getInstanceView();
-    expect(before.state).toBe("stopped");
-    expect(before.lastActivityAt).toBeNull();
-    expect(before.gpuHourlyRateYuan).toBe(2.18);
-    expect(before.idleShutdownMinutes).toBe(15);
-    await powerOn();
+    expect(before.idleMinutes).toBe(0);
+
+    recordActivity();
+    await vi.advanceTimersByTimeAsync(10 * 60_000 + 500);
     const after = await getInstanceView();
-    expect(after.state).toBe("ready");
+    expect(after.idleMinutes).toBe(10);
     expect(after.lastActivityAt).not.toBeNull();
   });
 
-  it("recordActivity updates lastActivityAt", async () => {
+  it("recordActivity resets idle minutes to 0", async () => {
+    (heygem.checkHealth as any).mockResolvedValue(true);
+    recordActivity();
+    await vi.advanceTimersByTimeAsync(20 * 60_000);
     recordActivity();
     const view = await getInstanceView();
-    expect(view.lastActivityAt).not.toBeNull();
+    expect(view.idleMinutes).toBe(0);
   });
 
-  it("powerOn success sets readySince; powerOff clears it", async () => {
-    (autodl.powerOnInstance as any).mockResolvedValue(undefined);
+  it("startHealthLoop probes immediately and every 30 seconds", async () => {
     (heygem.checkHealth as any).mockResolvedValue(true);
-    const view = await powerOn();
+    startHealthLoop();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(heygem.checkHealth).toHaveBeenCalledTimes(1);
+    const view = await getInstanceView();
     expect(view.state).toBe("ready");
-    expect(view.readySince).not.toBeNull();
 
-    (autodl.powerOffInstance as any).mockResolvedValue(undefined);
-    const off = await powerOff();
-    expect(off.state).toBe("stopped");
-    expect(off.readySince).toBeNull();
+    await vi.advanceTimersByTimeAsync(60_000);
+    // 2 次循环探测 + getInstanceView 的实时探测
+    expect((heygem.checkHealth as any).mock.calls.length).toBeGreaterThanOrEqual(3);
   });
 
-  it("reconcileInstance: running + healthy -> ready with activity recorded", async () => {
-    (autodl.getInstanceStatus as any).mockResolvedValue("running");
+  it("health loop drives state offline when instance goes down", async () => {
     (heygem.checkHealth as any).mockResolvedValue(true);
-    await reconcileInstance();
-    const view = await getInstanceView();
-    expect(view.state).toBe("ready");
-    expect(view.readySince).not.toBeNull();
-    expect(view.lastActivityAt).not.toBeNull();
-
-    // 对账恢复 ready 后看门狗恢复计时：空闲超时自动关机
-    (autodl.powerOffInstance as any).mockResolvedValue(undefined);
-    startWatchdog();
-    await vi.advanceTimersByTimeAsync(16 * 60_000);
-    expect(autodl.powerOffInstance).toHaveBeenCalled();
-  });
-
-  it("reconcileInstance: shutdown -> stopped", async () => {
-    (autodl.getInstanceStatus as any).mockResolvedValue("shutdown");
-    await reconcileInstance();
-    const view = await getInstanceView();
-    expect(view.state).toBe("stopped");
-    expect(view.readySince).toBeNull();
-  });
-
-  it("reconcileInstance: running + initially unhealthy polls until ready (no starting lock-up)", async () => {
-    (autodl.getInstanceStatus as any).mockResolvedValue("running");
-    (heygem.checkHealth as any)
-      .mockResolvedValueOnce(false) // 首次直接检查
-      .mockResolvedValueOnce(false) // 轮询第 1 次
-      .mockResolvedValue(true);     // 轮询第 2 次起健康
-    const p = reconcileInstance();
-    await vi.advanceTimersByTimeAsync(30_000);
-    await p;
-    const view = await getInstanceView();
-    expect(view.state).toBe("ready");
-    expect(view.readySince).not.toBeNull();
-    expect(view.lastActivityAt).not.toBeNull();
-  });
-
-  it("reconcileInstance: running + persistently unhealthy -> failed with error (escapes starting)", async () => {
-    (autodl.getInstanceStatus as any).mockResolvedValue("running");
+    startHealthLoop();
+    await vi.advanceTimersByTimeAsync(0);
     (heygem.checkHealth as any).mockResolvedValue(false);
-    const p = reconcileInstance();
-    await vi.advanceTimersByTimeAsync(310_000);
-    await p;
+    await vi.advanceTimersByTimeAsync(30_000);
     const view = await getInstanceView();
-    expect(view.state).toBe("failed");
-    expect(view.error).toContain("健康检查");
-    // failed 状态下用户可走 powerOn/powerOff 路径
-    (autodl.powerOffInstance as any).mockResolvedValue(undefined);
-    const off = await powerOff();
-    expect(off.state).toBe("stopped");
-  }, 15000);
-
-  it("reconcileInstance: network failure keeps stopped and records error without throwing", async () => {
-    (autodl.getInstanceStatus as any).mockRejectedValue(new Error("AutoDL API 错误: timeout"));
-    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    await expect(reconcileInstance()).resolves.toBeUndefined();
-    const view = await getInstanceView();
-    expect(view.state).toBe("stopped");
-    expect(view.error).toContain("timeout");
-    errSpy.mockRestore();
+    expect(view.state).toBe("offline");
   });
 });

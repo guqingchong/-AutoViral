@@ -9,8 +9,7 @@ const baseConfig = {
   port: 3271, model: "sonnet",
   jimeng: { accessKey: "", secretKey: "" },
   research: { enabled: false, schedule: "", platforms: [] },
-  autodl: { token: "t", instanceUuid: "u", publicBaseUrl: "https://u.autodl.com", gpuHourlyRateYuan: 2.18, idleShutdownMinutes: 15 },
-  heygem: { apiToken: "secret" },
+  heygem: { apiToken: "secret", baseUrl: "https://u.autodl.com", gpuHourlyRateYuan: 1.78, idleReminderMinutes: 15 },
 } as any;
 
 function mockJson(body: unknown) {
