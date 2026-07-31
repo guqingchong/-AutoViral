@@ -9,7 +9,7 @@ function makeAvatar(overrides: Partial<import("../../src/db/types.js").DbAvatar>
     name: "Test Avatar",
     status: "ready",
     source: "heygem",
-    provider_avatar_id: "cj_123",
+    provider_avatar_id: "hg_123",
     config: { pitch: 1 },
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
