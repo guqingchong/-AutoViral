@@ -57,6 +57,20 @@ describe("heygem-client", () => {
     expect(job.processing_time_seconds).toBeCloseTo(94.2);
   });
 
+  it("getJob passes an AbortSignal to fetch", async () => {
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(mockJson({
+      job_id: "j-1", status: "running", processing_time_seconds: null, error: null,
+    }));
+    await getJob("j-1");
+    const [, init] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("getJob throws semantic error on timeout", async () => {
+    (fetch as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new DOMException("The operation timed out.", "TimeoutError"));
+    await expect(getJob("j-1")).rejects.toThrow("HeyGem 查询超时");
+  });
+
   it("downloadResult writes file", async () => {
     const dir = await mkdtemp(join(tmpdir(), "av-hg-"));
     const dest = join(dir, "out.mp4");

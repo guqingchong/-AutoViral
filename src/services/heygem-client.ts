@@ -30,13 +30,24 @@ export async function checkHealth(): Promise<boolean> {
   }
 }
 
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number, timeoutMessage: string): Promise<Response> {
+  try {
+    return await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+  } catch (err) {
+    if (err instanceof DOMException && (err.name === "TimeoutError" || err.name === "AbortError")) {
+      throw new Error(timeoutMessage);
+    }
+    throw err;
+  }
+}
+
 export async function submitJob(audioPath: string, videoPath: string, mode: "repeat" | "pingpong" = "pingpong"): Promise<string> {
   const { base, headers } = await endpoint();
   const form = new FormData();
   form.append("audio_file", new Blob([await readFile(audioPath)]), basename(audioPath));
   form.append("video_file", new Blob([await readFile(videoPath)]), basename(videoPath));
   form.append("short_video_mode", mode);
-  const res = await fetch(`${base}/api/jobs`, { method: "POST", headers, body: form });
+  const res = await fetchWithTimeout(`${base}/api/jobs`, { method: "POST", headers, body: form }, 120000, "HeyGem 提交超时");
   if (!res.ok) throw new Error(`HeyGem 提交失败: HTTP ${res.status}`);
   const data = (await res.json()) as { job_id?: string };
   if (!data.job_id) throw new Error("HeyGem 未返回 job_id");
@@ -45,7 +56,7 @@ export async function submitJob(audioPath: string, videoPath: string, mode: "rep
 
 export async function getJob(jobId: string): Promise<HeyGemJobInfo> {
   const { base, headers } = await endpoint();
-  const res = await fetch(`${base}/api/jobs/${encodeURIComponent(jobId)}`, { headers });
+  const res = await fetchWithTimeout(`${base}/api/jobs/${encodeURIComponent(jobId)}`, { headers }, 15000, "HeyGem 查询超时");
   if (!res.ok) throw new Error(`HeyGem 查询失败: HTTP ${res.status}`);
   const data = (await res.json()) as HeyGemJobInfo;
   return {
@@ -58,7 +69,7 @@ export async function getJob(jobId: string): Promise<HeyGemJobInfo> {
 
 export async function downloadResult(jobId: string, destPath: string): Promise<void> {
   const { base, headers } = await endpoint();
-  const res = await fetch(`${base}/api/jobs/${encodeURIComponent(jobId)}/result`, { headers });
+  const res = await fetchWithTimeout(`${base}/api/jobs/${encodeURIComponent(jobId)}/result`, { headers }, 300000, "HeyGem 下载超时");
   if (!res.ok) throw new Error(`HeyGem 下载失败: HTTP ${res.status}`);
   await writeFile(destPath, Buffer.from(await res.arrayBuffer()));
 }
