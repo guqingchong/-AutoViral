@@ -165,6 +165,36 @@ describe("instance-service", () => {
     expect(view.readySince).toBeNull();
   });
 
+  it("reconcileInstance: running + initially unhealthy polls until ready (no starting lock-up)", async () => {
+    (autodl.getInstanceStatus as any).mockResolvedValue("running");
+    (heygem.checkHealth as any)
+      .mockResolvedValueOnce(false) // 首次直接检查
+      .mockResolvedValueOnce(false) // 轮询第 1 次
+      .mockResolvedValue(true);     // 轮询第 2 次起健康
+    const p = reconcileInstance();
+    await vi.advanceTimersByTimeAsync(30_000);
+    await p;
+    const view = await getInstanceView();
+    expect(view.state).toBe("ready");
+    expect(view.readySince).not.toBeNull();
+    expect(view.lastActivityAt).not.toBeNull();
+  });
+
+  it("reconcileInstance: running + persistently unhealthy -> failed with error (escapes starting)", async () => {
+    (autodl.getInstanceStatus as any).mockResolvedValue("running");
+    (heygem.checkHealth as any).mockResolvedValue(false);
+    const p = reconcileInstance();
+    await vi.advanceTimersByTimeAsync(310_000);
+    await p;
+    const view = await getInstanceView();
+    expect(view.state).toBe("failed");
+    expect(view.error).toContain("健康检查");
+    // failed 状态下用户可走 powerOn/powerOff 路径
+    (autodl.powerOffInstance as any).mockResolvedValue(undefined);
+    const off = await powerOff();
+    expect(off.state).toBe("stopped");
+  }, 15000);
+
   it("reconcileInstance: network failure keeps stopped and records error without throwing", async () => {
     (autodl.getInstanceStatus as any).mockRejectedValue(new Error("AutoDL API 错误: timeout"));
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});

@@ -29,6 +29,25 @@ export function recordActivity(): void {
   lastActivity = Date.now();
 }
 
+/**
+ * 有界健康轮询（powerOn 与 reconcile 共用）：健康则转 ready（记录 readySince + activity），
+ * 超时转 failed，保证状态机始终有出口、不会锁死在 starting
+ */
+async function pollHealthUntilReady(timeoutError: string): Promise<boolean> {
+  for (let attempt = 0; attempt < HEALTH_POLL_MAX_ATTEMPTS; attempt++) {
+    if (await checkHealth()) {
+      state = "ready";
+      readySince = Date.now();
+      recordActivity();
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, HEALTH_POLL_INTERVAL_MS));
+  }
+  state = "failed";
+  lastError = timeoutError;
+  return false;
+}
+
 export async function getInstanceView(): Promise<InstanceView> {
   const autodl = getConfig().autodl;
   return {
@@ -49,17 +68,7 @@ export async function powerOn(): Promise<InstanceView> {
   lastError = null;
   try {
     await powerOnInstance();
-    for (let attempt = 0; attempt < HEALTH_POLL_MAX_ATTEMPTS; attempt++) {
-      if (await checkHealth()) {
-        state = "ready";
-        readySince = Date.now();
-        recordActivity();
-        return getInstanceView();
-      }
-      await new Promise((resolve) => setTimeout(resolve, HEALTH_POLL_INTERVAL_MS));
-    }
-    state = "failed";
-    lastError = "开机后健康检查未通过（5分钟）";
+    await pollHealthUntilReady("开机后健康检查未通过（5分钟）");
   } catch (err) {
     state = "failed";
     lastError = err instanceof Error ? err.message : String(err);
@@ -101,9 +110,11 @@ export async function reconcileInstance(): Promise<void> {
         recordActivity();
         lastError = null;
       } else {
-        // 实例在跑但 HeyGem 尚未就绪：按启动中处理，不触发看门狗
+        // 实例在跑但 HeyGem 尚未就绪（启动需数分钟）：有界健康重试，
+        // 健康则转 ready，超时转 failed，避免锁死 starting 导致看门狗永久失效
         state = "starting";
         readySince = null;
+        await pollHealthUntilReady("实例在运行但 HeyGem 健康检查未通过（5分钟）");
       }
     } else if (status === "shutdown") {
       state = "stopped";
