@@ -1286,6 +1286,9 @@ async function startWorkSession(id: string, extraInstruction?: string): Promise<
     hasTemplate ? `使用模板: ${work.templateId}` : "",
     hasDigitalHuman ? `使用数字人: ${work.digitalHumanId}` : "",
     toneInjection,
+    // 打回重做的审核意见随会话启动注入（打回 → 会话死亡 → 重建的场景下
+    // 意见不丢失，agent 始终知道要改什么 —— 2026-07-21）
+    work.reviewComment ? `最近审核打回意见（必须遵守并据此修改）: ${work.reviewComment}` : "",
     extraInstruction ?? "",
     ``,
     `当前步骤: "${stepName}"（key: ${currentStepKey}）。流水线阶段顺序: ${stepKeys.join(" → ")}。`,
@@ -2252,7 +2255,11 @@ apiRoutes.post("/api/works/:id/pipeline/advance", async (c) => {
 
     // 流水线推进时同步 works.status（此前只写 pipeline_steps，导致卡片状态标签
     // 与进度条长期脱节 —— 2026-07-21 Bug2 根因）。派生是只前进、不覆盖终态的。
-    await storeUpdateWork(id, { pipeline: work.pipeline, status: deriveStatusFromPipeline(work.pipeline, work.status) });
+    const derivedStatus = deriveStatusFromPipeline(work.pipeline, work.status);
+    // 打回重做闭环：流水线再次全部完成（回 reviewing）时清除审核意见，
+    // 避免下次会话启动重复注入已处理的旧意见
+    const clearReview = derivedStatus === "reviewing" && work.reviewComment ? { reviewComment: "" } : {};
+    await storeUpdateWork(id, { pipeline: work.pipeline, status: derivedStatus, ...clearReview });
 
     // Memory sync (keep existing logic)
     if (completedStep) {

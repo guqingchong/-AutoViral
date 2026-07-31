@@ -685,6 +685,9 @@ ${memoryContext}
     // Accumulate assistant text chunks for this turn
     let turnText = "";
     let lastEventWasToolResult = false;
+    // stderr 尾部累积：resume 失败等 CLI 致命错误的真实原因只出现在 stderr，
+    // 此前只广播给浏览器、不进日志，导致"会话静默死亡"无法诊断（2026-07-21）
+    let stderrTail = "";
 
     // Parse NDJSON from stdout
     let buffer = "";
@@ -920,6 +923,7 @@ ${memoryContext}
     proc.stderr?.on("data", (data: Buffer) => {
       const text = data.toString();
       if (text.trim()) {
+        stderrTail = (stderrTail + text).slice(-800);
         this.broadcastToBrowsers(session.workId, {
           event: "cli_stderr",
           data: { text },
@@ -928,7 +932,7 @@ ${memoryContext}
     });
 
     proc.on("exit", (code, signal) => {
-      logBridge("cli_exit", session.workId, { code, signal, turnTextLen: turnText.length });
+      logBridge("cli_exit", session.workId, { code, signal, turnTextLen: turnText.length, stderrTail: stderrTail.slice(-300) });
 
       // If CLI exits with code 1 and produced no output, the resume session is likely stale
       // (e.g. computer restarted while session file still marks it as "busy"). Clear it so
@@ -936,6 +940,9 @@ ${memoryContext}
       if (code === 1 && turnText.length === 0 && session.cliSessionId) {
         logBridge("cli_stale_session_cleared", session.workId, { cliSessionId: session.cliSessionId });
         session.cliSessionId = undefined;
+        // 同步清 SQLite（此前只清了 legacy work.yaml，而 createSession 读的是
+        // works.cli_session_id —— stale ID 残留导致每次重建都 resume 失败、死循环）
+        updateWork(session.workId, { cliSessionId: "" }).catch(() => {});
         // yaml.dump ignores undefined values, so we must delete the field directly from work.yaml
         const workPath = join(dataDir, "works", session.workId, "work.yaml");
         readFile(workPath, "utf-8")
@@ -947,6 +954,29 @@ ${memoryContext}
             }
           })
           .catch(() => {});
+
+        // 关键：自动以全新会话重试（不 resume）。此前清理后不重试，打回重做/
+        // 会话重建等场景下 agent 从未真正启动，作品永久卡在当前阶段。
+        // 限 1 次防循环：若 CLI 本身故障（非 stale），新会话退出时无
+        // cliSessionId 可清则不再重试。
+        const retried = (session as WsSession & { staleRetried?: boolean }).staleRetried;
+        if (!retried && !session.workId.startsWith("trends_")) {
+          (session as WsSession & { staleRetried?: boolean }).staleRetried = true;
+          logBridge("cli_stale_retry_fresh", session.workId, {});
+          session.cliProcess = undefined;
+          (async () => {
+            try {
+              const work = await getWork(session.workId);
+              const freshPrompt = work
+                ? (await this.buildSystemPrompt(work)) + "\n\n---\n\n用户消息：" + prompt
+                : prompt;
+              this.spawnCli(session, freshPrompt);
+            } catch {
+              this.spawnCli(session, prompt);
+            }
+          })();
+          return; // 新进程已接管 session.cliProcess，不走下方退出收尾
+        }
       }
 
       session.cliProcess = undefined;
