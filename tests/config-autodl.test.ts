@@ -38,4 +38,18 @@ describe("config autodl/heygem", () => {
     expect(d.chanjing).toBeUndefined();
     expect(d.bailian).toBeUndefined();
   });
+
+  it("loadConfig strips legacy chanjing/bailian keys from config.yaml", async () => {
+    const { writeFile } = await import("node:fs/promises");
+    const { join: pjoin } = await import("node:path");
+    await writeFile(
+      pjoin(dir, "config.yaml"),
+      "chanjing:\n  appId: old\n  secretKey: old\nbailian:\n  apiKey: old\ninterests: []\n",
+      "utf-8",
+    );
+    const { loadConfig } = await import("../src/config.js");
+    const config = (await loadConfig()) as unknown as Record<string, unknown>;
+    expect(config.chanjing).toBeUndefined();
+    expect(config.bailian).toBeUndefined();
+  });
 });

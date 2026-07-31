@@ -102,6 +102,10 @@ export async function loadConfig(): Promise<Config> {
   try {
     const raw = await readFile(CONFIG_PATH, "utf-8");
     const parsed = yaml.load(raw) as Partial<Config> | null;
+    if (parsed && typeof parsed === "object") {
+      delete (parsed as Record<string, unknown>).chanjing;
+      delete (parsed as Record<string, unknown>).bailian;
+    }
     const config: Config = { ...getDefaultConfig(), ...parsed };
     config.interests = config.interests ?? [];
     config.analytics = config.analytics ?? getDefaultConfig().analytics;
