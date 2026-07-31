@@ -12,6 +12,7 @@
   let avatars = $state<Avatar[]>([]);
   let jobs = $state<DigitalHumanJob[]>([]);
   let instance = $state<InstanceView | null>(null);
+  let nowTs = $state(Date.now());
   let uploadName = $state("");
   let uploadFiles = $state<FileList | null>(null);
   let audioUrl = $state("");
@@ -24,11 +25,19 @@
     const unsub = subscribe(() => { lang = getLanguage(); });
     load();
     loadInstance();
-    const timer = setInterval(loadInstance, 10000);
+    const timer = setInterval(() => { nowTs = Date.now(); loadInstance(); }, 10000);
     return () => { unsub(); clearInterval(timer); };
   });
 
   function tt(key: string): string { void lang; return t(key); }
+
+  // 本次已运行时长（如"已运行 42 分钟"），随定时器刷新显示
+  function runningDuration(): string | null {
+    void nowTs;
+    if (instance?.state !== "ready" || !instance.readySince) return null;
+    const mins = Math.max(0, Math.floor((Date.now() - new Date(instance.readySince).getTime()) / 60000));
+    return `${tt("runningFor")} ${mins} ${tt("minuteUnit")}`;
+  }
 
   async function load() {
     const [a, j] = await Promise.all([fetchAvatars(), fetchDigitalHumanJobs()]);
@@ -173,6 +182,9 @@
         <span class="state-dot state-{instance.state}"></span>
         <span class="state-label">{instanceStateLabel(instance.state)}</span>
         <span class="meta">GPU ¥{instance.gpuHourlyRateYuan}{tt("perHour")}</span>
+        {#if runningDuration()}
+          <span class="meta">{runningDuration()}</span>
+        {/if}
       {/if}
       <span class="spacer"></span>
       {#if instance?.state === "ready" || instance?.state === "stopping" || instance?.state === "failed"}
