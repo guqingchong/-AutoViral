@@ -1,9 +1,17 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { getDb, resetInMemoryDb, closeDb } from "../../src/db/connection.js";
-import { migrate } from "../../src/db/migrate.js";
+import { migrate, MIGRATIONS } from "../../src/db/migrate.js";
 
 describe("migration v14 heygem enums", () => {
   afterEach(() => closeDb());
+
+  it("registers v14 migration with heygem rewrite SQL for both tables", () => {
+    const v14 = MIGRATIONS.find((m) => m.version === 14);
+    expect(v14).toBeDefined();
+    expect(v14!.name).toBe("heygem-single-engine");
+    expect(v14!.sql).toContain("UPDATE avatars");
+    expect(v14!.sql).toContain("UPDATE digital_human_jobs");
+  });
 
   it("rewrites legacy chanjing/bailian rows to heygem", () => {
     resetInMemoryDb();
