@@ -4,7 +4,7 @@ import { migrate } from "../../src/db/migrate.js";
 import { createAvatar } from "../../src/db/avatars-repo.js";
 import { createWork } from "../../src/db/works-repo.js";
 import type { DbWork } from "../../src/db/types.js";
-import { createJob, getJob, listJobs, updateJob } from "../../src/db/digital-human-jobs-repo.js";
+import { createJob, getJob, listJobs, updateJob, countActiveJobs } from "../../src/db/digital-human-jobs-repo.js";
 
 function makeWork(overrides: Partial<DbWork> = {}): DbWork {
   return {
@@ -46,5 +46,13 @@ describe("digital-human-jobs-repo", () => {
     createJob({ id: "j1", avatar_id: "av1", audio_path: "/a.mp3", provider: "chanjing", status: "pending", progress: 0, estimated_cost: 0, actual_cost: 0, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" });
     updateJob("j1", { status: "running", progress: 50 });
     expect(getJob("j1")?.progress).toBe(50);
+  });
+
+  it("countActiveJobs counts pending/queued/running only", () => {
+    createAvatar({ id: "av1", name: "A", status: "ready", source: "chanjing", config: {}, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" });
+    createJob({ id: "j1", avatar_id: "av1", audio_path: "/a.mp3", provider: "chanjing", status: "running", progress: 0, estimated_cost: 0, actual_cost: 0, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" });
+    createJob({ id: "j2", avatar_id: "av1", audio_path: "/b.mp3", provider: "chanjing", status: "running", progress: 0, estimated_cost: 0, actual_cost: 0, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" });
+    createJob({ id: "j3", avatar_id: "av1", audio_path: "/c.mp3", provider: "chanjing", status: "done", progress: 100, estimated_cost: 0, actual_cost: 0, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" });
+    expect(countActiveJobs()).toBe(2);
   });
 });
