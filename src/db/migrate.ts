@@ -557,6 +557,14 @@ ALTER TABLE articles ADD COLUMN updated_at TEXT;
 ALTER TABLE works ADD COLUMN review_comment TEXT;
 `,
   },
+  {
+    version: 14,
+    name: "heygem-single-engine",
+    sql: `
+      UPDATE avatars SET source = 'heygem' WHERE source IN ('chanjing', 'bailian');
+      UPDATE digital_human_jobs SET provider = 'heygem' WHERE provider IN ('chanjing', 'bailian');
+    `,
+  },
 ];
 
 export function migrate(): void {

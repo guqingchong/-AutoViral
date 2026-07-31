@@ -107,7 +107,7 @@ export interface DbScript {
 }
 
 export type DbAvatarStatus = "draft" | "training" | "ready" | "failed";
-export type DbAvatarSource = "chanjing" | "bailian" | "upload";
+export type DbAvatarSource = "heygem" | "upload";
 
 export interface DbAvatar {
   id: string;
@@ -123,7 +123,7 @@ export interface DbAvatar {
 }
 
 export type DbDigitalHumanJobStatus = "pending" | "queued" | "running" | "done" | "failed";
-export type DbDigitalHumanProvider = "chanjing" | "bailian";
+export type DbDigitalHumanProvider = "heygem";
 
 export interface DbDigitalHumanJob {
   id: string;

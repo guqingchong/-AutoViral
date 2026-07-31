@@ -91,6 +91,18 @@ export function updateJob(id: string, updates: Partial<DbDigitalHumanJob>): DbDi
   return job;
 }
 
+export function countActiveJobs(): number {
+  const db = getDb();
+  const row = db.prepare("SELECT COUNT(*) AS n FROM digital_human_jobs WHERE status IN ('pending','queued','running')").get() as { n: number };
+  return row.n;
+}
+
+export function countActiveJobsByAvatar(avatarId: string): number {
+  const db = getDb();
+  const row = db.prepare("SELECT COUNT(*) AS n FROM digital_human_jobs WHERE avatar_id = ? AND status IN ('pending','queued','running')").get(avatarId) as { n: number };
+  return row.n;
+}
+
 export function deleteJob(id: string): boolean {
   const db = getDb();
   return db.prepare("DELETE FROM digital_human_jobs WHERE id = ?").run(id).changes > 0;
