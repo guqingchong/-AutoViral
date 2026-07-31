@@ -68,7 +68,14 @@ export async function powerOff(): Promise<InstanceView> {
     throw new Error(`有 ${active} 个任务在进行中，无法关机`);
   }
   state = "stopping";
-  await powerOffInstance();
+  try {
+    await powerOffInstance();
+  } catch (err) {
+    // 关机请求失败：实例大概率仍在运行，回退状态并记录错误，避免卡在 stopping 导致看门狗失效
+    state = "ready";
+    lastError = err instanceof Error ? err.message : String(err);
+    throw err;
+  }
   state = "stopped";
   lastError = null;
   return getInstanceView();
