@@ -15,8 +15,14 @@ export interface Config {
   jimeng: { accessKey: string; secretKey: string };
   openrouter?: { apiKey: string };
   minimax?: { apiKey: string };
-  chanjing?: { appId: string; secretKey: string };
-  bailian?: { apiKey: string };
+  autodl?: {
+    token: string;           // AutoDL 开发者 Token
+    instanceUuid: string;    // 实例 ID
+    publicBaseUrl: string;   // https://{uuid}.{region}.autodl.com
+    gpuHourlyRateYuan: number;
+    idleShutdownMinutes: number;
+  };
+  heygem?: { apiToken: string };
   pexels?: { apiKey: string };
   pixabay?: { apiKey: string };
   unsplash?: { accessKey: string };
@@ -122,14 +128,11 @@ export async function loadConfig(): Promise<Config> {
       config.memory.apiKey = process.env.EVERMEMOS_API_KEY;
     }
 
-    if (process.env.CHANJING_APP_ID) {
-      config.chanjing = { ...(config.chanjing ?? { appId: "", secretKey: "" }), appId: process.env.CHANJING_APP_ID };
+    if (process.env.AUTODL_TOKEN) {
+      config.autodl = { ...(config.autodl ?? { token: "", instanceUuid: "", publicBaseUrl: "", gpuHourlyRateYuan: 2.18, idleShutdownMinutes: 15 }), token: process.env.AUTODL_TOKEN };
     }
-    if (process.env.CHANJING_SECRET_KEY) {
-      config.chanjing = { ...(config.chanjing ?? { appId: "", secretKey: "" }), secretKey: process.env.CHANJING_SECRET_KEY };
-    }
-    if (process.env.BAILIAN_API_KEY) {
-      config.bailian = { apiKey: process.env.BAILIAN_API_KEY };
+    if (process.env.HEYGEM_API_TOKEN) {
+      config.heygem = { apiToken: process.env.HEYGEM_API_TOKEN };
     }
 
     cachedConfig = config;
