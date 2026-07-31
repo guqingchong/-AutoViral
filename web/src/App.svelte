@@ -41,9 +41,12 @@
   let unsplashAccessKey: string = $state("");
   let jimengAccessKey: string = $state("");
   let jimengSecretKey: string = $state("");
-  let chanjingAppId: string = $state("");
-  let chanjingSecretKey: string = $state("");
-  let showChanjingKey: boolean = $state(false);
+  let autodlToken: string = $state("");
+  let autodlInstanceUuid: string = $state("");
+  let autodlPublicBaseUrl: string = $state("");
+  let heygemApiToken: string = $state("");
+  let showAutodlToken: boolean = $state(false);
+  let showHeygemToken: boolean = $state(false);
   let showPexelsKey: boolean = $state(false);
   let showPixabayKey: boolean = $state(false);
   let showUnsplashKey: boolean = $state(false);
@@ -152,7 +155,7 @@
           interval, model, autoRun,
           pexelsApiKey, pixabayApiKey, unsplashAccessKey,
           jimengAccessKey, jimengSecretKey,
-          chanjingAppId, chanjingSecretKey,
+          autodlToken, autodlInstanceUuid, autodlPublicBaseUrl, heygemApiToken,
         }),
       });
       // 检查 HTTP 状态：此前 500 也显示"已保存"，掩盖了保存失败
@@ -199,8 +202,10 @@
         unsplashAccessKey = data.unsplashAccessKey ?? "";
         jimengAccessKey = data.jimengAccessKey ?? "";
         jimengSecretKey = data.jimengSecretKey ?? "";
-        chanjingAppId = data.chanjingAppId ?? "";
-        chanjingSecretKey = data.chanjingSecretKey ?? "";
+        autodlToken = data.autodlToken ?? "";
+        autodlInstanceUuid = data.autodlInstanceUuid ?? "";
+        autodlPublicBaseUrl = data.autodlPublicBaseUrl ?? "";
+        heygemApiToken = data.heygemApiToken ?? "";
       }
     } catch {}
   }
@@ -415,17 +420,28 @@
           <span class="field-label-upper">数字人 API</span>
           <div class="stack">
             <label class="field-row">
-              <span class="field-label-sm">蝉镜 AppId</span>
-              <input type="text" bind:value={chanjingAppId} placeholder="蝉镜平台 AppId" class="key-input" />
-            </label>
-            <label class="field-row">
-              <span class="field-label-sm">蝉镜 SecretKey</span>
+              <span class="field-label-sm">AutoDL Token</span>
               <div class="key-input-row">
-                <input type={showChanjingKey ? "text" : "password"} bind:value={chanjingSecretKey} placeholder="蝉镜平台 SecretKey" class="key-input" />
-                <button class="key-toggle" onclick={() => showChanjingKey = !showChanjingKey}>{showChanjingKey ? "🙈" : "👁"}</button>
+                <input type={showAutodlToken ? "text" : "password"} bind:value={autodlToken} placeholder="AutoDL 平台 Token" class="key-input" />
+                <button class="key-toggle" onclick={() => showAutodlToken = !showAutodlToken}>{showAutodlToken ? "🙈" : "👁"}</button>
               </div>
             </label>
-            <p class="hint-sm">蝉镜 API 用于数字人视频生成。配置后可在"数字人"页面创建和使用数字人。</p>
+            <label class="field-row">
+              <span class="field-label-sm">AutoDL 实例 UUID</span>
+              <input type="text" bind:value={autodlInstanceUuid} placeholder="GPU 实例 UUID" class="key-input" />
+            </label>
+            <label class="field-row">
+              <span class="field-label-sm">AutoDL 公网 Base URL</span>
+              <input type="text" bind:value={autodlPublicBaseUrl} placeholder="https://xxx.autodl.com" class="key-input" />
+            </label>
+            <label class="field-row">
+              <span class="field-label-sm">HeyGem API Token</span>
+              <div class="key-input-row">
+                <input type={showHeygemToken ? "text" : "password"} bind:value={heygemApiToken} placeholder="HeyGem 服务 Token" class="key-input" />
+                <button class="key-toggle" onclick={() => showHeygemToken = !showHeygemToken}>{showHeygemToken ? "🙈" : "👁"}</button>
+              </div>
+            </label>
+            <p class="hint-sm">AutoDL + HeyGem 用于数字人视频生成。配置后可在"数字人"页面开启实例并提交合成任务。</p>
           </div>
         </div>
 

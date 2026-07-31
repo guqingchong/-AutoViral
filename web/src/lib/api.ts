@@ -437,11 +437,11 @@ export async function convertTopicToWork(id: number, opts?: { platforms?: string
 export interface Avatar {
   id: string;
   name: string;
-  status: "training" | "ready" | "failed";
-  source: "chanjing" | "bailian";
-  provider_avatar_id?: string;
+  status: "draft" | "training" | "ready" | "failed";
+  source: "heygem" | "upload";
   preview_url?: string;
   reference_video_path?: string;
+  /** 含 mediaName（形如 media.mp4），用于拼 /avatars/:id/media/:filename 预览 URL */
   config: Record<string, unknown>;
   created_at: string;
   updated_at: string;
@@ -453,7 +453,7 @@ export interface DigitalHumanJob {
   avatar_id: string;
   audio_path: string;
   script_id?: number;
-  provider: "chanjing" | "bailian";
+  provider: "heygem";
   provider_job_id?: string;
   status: "pending" | "queued" | "running" | "done" | "failed";
   progress: number;
@@ -464,6 +464,35 @@ export interface DigitalHumanJob {
   error?: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface InstanceView {
+  state: "stopped" | "starting" | "ready" | "stopping" | "failed" | "unknown";
+  gpuHourlyRateYuan: number;
+  idleShutdownMinutes: number;
+  lastActivityAt: string | null;
+  error: string | null;
+}
+
+export interface DigitalHumanConfigStatus {
+  autodlConfigured: boolean;
+  heygemConfigured: boolean;
+}
+
+export async function fetchInstanceStatus(): Promise<InstanceView> {
+  return get<InstanceView>("/api/digital-humans/instance/status");
+}
+
+export async function powerOnInstance(): Promise<InstanceView> {
+  return request<InstanceView>("/api/digital-humans/instance/power-on", { method: "POST" });
+}
+
+export async function powerOffInstance(): Promise<InstanceView> {
+  return request<InstanceView>("/api/digital-humans/instance/power-off", { method: "POST" });
+}
+
+export async function fetchDigitalHumanConfigStatus(): Promise<DigitalHumanConfigStatus> {
+  return get<DigitalHumanConfigStatus>("/api/digital-humans/config-status");
 }
 
 export async function fetchAvatars(): Promise<Avatar[]> {
@@ -480,8 +509,8 @@ export async function uploadAvatar(name: string, file: File): Promise<Avatar> {
   return res.json();
 }
 
-export async function importAvatar(name: string, providerAvatarId: string): Promise<Avatar> {
-  return post<Avatar>("/api/digital-humans/avatars", { name, providerAvatarId });
+export async function deleteAvatarApi(id: string): Promise<void> {
+  await request<{ deleted: boolean }>(`/api/digital-humans/avatars/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 export async function fetchDigitalHumanJobs(): Promise<DigitalHumanJob[]> {
@@ -502,6 +531,14 @@ export async function submitDigitalHumanJob(input: {
 
 export async function refreshDigitalHumanJob(id: string): Promise<DigitalHumanJob> {
   return post<DigitalHumanJob>(`/api/digital-humans/jobs/${encodeURIComponent(id)}/refresh`, {});
+}
+
+export async function deleteDigitalHumanJob(id: string): Promise<void> {
+  await request<{ ok: boolean }>(`/api/digital-humans/jobs/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+export async function regenerateDigitalHumanJob(id: string): Promise<DigitalHumanJob> {
+  return request<DigitalHumanJob>(`/api/digital-humans/jobs/${encodeURIComponent(id)}/regenerate`, { method: "POST" });
 }
 
 // ---------------------------------------------------------------------------
