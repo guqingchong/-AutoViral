@@ -161,6 +161,39 @@ describe("digital-human API (heygem)", () => {
     expect(res2.status).toBe(404);
   });
 
+  it("DELETE avatar rejects path-escape and unknown ids with 404", async () => {
+    const res = await apiRoutes.request("/api/digital-humans/avatars/..%2F..%2F..%2Fetc", { method: "DELETE" });
+    expect(res.status).toBe(404);
+
+    const res2 = await apiRoutes.request("/api/digital-humans/avatars/avatar_00000000-0000-0000-0000-000000000000", { method: "DELETE" });
+    expect(res2.status).toBe(404);
+  });
+
+  it("DELETE avatar returns 409 while it has active jobs, deletes after they finish", async () => {
+    const avatar = await makeAvatar();
+    const job = await makeJob(avatar.id);
+
+    const res = await apiRoutes.request(`/api/digital-humans/avatars/${avatar.id}`, { method: "DELETE" });
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toContain("无法删除");
+
+    // 任务结束后（无进行中任务）可正常删除
+    heygem.getJob.mockResolvedValue({ job_id: "hg-api-1", status: "succeeded", processing_time_seconds: 10, error: null });
+    heygem.downloadResult.mockImplementation(async (_id: string, dest: string) => { await writeFile(dest, "mp4"); });
+    await apiRoutes.request(`/api/digital-humans/jobs/${job.id}/refresh`, { method: "POST" });
+
+    const res2 = await apiRoutes.request(`/api/digital-humans/avatars/${avatar.id}`, { method: "DELETE" });
+    expect(res2.status).toBe(200);
+    expect(await res2.json()).toEqual({ deleted: true });
+  });
+
+  it("DELETE job rejects path-escape ids with 404", async () => {
+    const res = await apiRoutes.request("/api/digital-humans/jobs/..%2F..%2F..%2Fetc", { method: "DELETE" });
+    expect(res.status).toBe(404);
+    const res2 = await apiRoutes.request("/api/digital-humans/jobs/avatar_00000000-0000-0000-0000-000000000000", { method: "DELETE" });
+    expect(res2.status).toBe(404);
+  });
+
   it("regenerate returns 201 with a new job; 404 on unknown id", async () => {
     const avatar = await makeAvatar();
     const job = await makeJob(avatar.id);

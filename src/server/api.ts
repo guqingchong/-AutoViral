@@ -33,6 +33,7 @@ import {
   refreshJob,
   deleteJob,
   regenerateJob,
+  isValidAvatarId,
 } from "../services/digital-human.js";
 import { getInstanceView, powerOn, powerOff } from "../services/instance-service.js";
 import {
@@ -3038,6 +3039,13 @@ apiRoutes.get("/api/digital-humans/avatars/:id/frame", async (c) => {
 // DELETE /api/digital-humans/avatars/:id
 apiRoutes.delete("/api/digital-humans/avatars/:id", async (c) => {
   const id = c.req.param("id");
+  // 校验 ID 格式并确认记录存在后才删文件，杜绝 ../ 路径逃逸删除 dataDir 之外的目录
+  if (!isValidAvatarId(id)) return c.json({ error: "Avatar not found" }, 404);
+  const avatar = avatarsRepo.getAvatar(id);
+  if (!avatar) return c.json({ error: "Avatar not found" }, 404);
+  // 有进行中任务的形象不允许删除（spec §7.2）
+  const active = dhJobsRepo.countActiveJobsByAvatar(id);
+  if (active > 0) return c.json({ error: "该形象有进行中任务，无法删除" }, 409);
   try {
     await rm(avatarDir(id), { recursive: true, force: true });
   } catch { /* directory may not exist */ }

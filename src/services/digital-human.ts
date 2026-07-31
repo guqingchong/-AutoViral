@@ -15,6 +15,13 @@ function generateId(prefix: string): string {
   return `${prefix}_${randomUUID()}`;
 }
 
+// 服务层生成的 ID 形如 avatar_<uuid> / dhjob_<uuid>；删除前校验防止 URL 中的 ../ 逃逸 dataDir
+const AVATAR_ID_PATTERN = /^avatar_[0-9a-f-]+$/;
+const JOB_ID_PATTERN = /^dhjob_[0-9a-f-]+$/;
+
+export function isValidAvatarId(id: string): boolean { return AVATAR_ID_PATTERN.test(id); }
+export function isValidJobId(id: string): boolean { return JOB_ID_PATTERN.test(id); }
+
 function now(): string { return new Date().toISOString(); }
 
 function avatarDir(id: string): string { return join(dataDir, "avatars", id); }
@@ -109,16 +116,26 @@ export async function refreshJob(jobId: string): Promise<DbDigitalHumanJob | und
   const job = jobsRepo.getJob(jobId);
   if (!job || !job.provider_job_id) return job;
   if (job.status === "done" || job.status === "failed") return job;
+  let info: Awaited<ReturnType<typeof heygem.getJob>>;
   try {
-    const info = await heygem.getJob(job.provider_job_id);
-    if (info.status === "succeeded") return await finalizeJob(job, info.processing_time_seconds);
-    if (info.status === "failed") {
-      return jobsRepo.updateJob(jobId, { status: "failed", error: info.error ?? "HeyGem 任务失败" });
-    }
-    return jobsRepo.updateJob(jobId, { status: "running", progress: info.status === "queued" ? 10 : 50 });
+    info = await heygem.getJob(job.provider_job_id);
   } catch (err) {
-    return jobsRepo.updateJob(jobId, { status: "failed", error: (err as Error).message });
+    // 网络等瞬时故障：保持 running 记录 error，允许后续再次 refresh（spec §10）
+    return jobsRepo.updateJob(jobId, { status: "running", error: (err as Error).message });
   }
+  if (info.status === "succeeded") {
+    try {
+      return await finalizeJob(job, info.processing_time_seconds);
+    } catch (err) {
+      // 结果下载失败：保持 running 记录 error，允许后续再次 refresh（spec §10）
+      return jobsRepo.updateJob(jobId, { status: "running", error: (err as Error).message });
+    }
+  }
+  if (info.status === "failed") {
+    // 仅 HeyGem 侧明确返回 failed 才转 failed
+    return jobsRepo.updateJob(jobId, { status: "failed", error: info.error ?? "HeyGem 任务失败" });
+  }
+  return jobsRepo.updateJob(jobId, { status: "running", progress: info.status === "queued" ? 10 : 50 });
 }
 
 async function finalizeJob(job: DbDigitalHumanJob, processingSeconds: number | null): Promise<DbDigitalHumanJob | undefined> {
@@ -141,8 +158,12 @@ async function finalizeJob(job: DbDigitalHumanJob, processingSeconds: number | n
 }
 
 export async function deleteJob(jobId: string): Promise<boolean> {
-  await rm(jobOutputDir(jobId), { recursive: true, force: true });
-  return jobsRepo.deleteJob(jobId);
+  // 先校验 ID 格式再查库，确认记录存在后才删文件，杜绝 ../ 路径逃逸删除 dataDir 之外的目录
+  if (!isValidJobId(jobId)) return false;
+  const job = jobsRepo.getJob(jobId);
+  if (!job) return false;
+  await rm(jobOutputDir(job.id), { recursive: true, force: true });
+  return jobsRepo.deleteJob(job.id);
 }
 
 export async function regenerateJob(jobId: string): Promise<DbDigitalHumanJob> {
