@@ -4,7 +4,7 @@ import { migrate } from "../../src/db/migrate.js";
 import { createAvatar } from "../../src/db/avatars-repo.js";
 import { createWork } from "../../src/db/works-repo.js";
 import type { DbWork } from "../../src/db/types.js";
-import { createJob, getJob, listJobs, updateJob, countActiveJobs, deleteJob } from "../../src/db/digital-human-jobs-repo.js";
+import { createJob, getJob, listJobs, updateJob, countActiveJobs, countActiveJobsByAvatar, deleteJob } from "../../src/db/digital-human-jobs-repo.js";
 
 function makeWork(overrides: Partial<DbWork> = {}): DbWork {
   return {
@@ -54,6 +54,17 @@ describe("digital-human-jobs-repo", () => {
     createJob({ id: "j2", avatar_id: "av1", audio_path: "/b.mp3", provider: "heygem", status: "running", progress: 0, estimated_cost: 0, actual_cost: 0, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" });
     createJob({ id: "j3", avatar_id: "av1", audio_path: "/c.mp3", provider: "heygem", status: "done", progress: 100, estimated_cost: 0, actual_cost: 0, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" });
     expect(countActiveJobs()).toBe(2);
+  });
+
+  it("countActiveJobsByAvatar counts only that avatar's pending/queued/running jobs", () => {
+    createAvatar({ id: "av1", name: "A", status: "ready", source: "heygem", config: {}, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" });
+    createAvatar({ id: "av2", name: "B", status: "ready", source: "heygem", config: {}, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" });
+    createJob({ id: "j1", avatar_id: "av1", audio_path: "/a.mp3", provider: "heygem", status: "running", progress: 0, estimated_cost: 0, actual_cost: 0, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" });
+    createJob({ id: "j2", avatar_id: "av1", audio_path: "/b.mp3", provider: "heygem", status: "done", progress: 100, estimated_cost: 0, actual_cost: 0, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" });
+    createJob({ id: "j3", avatar_id: "av2", audio_path: "/c.mp3", provider: "heygem", status: "running", progress: 0, estimated_cost: 0, actual_cost: 0, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" });
+    expect(countActiveJobsByAvatar("av1")).toBe(1);
+    expect(countActiveJobsByAvatar("av2")).toBe(1);
+    expect(countActiveJobsByAvatar("av_missing")).toBe(0);
   });
 
   it("deleteJob removes the record and returns true; false for missing id", () => {

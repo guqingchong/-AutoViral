@@ -129,4 +129,48 @@ describe("digital-human heygem", () => {
 
     expect(await svc.deleteJob(job.id)).toBe(true);
   });
+
+  it("refreshJob keeps running on transient getJob network error and can refresh again", async () => {
+    const avatar = await makeAvatar();
+    heygem.submitJob.mockResolvedValue("hg-net");
+    const job = await svc.submitJob({ avatarId: avatar.id, audioUrl: "/a.wav" });
+
+    heygem.getJob.mockRejectedValueOnce(new Error("fetch failed: ECONNRESET"));
+    const afterError = await svc.refreshJob(job.id);
+    expect(afterError?.status).toBe("running");
+    expect(afterError?.error).toContain("ECONNRESET");
+
+    heygem.getJob.mockResolvedValue({ job_id: "hg-net", status: "succeeded", processing_time_seconds: 30, error: null });
+    heygem.downloadResult.mockImplementation(async (_id: string, dest: string) => { await writeFile(dest, "mp4"); });
+    const retried = await svc.refreshJob(job.id);
+    expect(retried?.status).toBe("done");
+  });
+
+  it("refreshJob keeps running when result download fails (spec §10)", async () => {
+    const avatar = await makeAvatar();
+    heygem.submitJob.mockResolvedValue("hg-dl");
+    const job = await svc.submitJob({ avatarId: avatar.id, audioUrl: "/a.wav" });
+
+    heygem.getJob.mockResolvedValue({ job_id: "hg-dl", status: "succeeded", processing_time_seconds: 30, error: null });
+    heygem.downloadResult.mockRejectedValueOnce(new Error("download timeout"));
+    const afterError = await svc.refreshJob(job.id);
+    expect(afterError?.status).toBe("running");
+    expect(afterError?.error).toContain("download timeout");
+
+    heygem.downloadResult.mockImplementation(async (_id: string, dest: string) => { await writeFile(dest, "mp4"); });
+    const retried = await svc.refreshJob(job.id);
+    expect(retried?.status).toBe("done");
+  });
+
+  it("deleteJob rejects path-escape ids and unknown ids without touching the filesystem", async () => {
+    // 在 dataDir 同级放一个哨兵目录，若发生路径逃逸会被 rm 掉
+    const sentinel = join(dir, "..", `sentinel-${Date.now()}`);
+    await writeFile(`${sentinel}.txt`, "keep");
+    for (const bad of ["..%2F..%2F..%2Fetc", "../../../etc", "..\\..\\etc", "dhjob_../../x", "avatar_123", "dhjob_%2e%2e", ""]) {
+      expect(await svc.deleteJob(bad)).toBe(false);
+    }
+    expect(await svc.deleteJob("dhjob_00000000-0000-0000-0000-000000000000")).toBe(false);
+    await access(`${sentinel}.txt`);
+    await rm(`${sentinel}.txt`, { force: true });
+  });
 });
