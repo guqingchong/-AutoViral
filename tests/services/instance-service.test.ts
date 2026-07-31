@@ -73,6 +73,17 @@ describe("instance-service", () => {
     expect(autodl.powerOffInstance).not.toHaveBeenCalled();
   });
 
+  it("powerOff failure: rolls back to ready, records error, rethrows", async () => {
+    (autodl.powerOnInstance as any).mockResolvedValue(undefined);
+    (heygem.checkHealth as any).mockResolvedValue(true);
+    await powerOn();
+    (autodl.powerOffInstance as any).mockRejectedValue(new Error("AutoDL API 错误"));
+    await expect(powerOff()).rejects.toThrow("AutoDL API 错误");
+    const view = await getInstanceView();
+    expect(view.state).toBe("ready");
+    expect(view.error).toContain("AutoDL API 错误");
+  });
+
   it("watchdog auto powers off after idle timeout", async () => {
     (autodl.powerOnInstance as any).mockResolvedValue(undefined);
     (heygem.checkHealth as any).mockResolvedValue(true);
