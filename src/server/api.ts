@@ -28,7 +28,6 @@ import * as dhJobsRepo from "../db/digital-human-jobs-repo.js";
 import * as assetsRepo from "../db/assets-repo.js";
 import {
   createAvatarFromUpload,
-  importAvatar,
   setDefaultAvatar,
   submitJob,
   refreshJob,
@@ -2972,16 +2971,9 @@ apiRoutes.get("/api/digital-humans/avatars", async (c) => {
   return c.json({ avatars: avatarsRepo.listAvatars() });
 });
 
-// POST /api/digital-humans/avatars — upload file or import existing provider avatar
+// POST /api/digital-humans/avatars — upload avatar source video
 apiRoutes.post("/api/digital-humans/avatars", async (c) => {
   try {
-    const ct = c.req.header("content-type") ?? "";
-    if (ct.includes("application/json")) {
-      const { name, providerAvatarId } = await c.req.json();
-      if (!name || !providerAvatarId) return c.json({ error: "name and providerAvatarId required" }, 400);
-      const avatar = await importAvatar(name, providerAvatarId);
-      return c.json(avatar, 201);
-    }
     const body = await c.req.parseBody();
     const name = (body.name as string) || "New Avatar";
     const file = body.file as File | undefined;
@@ -3053,9 +3045,9 @@ apiRoutes.post("/api/digital-humans/avatars/:id/default", async (c) => {
 apiRoutes.post("/api/digital-humans/jobs", async (c) => {
   try {
     const body = await c.req.json();
-    const { avatarId, audioUrl, workId, scriptId, estimatedCost, fallbackOnFailure } = body;
+    const { avatarId, audioUrl, workId, scriptId, estimatedCost } = body;
     if (!avatarId || !audioUrl) return c.json({ error: "avatarId and audioUrl required" }, 400);
-    const job = await submitJob({ avatarId, audioUrl, workId, scriptId, estimatedCost, fallbackOnFailure });
+    const job = await submitJob({ avatarId, audioUrl, workId, scriptId, estimatedCost });
     return c.json(job, 201);
   } catch (err) {
     return c.json({ error: err instanceof Error ? err.message : "Job submission failed" }, 500);
