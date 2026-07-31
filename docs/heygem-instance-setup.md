@@ -1,10 +1,15 @@
 # HeyGem 实例镜像改造操作手册
 
 > 面向非专家操作者。每一步都可以直接复制粘贴执行。
-> 目的：把 AutoDL 上的 HeyGem 实例改造成 AutoViral 可用的形态（端口 6006 + Bearer Token 鉴权），并固化为私有镜像。
+> 目的：把 AutoDL 上的 HeyGem 实例改造成 AutoViral 可用的形态（Bearer Token 鉴权 + SSH 隧道访问），并固化为私有镜像。
 >
 > **运行模式**：实例的开关机由你在 [AutoDL 控制台](https://www.autodl.com/console) **手动操作**（AutoViral 不调用 AutoDL API）。
 > AutoViral 只做状态提醒：每 30 秒健康探测显示实例在线/离线，实例空闲超过阈值时在数字人页面提示你及时关机，避免持续计费。
+>
+> **连接方式：SSH 隧道**。AutoDL 实例所在区域的公网代理（「自定义服务」）仅对企业认证用户开放，
+> 个人用户只能通过 SSH 隧道访问实例服务。AutoViral 会**自动管理隧道生命周期**：
+> 健康探测失败时自动建立 `ssh -N -L` 端口转发并重试，无需人工干预。
+> 唯一的一次性前置条件：本机已配置对该实例的**免密 SSH 登录**（见第 1 步）。
 
 ---
 
@@ -54,6 +59,25 @@ ssh -p 12345 root@connect.cqa1.seetacloud.com
 
 也可以直接用 AutoDL 控制台实例卡片上的「JupyterLab」→ 打开一个 Terminal，效果相同。
 
+### 一次性配置：免密 SSH（隧道自动化的前提）
+
+AutoViral 自动建隧道时使用 `BatchMode=yes`（不允许交互输密码），因此必须先把本机公钥放到实例上。此配置**只需做一次**（本机已完成，以下备查）：
+
+```bash
+# 1. 本机没有密钥则先生成（一路回车，不设口令）
+ssh-keygen -t ed25519
+
+# 2. 把公钥复制到实例（最后输一次实例密码）
+ssh-copy-id -p 28830 root@connect.nmb1.seetacloud.com
+# Windows 没有 ssh-copy-id 时可用：
+# type %USERPROFILE%\.ssh\id_ed25519.pub | ssh -p 28830 root@connect.nmb1.seetacloud.com "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys"
+
+# 3. 验证免密登录（不应再提示输密码）
+ssh -p 28830 root@connect.nmb1.seetacloud.com
+```
+
+> 注意：AutoDL 实例**无卡模式开机 / 换实例后 SSH 地址（主机和端口）会变**，公钥也可能丢失，需要重做本步并同步更新 AutoViral 设置页的隧道主机/端口。
+
 ---
 
 ## 第 2 步：给 HeyGem API 加 Bearer Token 鉴权
@@ -98,7 +122,10 @@ async def _auth_middleware(request: Request, call_next):
 
 ---
 
-## 第 3 步：改端口 6006 并注入 Token 环境变量
+## 第 3 步：注入 Token 环境变量
+
+> 说明：走 SSH 隧道后，实例端口无需对公网暴露，**不需要**把 HeyGem 端口从 6008 改成 6006
+> （隧道默认把本机 6006 转发到实例 127.0.0.1:6008）。本步只需注入 Token 环境变量。
 
 1. 备份并打开启动脚本：
 
@@ -107,21 +134,15 @@ cp /root/HeyGem-Linux-Python-Hack/start_api.sh /root/HeyGem-Linux-Python-Hack/st
 vi /root/HeyGem-Linux-Python-Hack/start_api.sh
 ```
 
-2. 找到 `PORT=6008` 这一行，改成：
-
-```bash
-PORT=6006
-```
-
-3. 在同一文件里（建议紧跟 PORT 那行下面）加一行，把 `<你的TOKEN>` 替换为第 0 步生成的随机串：
+2. 在文件里加一行（建议紧跟 `PORT=` 那行下面），把 `<你的TOKEN>` 替换为第 0 步生成的随机串：
 
 ```bash
 export HEYGEM_API_TOKEN=<你的TOKEN>
 ```
 
-4. 保存退出（`Esc` → `:wq` → 回车）。
+3. 保存退出（`Esc` → `:wq` → 回车）。
 
-5. 重启 API 服务使改动生效。先杀掉旧进程再启动：
+4. 重启 API 服务使改动生效。先杀掉旧进程再启动：
 
 ```bash
 pkill -f api_server.py
@@ -132,14 +153,19 @@ cd /root/HeyGem-Linux-Python-Hack && nohup bash start_api.sh > /root/heygem_api.
 
 ---
 
-## 第 4 步：验证改造成功
+## 第 4 步：验证改造成功（通过 SSH 隧道）
 
-实例卡片 →「快捷工具」→「自定义服务」，复制 6006 端口对应的公网地址（形如 `https://xxxx.region.autodl.com`，不带末尾 `/`）——这就是要填进 AutoViral 的 `heygem.baseUrl`。
-
-在**本地**终端执行（把 `<实例公网地址>` 换成上面复制的自定义服务地址，把 `<你的TOKEN>` 换成你的随机串）：
+实例服务不对公网开放（个人用户无公网代理权限），验证走 SSH 隧道。在**本地**终端执行：
 
 ```bash
-curl -H "Authorization: Bearer <你的TOKEN>" https://<实例公网地址>/api/health
+# 建立隧道：本机 6006 → 实例 127.0.0.1:6008（把端口/主机换成你实例的 SSH 信息）
+ssh -N -L 6006:127.0.0.1:6008 -p 28830 root@connect.nmb1.seetacloud.com
+```
+
+该命令会前台挂起（属正常）。**另开一个**本地终端验证：
+
+```bash
+curl -H "Authorization: Bearer <你的TOKEN>" http://localhost:6006/api/health
 ```
 
 - 返回 `{"status":"ok"}`（或类似 ok 字样）→ 成功。
@@ -147,8 +173,11 @@ curl -H "Authorization: Bearer <你的TOKEN>" https://<实例公网地址>/api/h
 - 不带 `-H` 再试一次应返回 401，说明鉴权确实生效：
 
 ```bash
-curl https://<实例公网地址>/api/health
+curl http://localhost:6006/api/health
 ```
+
+验证完可以 `Ctrl+C` 关掉这个手动隧道——AutoViral 运行时会自动建立自己的隧道
+（若手动隧道还开着，AutoViral 检测到本机 6006 已可用会直接复用，不会重复建立）。
 
 ---
 
@@ -165,17 +194,30 @@ curl https://<实例公网地址>/api/health
 
 ## 第 6 步：在 AutoViral 设置页填写配置
 
-打开 AutoViral → 设置页，填写以下 3 项：
+打开 AutoViral → 设置页，填写以下配置：
 
 | 配置项 | 填什么 | 示例 |
 |--------|--------|------|
-| `heygem.baseUrl` | 实例 6006 端口公网地址（AutoDL 控制台实例卡片 →「快捷工具 → 自定义服务」获取，不带末尾 `/`） | `https://xxxx.region.autodl.com` |
+| `heygem.baseUrl` | 固定填本地隧道地址 `http://localhost:6006`（AutoViral 自动把该端口转发到实例） | `http://localhost:6006` |
 | `heygem.apiToken` | 第 0 步生成的随机串 | 与实例里 export 的一致 |
 | `heygem.gpuHourlyRateYuan` | GPU 每小时单价（与实例实际价格一致，用于估算任务成本） | `1.78` |
+| `heygem.tunnel.host` | 实例 SSH 主机（AutoDL 控制台实例卡片 →「SSH 登录」命令里的主机） | `connect.nmb1.seetacloud.com` |
+| `heygem.tunnel.port` | 实例 SSH 端口（同上，`-p` 后面的数字） | `28830` |
 
-可选：`heygem.idleReminderMinutes`（空闲提醒阈值，默认 15 分钟）——实例空闲超过该时长，数字人页面会提示你去控制台关机。
+可选配置（一般用默认值即可）：
 
-> 注意：更换实例后公网地址会变，记得同步更新设置页的实例地址。旧版 `autodl.*` 配置会在启动时自动迁移为 `heygem.*`。
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `heygem.idleReminderMinutes` | `15` | 空闲提醒阈值——实例空闲超过该时长，数字人页面会提示你去控制台关机 |
+| `heygem.tunnel.user` | `root` | SSH 用户 |
+| `heygem.tunnel.localPort` | `6006` | 本机转发端口（与 `heygem.baseUrl` 的端口对应） |
+| `heygem.tunnel.remotePort` | `6008` | 实例内 HeyGem API 端口（`start_api.sh` 里的 `PORT`） |
+
+> 注意：更换实例 / 无卡模式开机后 SSH 主机和端口会变，记得同步更新设置页的隧道主机和端口，并重新做第 1 步的免密配置。旧版 `autodl.*` 配置会在启动时自动迁移为 `heygem.*`；旧 `heygem` 配置缺 `tunnel` 字段时启动时自动补默认值。
+
+隧道的工作方式：AutoViral 健康探测失败时自动执行等价于
+`ssh -N -L 6006:127.0.0.1:6008 -p <tunnel.port> <tunnel.user>@<tunnel.host>`
+的端口转发（`BatchMode=yes`，需免密），并随 AutoViral 退出而终止，不留后台进程。
 
 ---
 
@@ -204,7 +246,8 @@ npx tsx scripts/test-heygem-live.ts
 
 ## 常见问题
 
-- **页面显示「实例离线」**：实例没开机，或刚开机 HeyGem 还在加载模型（需几分钟）。先去 [AutoDL 控制台](https://www.autodl.com/console) 开机；持续离线则 SSH 进实例看 `tail -100 /root/heygem_api.log`。
+- **页面显示「实例离线」**：实例没开机，或刚开机 HeyGem 还在加载模型（需几分钟）。先去 [AutoDL 控制台](https://www.autodl.com/console) 开机；持续离线则检查隧道——手动执行 `ssh -N -L 6006:127.0.0.1:6008 -p <端口> root@<主机>` 看是否报错（免密失效、SSH 地址变更都会导致隧道建立失败），再 SSH 进实例看 `tail -100 /root/heygem_api.log`。
+- **隧道反复断开**：确认实例 SSH 主机/端口与设置页一致；AutoDL 实例关机再开机后 SSH 地址可能变化，需同步更新设置页并重做免密配置（第 1 步）。
 - **401 unauthorized**：两端 Token 不一致，或实例是从旧镜像开的（没做第 5 步固化）。
 - **忘记关机一直在计费**：在 AutoViral 设置页把 `heygem.idleReminderMinutes` 调小，空闲提醒会更早出现；计费以 AutoDL 控制台为准，不用时及时手动关机。
 - **改坏了想回滚**：`cp api_server.py.bak api_server.py && cp start_api.sh.bak start_api.sh`，再重启服务即可。

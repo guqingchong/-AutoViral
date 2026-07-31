@@ -1,10 +1,12 @@
 import { checkHealth } from "./heygem-client.js";
+import { ensureTunnel } from "./tunnel-service.js";
 import { getConfig } from "../config.js";
 
 /**
  * 实例状态服务（手动控制模式）。
  * 实例开关机由用户在 AutoDL 控制台手动操作，本服务只做两件事：
- *   1. 健康探测驱动 ready/offline 状态（30 秒循环 + getInstanceView 实时探测）
+ *   1. 健康探测驱动 ready/offline 状态（30 秒循环 + getInstanceView 实时探测），
+ *      探测失败时自动重建 SSH 隧道并重试一次（隧道掉线自愈）
  *   2. 空闲计时，供前端提醒用户及时关机避免持续计费
  */
 export type InstanceViewState = "ready" | "offline";
@@ -33,7 +35,16 @@ export function recordActivity(): void {
 
 async function probe(): Promise<void> {
   try {
-    state = (await checkHealth()) ? "ready" : "offline";
+    if (await checkHealth()) {
+      state = "ready";
+      return;
+    }
+    // 探测失败：可能是 SSH 隧道掉线。配置了 heygem 时尝试重建隧道并重试一次。
+    if (getConfig().heygem?.baseUrl && (await ensureTunnel()) && (await checkHealth())) {
+      state = "ready";
+      return;
+    }
+    state = "offline";
   } catch {
     // checkHealth 本身不抛异常，这里兜底防意外
     state = "offline";
