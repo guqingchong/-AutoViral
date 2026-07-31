@@ -15,14 +15,12 @@ export interface Config {
   jimeng: { accessKey: string; secretKey: string };
   openrouter?: { apiKey: string };
   minimax?: { apiKey: string };
-  autodl?: {
-    token: string;           // AutoDL 开发者 Token
-    instanceUuid: string;    // 实例 ID
-    publicBaseUrl: string;   // https://{uuid}.{region}.autodl.com
-    gpuHourlyRateYuan: number;
-    idleShutdownMinutes: number;
+  heygem?: {
+    apiToken: string;
+    baseUrl: string;              // 实例 6006 端口公网地址（AutoDL 控制台「自定义服务」）
+    gpuHourlyRateYuan: number;    // GPU 时价，用于成本估算
+    idleReminderMinutes: number;  // 空闲提醒阈值（默认 15）
   };
-  heygem?: { apiToken: string };
   pexels?: { apiKey: string };
   pixabay?: { apiKey: string };
   unsplash?: { accessKey: string };
@@ -103,8 +101,21 @@ export async function loadConfig(): Promise<Config> {
     const raw = await readFile(CONFIG_PATH, "utf-8");
     const parsed = yaml.load(raw) as Partial<Config> | null;
     if (parsed && typeof parsed === "object") {
-      delete (parsed as Record<string, unknown>).chanjing;
-      delete (parsed as Record<string, unknown>).bailian;
+      const rec = parsed as Record<string, unknown>;
+      delete rec.chanjing;
+      delete rec.bailian;
+      // 旧配置迁移：autodl.* → heygem.*（AutoDL API 控制已废弃，改手动控制实例）
+      const legacy = rec.autodl as Record<string, unknown> | undefined;
+      if (legacy && typeof legacy === "object") {
+        const existing = (rec.heygem ?? {}) as Record<string, unknown>;
+        rec.heygem = {
+          apiToken: (existing.apiToken as string) ?? "",
+          baseUrl: (legacy.publicBaseUrl as string) ?? (existing.baseUrl as string) ?? "",
+          gpuHourlyRateYuan: (legacy.gpuHourlyRateYuan as number) ?? (existing.gpuHourlyRateYuan as number) ?? 1.78,
+          idleReminderMinutes: (legacy.idleShutdownMinutes as number) ?? (existing.idleReminderMinutes as number) ?? 15,
+        };
+        delete rec.autodl;
+      }
     }
     const config: Config = { ...getDefaultConfig(), ...parsed };
     config.interests = config.interests ?? [];
@@ -132,11 +143,23 @@ export async function loadConfig(): Promise<Config> {
       config.memory.apiKey = process.env.EVERMEMOS_API_KEY;
     }
 
-    if (process.env.AUTODL_TOKEN) {
-      config.autodl = { ...(config.autodl ?? { token: "", instanceUuid: "", publicBaseUrl: "", gpuHourlyRateYuan: 2.18, idleShutdownMinutes: 15 }), token: process.env.AUTODL_TOKEN };
-    }
     if (process.env.HEYGEM_API_TOKEN) {
-      config.heygem = { apiToken: process.env.HEYGEM_API_TOKEN };
+      const h = config.heygem;
+      config.heygem = {
+        apiToken: process.env.HEYGEM_API_TOKEN,
+        baseUrl: h?.baseUrl ?? "",
+        gpuHourlyRateYuan: h?.gpuHourlyRateYuan ?? 1.78,
+        idleReminderMinutes: h?.idleReminderMinutes ?? 15,
+      };
+    }
+    if (process.env.HEYGEM_BASE_URL) {
+      const h = config.heygem;
+      config.heygem = {
+        apiToken: h?.apiToken ?? "",
+        baseUrl: process.env.HEYGEM_BASE_URL,
+        gpuHourlyRateYuan: h?.gpuHourlyRateYuan ?? 1.78,
+        idleReminderMinutes: h?.idleReminderMinutes ?? 15,
+      };
     }
 
     cachedConfig = config;

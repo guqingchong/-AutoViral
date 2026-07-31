@@ -11,8 +11,8 @@ export interface HeyGemJobInfo {
 
 async function endpoint(): Promise<{ base: string; headers: Record<string, string> }> {
   const config = await loadConfig();
-  const base = config.autodl?.publicBaseUrl?.replace(/\/$/, "");
-  if (!base) throw new Error("未配置实例公网地址（autodl.publicBaseUrl）");
+  const base = config.heygem?.baseUrl?.replace(/\/$/, "");
+  if (!base) throw new Error("未配置 HeyGem 实例地址（heygem.baseUrl）");
   const token = config.heygem?.apiToken;
   if (!token) throw new Error("未配置 HeyGem API Token（heygem.apiToken）");
   return { base, headers: { Authorization: `Bearer ${token}` } };
