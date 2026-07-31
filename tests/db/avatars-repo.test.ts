@@ -8,7 +8,7 @@ function makeAvatar(overrides: Partial<import("../../src/db/types.js").DbAvatar>
     id: "avatar_test_001",
     name: "Test Avatar",
     status: "ready",
-    source: "chanjing",
+    source: "heygem",
     provider_avatar_id: "cj_123",
     config: { pitch: 1 },
     created_at: new Date().toISOString(),
