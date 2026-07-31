@@ -471,6 +471,7 @@ export interface InstanceView {
   gpuHourlyRateYuan: number;
   idleShutdownMinutes: number;
   lastActivityAt: string | null;
+  readySince: string | null;
   error: string | null;
 }
 

@@ -28,6 +28,7 @@ import {
   assertReady,
   startWatchdog,
   stopWatchdog,
+  reconcileInstance,
   __resetForTests,
 } from "../../src/services/instance-service.js";
 
@@ -125,5 +126,52 @@ describe("instance-service", () => {
     recordActivity();
     const view = await getInstanceView();
     expect(view.lastActivityAt).not.toBeNull();
+  });
+
+  it("powerOn success sets readySince; powerOff clears it", async () => {
+    (autodl.powerOnInstance as any).mockResolvedValue(undefined);
+    (heygem.checkHealth as any).mockResolvedValue(true);
+    const view = await powerOn();
+    expect(view.state).toBe("ready");
+    expect(view.readySince).not.toBeNull();
+
+    (autodl.powerOffInstance as any).mockResolvedValue(undefined);
+    const off = await powerOff();
+    expect(off.state).toBe("stopped");
+    expect(off.readySince).toBeNull();
+  });
+
+  it("reconcileInstance: running + healthy -> ready with activity recorded", async () => {
+    (autodl.getInstanceStatus as any).mockResolvedValue("running");
+    (heygem.checkHealth as any).mockResolvedValue(true);
+    await reconcileInstance();
+    const view = await getInstanceView();
+    expect(view.state).toBe("ready");
+    expect(view.readySince).not.toBeNull();
+    expect(view.lastActivityAt).not.toBeNull();
+
+    // 对账恢复 ready 后看门狗恢复计时：空闲超时自动关机
+    (autodl.powerOffInstance as any).mockResolvedValue(undefined);
+    startWatchdog();
+    await vi.advanceTimersByTimeAsync(16 * 60_000);
+    expect(autodl.powerOffInstance).toHaveBeenCalled();
+  });
+
+  it("reconcileInstance: shutdown -> stopped", async () => {
+    (autodl.getInstanceStatus as any).mockResolvedValue("shutdown");
+    await reconcileInstance();
+    const view = await getInstanceView();
+    expect(view.state).toBe("stopped");
+    expect(view.readySince).toBeNull();
+  });
+
+  it("reconcileInstance: network failure keeps stopped and records error without throwing", async () => {
+    (autodl.getInstanceStatus as any).mockRejectedValue(new Error("AutoDL API 错误: timeout"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(reconcileInstance()).resolves.toBeUndefined();
+    const view = await getInstanceView();
+    expect(view.state).toBe("stopped");
+    expect(view.error).toContain("timeout");
+    errSpy.mockRestore();
   });
 });

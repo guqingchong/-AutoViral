@@ -1,4 +1,4 @@
-import { powerOnInstance, powerOffInstance } from "./autodl-client.js";
+import { powerOnInstance, powerOffInstance, getInstanceStatus } from "./autodl-client.js";
 import { checkHealth } from "./heygem-client.js";
 import { countActiveJobs } from "../db/digital-human-jobs-repo.js";
 import { getConfig } from "../config.js";
@@ -10,6 +10,8 @@ export interface InstanceView {
   gpuHourlyRateYuan: number;
   idleShutdownMinutes: number;
   lastActivityAt: string | null;
+  /** 本次开机进入 ready 的时间（ISO），用于前端展示已运行时长 */
+  readySince: string | null;
   error: string | null;
 }
 
@@ -19,6 +21,7 @@ const WATCHDOG_INTERVAL_MS = 60_000;
 
 let state: InstanceViewState = "stopped";
 let lastActivity: number | null = null;
+let readySince: number | null = null;
 let lastError: string | null = null;
 let watchdog: NodeJS.Timeout | undefined;
 
@@ -33,6 +36,7 @@ export async function getInstanceView(): Promise<InstanceView> {
     gpuHourlyRateYuan: autodl?.gpuHourlyRateYuan ?? 0,
     idleShutdownMinutes: autodl?.idleShutdownMinutes ?? 0,
     lastActivityAt: lastActivity !== null ? new Date(lastActivity).toISOString() : null,
+    readySince: readySince !== null ? new Date(readySince).toISOString() : null,
     error: lastError,
   };
 }
@@ -48,6 +52,7 @@ export async function powerOn(): Promise<InstanceView> {
     for (let attempt = 0; attempt < HEALTH_POLL_MAX_ATTEMPTS; attempt++) {
       if (await checkHealth()) {
         state = "ready";
+        readySince = Date.now();
         recordActivity();
         return getInstanceView();
       }
@@ -77,8 +82,38 @@ export async function powerOff(): Promise<InstanceView> {
     throw err;
   }
   state = "stopped";
+  readySince = null;
   lastError = null;
   return getInstanceView();
+}
+
+/**
+ * 启动对账（spec §4.3）：AutoViral 重启后内存态丢失，需向 AutoDL/HeyGem 核实实例真实状态，
+ * 让看门狗继续计时。对账失败（网络错误）保持 stopped 并记 error 日志，不阻塞启动。
+ */
+export async function reconcileInstance(): Promise<void> {
+  try {
+    const status = await getInstanceStatus();
+    if (status === "running") {
+      if (await checkHealth()) {
+        state = "ready";
+        readySince = Date.now();
+        recordActivity();
+        lastError = null;
+      } else {
+        // 实例在跑但 HeyGem 尚未就绪：按启动中处理，不触发看门狗
+        state = "starting";
+        readySince = null;
+      }
+    } else if (status === "shutdown") {
+      state = "stopped";
+      readySince = null;
+    }
+    // starting/stopping/unknown：保持当前状态（默认 stopped）
+  } catch (err) {
+    lastError = err instanceof Error ? err.message : String(err);
+    console.error("[instance-service] 启动对账失败，保持 stopped:", err);
+  }
 }
 
 export async function assertReady(): Promise<void> {
@@ -117,5 +152,6 @@ export function __resetForTests(): void {
   stopWatchdog();
   state = "stopped";
   lastActivity = null;
+  readySince = null;
   lastError = null;
 }

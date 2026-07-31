@@ -25,7 +25,7 @@ import { closeDb } from "../db/connection.js";
 import { migrateLegacyWorks } from "../db/migrate-legacy.js";
 import { recoverStuckJobs, startPublishCron } from "../services/publish-service.js";
 import { recoverStuckRenderJobs } from "../services/video-factory.js";
-import { startWatchdog, stopWatchdog } from "../services/instance-service.js";
+import { startWatchdog, stopWatchdog, reconcileInstance } from "../services/instance-service.js";
 import { reconcileWorkStates } from "../services/reconcile.js";
 import { registerAllPublishers } from "../services/publishers/factory.js";
 
@@ -208,6 +208,10 @@ export async function startServer(port: number): Promise<{ server: Server }> {
   await registerAllAdapters();
   startMetricsScheduler(config.analytics);
   startWatchdog();
+  // 启动对账：恢复重启前的实例状态，让看门狗继续计时；失败不阻塞启动
+  void reconcileInstance().catch((err) => {
+    console.error("[server] 实例状态对账失败:", err);
+  });
 
   // 8. Graceful shutdown: drain pending chat saves on SIGTERM/SIGINT
   const shutdown = async (signal: string) => {
