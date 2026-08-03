@@ -18,6 +18,120 @@
   let genPollTimer: ReturnType<typeof setInterval> | null = null;
   let genMessage = $state("");
 
+  // ── 模板要素（2026-08-03 要素化生成）──
+  let elLayout = $state<string>("");
+  let elPalette = $state<string>("ai_choice");
+  let elMotion = $state<string>("");
+  let elDecorations = $state<string[]>([]);
+  const LAYOUT_OPTIONS = [
+    { key: "", label: "让 AI 混搭" },
+    { key: "magazine_left", label: "左对齐杂志风" },
+    { key: "big_number", label: "居中大数字风" },
+    { key: "top_block", label: "顶部色块标题风" },
+    { key: "split_screen", label: "上下分屏风" },
+    { key: "card_stack", label: "卡片堆叠风" },
+    { key: "fullscreen_caption", label: "全屏字幕风" },
+  ];
+  const PALETTE_OPTIONS = [
+    { key: "ai_choice", label: "让 AI 发挥" },
+    { key: "tech_blue", label: "深蓝科技" },
+    { key: "warm_gold", label: "暖黑金" },
+    { key: "ink_green", label: "墨绿知识" },
+    { key: "deep_purple", label: "深紫洞察" },
+    { key: "minimal_white", label: "米白简约" },
+    { key: "mist_cyan", label: "雾蓝清爽" },
+  ];
+  const MOTION_OPTIONS = [
+    { key: "", label: "让 AI 混搭" },
+    { key: "none", label: "无动效" },
+    { key: "fade", label: "淡入" },
+    { key: "slide", label: "滑入" },
+    { key: "bounce", label: "弹性" },
+  ];
+  const DECORATION_OPTIONS = [
+    { key: "accent_bar", label: "顶部装饰条" },
+    { key: "serial_number", label: "序号" },
+    { key: "divider", label: "分隔线" },
+    { key: "texture", label: "底纹" },
+    { key: "corner_marks", label: "角标" },
+  ];
+  function toggleDecoration(key: string) {
+    elDecorations = elDecorations.includes(key)
+      ? elDecorations.filter((k) => k !== key)
+      : [...elDecorations, key];
+  }
+  function currentElements() {
+    return {
+      contentForm: genContentForm,
+      layout: elLayout || undefined,
+      palette: elPalette,
+      motion: elMotion || undefined,
+      decorations: elDecorations,
+      freeText: genReference || undefined,
+    };
+  }
+
+  // ── 调研学习 ──
+  let researching = $state(false);
+  let researchMessage = $state("");
+  let researchPollTimer: ReturnType<typeof setInterval> | null = null;
+  let skillCount = $state(0);
+
+  async function loadSkillCount() {
+    try {
+      const res = await fetch("/api/templates/skills");
+      if (res.ok) {
+        const data = await res.json();
+        skillCount = (data.skills ?? []).length;
+      }
+    } catch {}
+  }
+
+  async function researchTemplates() {
+    researching = true;
+    researchMessage = "调研学习中... AI 正在全网调研优秀模板设计（约 2-5 分钟），可切换页面";
+    try {
+      const res = await fetch("/api/templates/research", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ elements: currentElements() }),
+      });
+      const data = await res.json();
+      if (!data.jobId) {
+        alert(data.error ?? "调研启动失败");
+        researching = false;
+        researchMessage = "";
+        return;
+      }
+      startResearchPolling(data.jobId);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
+      researching = false;
+      researchMessage = "";
+    }
+  }
+
+  function startResearchPolling(jobId: string) {
+    researchPollTimer = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/templates/research/status/${jobId}`);
+        const data = await res.json();
+        if (data.status === "done") {
+          if (researchPollTimer) { clearInterval(researchPollTimer); researchPollTimer = null; }
+          researching = false;
+          researchMessage = `调研完成！新增 ${data.added} 条设计技能，之后生成模板会自动吸收这些经验`;
+          await loadSkillCount();
+          setTimeout(() => { researchMessage = ""; }, 8000);
+        } else if (data.status === "error") {
+          if (researchPollTimer) { clearInterval(researchPollTimer); researchPollTimer = null; }
+          researching = false;
+          researchMessage = "";
+          alert(data.error ?? "调研失败");
+        }
+      } catch {}
+    }, 5000);
+  }
+
   /** preview_url 可能是 /preview-file 视频端点（img 无法渲染），仅图片扩展名可直接用 <img> */
   const isImageUrl = (u?: string) => !!u && /\.(png|jpe?g|webp|gif)(\?|$)/i.test(u);
 
@@ -28,7 +142,7 @@
       const res = await fetch("/api/templates/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ count: genCount, contentForm: genContentForm, reference: genReference }),
+        body: JSON.stringify({ count: genCount, contentForm: genContentForm, reference: genReference, elements: currentElements() }),
       });
       const data = await res.json();
       if (!data.jobId) {
@@ -130,6 +244,7 @@
   onMount(async () => {
     await load();
     await autoGeneratePosters();
+    loadSkillCount();
     // Check if there's a running generation job (page re-entry after switching)
     try {
       const res = await fetch("/api/templates/generate/active");
@@ -140,6 +255,18 @@
           genJobId = data.jobId;
           genMessage = `生成中... (已恢复任务 ${data.jobId.slice(-6)})`;
           startPolling(data.jobId);
+        }
+      }
+    } catch {}
+    // 恢复进行中的调研任务
+    try {
+      const res = await fetch("/api/templates/research/active");
+      if (res.ok) {
+        const data = await res.json();
+        if (data.active && data.jobId) {
+          researching = true;
+          researchMessage = "调研学习中... (已恢复任务)";
+          startResearchPolling(data.jobId);
         }
       }
     } catch {}
@@ -194,24 +321,65 @@
         </select>
         <button class="btn-primary" onclick={load}>{t("refresh")}</button>
       </div>
-      <div class="gen-row">
-        <input type="text" bind:value={genReference} placeholder="参考风格（可选，如 知识科普 蓝白配色）" class="gen-input" />
-        <select bind:value={genContentForm}>
-          <option value="knowledge">知识传播</option>
-          <option value="hot_comment">热点评论</option>
-          <option value="industry">行业动态</option>
-          <option value="insight">深度洞察</option>
-        </select>
-        <select bind:value={genCount}>
-          <option value="3">3个</option>
-          <option value="5">5个</option>
-          <option value="8">8个</option>
-          <option value="10">10个</option>
-        </select>
-        <button class="btn-primary gen-btn" disabled={generating} onclick={generateTemplates}>{generating ? "生成中..." : "AI 生成模板"}</button>
+      <div class="gen-panel">
+        <div class="gen-row">
+          <label class="el-label">内容形式
+            <select bind:value={genContentForm}>
+              <option value="knowledge">知识卡片</option>
+              <option value="hot_comment">热点评论</option>
+              <option value="industry">行业动态</option>
+              <option value="insight">深度洞察</option>
+              <option value="data_show">数据展示</option>
+              <option value="listicle">清单盘点</option>
+            </select>
+          </label>
+          <label class="el-label">版式结构
+            <select bind:value={elLayout}>
+              {#each LAYOUT_OPTIONS as o}<option value={o.key}>{o.label}</option>{/each}
+            </select>
+          </label>
+          <label class="el-label">配色方案
+            <select bind:value={elPalette}>
+              {#each PALETTE_OPTIONS as o}<option value={o.key}>{o.label}</option>{/each}
+            </select>
+          </label>
+          <label class="el-label">动效节奏
+            <select bind:value={elMotion}>
+              {#each MOTION_OPTIONS as o}<option value={o.key}>{o.label}</option>{/each}
+            </select>
+          </label>
+          <label class="el-label">数量
+            <select bind:value={genCount}>
+              <option value={3}>3个</option>
+              <option value={5}>5个</option>
+              <option value={8}>8个</option>
+              <option value={10}>10个</option>
+            </select>
+          </label>
+        </div>
+        <div class="gen-row deco-row">
+          <span class="el-label-text">装饰元素</span>
+          {#each DECORATION_OPTIONS as d}
+            <button
+              class="deco-chip"
+              class:active={elDecorations.includes(d.key)}
+              onclick={() => toggleDecoration(d.key)}
+            >{d.label}</button>
+          {/each}
+        </div>
+        <div class="gen-row">
+          <input type="text" bind:value={genReference} placeholder="还有别的想法？用自然语言补充（可留空），如「要像 Apple 发布会那种极简感」" class="gen-input" />
+          <button class="btn-primary gen-btn" disabled={generating} onclick={generateTemplates}>{generating ? "生成中..." : "AI 生成模板"}</button>
+          <button class="btn-research" disabled={researching} onclick={researchTemplates} title="按当前要素选择调研全网优秀模板，沉淀为设计技能，之后生成自动吸收">
+            {researching ? "调研中..." : `🔍 调研学习${skillCount > 0 ? `（已存 ${skillCount} 技能）` : ""}`}
+          </button>
+        </div>
       </div>
       {#if genMessage}
         <p class="gen-message">{genMessage}</p>
+      {/if}
+      {#if researchMessage}
+        <p class="gen-message research">{researchMessage}</p>
       {/if}
     </header>
 
@@ -239,7 +407,7 @@
               <span class="form">{tpl.contentForm ?? t("formGeneric")}</span>
             </div>
             <h3>{tpl.name}</h3>
-            <p class="dims">{tpl.canvas.width} x {tpl.canvas.height} @ {tpl.canvas.fps}fps</p>
+            <p class="dims">{tpl.canvas.width} x {tpl.canvas.height} @ {tpl.canvas.fps}fps{#if tpl.usageCount} · 已用 {tpl.usageCount} 次{/if}</p>
             <div class="actions">
               <button class="btn-sm" disabled={renderingId === tpl.id} onclick={() => preview(tpl)}>
                 {renderingId === tpl.id ? t("rendering") : t("preview")}
@@ -285,6 +453,17 @@
   .btn-primary { background: var(--accent); color: var(--accent-text); border: none; border-radius: 4px; padding: 0.5rem 0.9rem; cursor: pointer; }
   .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
   .gen-row { display: flex; gap: 0.5rem; align-items: center; margin-top: 0.75rem; flex-wrap: wrap; }
+  .gen-panel { margin-top: 0.75rem; padding: 0.75rem; background: var(--bg-inset); border: 1px solid var(--border); border-radius: 6px; }
+  .gen-panel .gen-row:first-child { margin-top: 0; }
+  .el-label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.72rem; color: var(--text-dim); }
+  .el-label select { min-width: 110px; }
+  .el-label-text { font-size: 0.72rem; color: var(--text-dim); align-self: center; }
+  .deco-row { margin-top: 0.5rem; }
+  .deco-chip { padding: 0.3rem 0.7rem; border-radius: 999px; border: 1px solid var(--border); background: transparent; color: var(--text-secondary); font-size: 0.78rem; cursor: pointer; }
+  .deco-chip.active { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  .btn-research { padding: 0.5rem 0.9rem; border-radius: 4px; border: 1px solid var(--accent); background: transparent; color: var(--accent); font-weight: 600; cursor: pointer; }
+  .btn-research:disabled { opacity: 0.5; cursor: not-allowed; }
+  .gen-message.research { border-left: 3px solid var(--accent); }
   .gen-input { flex: 1; min-width: 200px; }
   .gen-btn { background: var(--accent-gradient); }
   .gen-message { font-size: 0.82rem; color: var(--text-secondary); margin: 0.5rem 0 0; padding: 0.5rem 0.75rem; background: var(--accent-soft, rgba(0,0,0,0.05)); border-radius: 4px; }

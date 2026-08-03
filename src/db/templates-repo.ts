@@ -29,6 +29,7 @@ export interface DbTemplate {
   transitions: Record<string, unknown>[];
   preview_url?: string;
   status: TemplateStatus;
+  usage_count: number;
   created_at: string;
   updated_at: string;
 }
@@ -93,12 +94,13 @@ function rowToTemplate(row: Record<string, unknown>): DbTemplate {
     transitions: fromJson(row.transitions as string) as Record<string, unknown>[],
     preview_url: (row.preview_url as string) || undefined,
     status: row.status as TemplateStatus,
+    usage_count: (row.usage_count as number) ?? 0,
     created_at: row.created_at as string,
     updated_at: row.updated_at as string,
   };
 }
 
-export function createTemplate(template: Omit<DbTemplate, "created_at" | "updated_at">): DbTemplate {
+export function createTemplate(template: Omit<DbTemplate, "created_at" | "updated_at" | "usage_count"> & { usage_count?: number }): DbTemplate {
   const db = getDb();
   const now = new Date().toISOString();
   db.prepare(
@@ -119,7 +121,7 @@ export function createTemplate(template: Omit<DbTemplate, "created_at" | "update
     now,
     now
   );
-  return { ...template, created_at: now, updated_at: now };
+  return { ...template, usage_count: template.usage_count ?? 0, created_at: now, updated_at: now };
 }
 
 export function getTemplate(id: string): DbTemplate | undefined {
@@ -173,4 +175,19 @@ export function deleteTemplate(id: string): boolean {
   const db = getDb();
   const result = db.prepare("DELETE FROM templates WHERE id = ?").run(id);
   return result.changes > 0;
+}
+
+/** 渲染使用一次模板即 +1（自进化信号：高频模板的要素组合会在生成时被优先参考） */
+export function incrementTemplateUsage(id: string): void {
+  const db = getDb();
+  db.prepare("UPDATE templates SET usage_count = usage_count + 1 WHERE id = ?").run(id);
+}
+
+/** 使用频次最高的模板（生成 prompt 的偏好信号来源） */
+export function listTopUsedTemplates(limit = 5): DbTemplate[] {
+  const db = getDb();
+  const rows = db.prepare(
+    "SELECT * FROM templates WHERE usage_count > 0 ORDER BY usage_count DESC, updated_at DESC LIMIT ?"
+  ).all(limit) as Record<string, unknown>[];
+  return rows.map(rowToTemplate);
 }

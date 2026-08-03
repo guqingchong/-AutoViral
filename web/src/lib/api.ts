@@ -718,6 +718,8 @@ export interface Template {
   /** poster.png 静态图 URL（存在时由后端返回），模板卡片优先用它展示 */
   posterUrl?: string;
   status: string;
+  /** 模板被渲染使用的次数（自进化偏好信号） */
+  usageCount?: number;
   createdAt: string;
   updatedAt: string;
 }
