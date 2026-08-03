@@ -37,6 +37,12 @@ import {
 } from "../services/digital-human.js";
 import { getInstanceView } from "../services/instance-service.js";
 import {
+  runDigitalHumanForWork,
+  runBatchDigitalHuman,
+  getBatchState,
+  listPendingWorks,
+} from "../services/digital-human-pipeline.js";
+import {
   uploadAsset as uploadLibraryAsset,
   listAssets as listLibraryAssets,
   updateAsset as updateLibraryAsset,
@@ -1292,6 +1298,8 @@ async function startWorkSession(id: string, extraInstruction?: string): Promise<
 
   const hasTemplate = !!work.templateId;
   const hasDigitalHuman = !!work.digitalHumanId;
+  // 已有 done 数字人任务 = 口播已渲染（可能来自批量渲染阶段），素材准备步骤直接取现成产物
+  const digitalHumanDone = hasDigitalHuman && dhJobsRepo.listJobs(id).some((j) => j.status === "done");
 
   const prompt = [
     `你是一个内容创作助手。你正在帮助用户创作: "${work.title}" (类型: ${work.type})。`,
@@ -1299,6 +1307,11 @@ async function startWorkSession(id: string, extraInstruction?: string): Promise<
     work.topicHint ? `选题方向: ${work.topicHint}` : "",
     hasTemplate ? `使用模板: ${work.templateId}` : "",
     hasDigitalHuman ? `使用数字人: ${work.digitalHumanId}` : "",
+    digitalHumanDone
+      ? `数字人口播已渲染完成（见数字人任务列表），素材准备步骤直接使用，无需重复渲染`
+      : hasDigitalHuman
+        ? `到达素材准备步骤时，调用 POST /api/works/${id}/digital-human/run 渲染数字人口播，然后轮询 GET /api/digital-humans/jobs/:jobId 直至 done`
+        : "",
     toneInjection,
     // 打回重做的审核意见随会话启动注入（打回 → 会话死亡 → 重建的场景下
     // 意见不丢失，agent 始终知道要改什么 —— 2026-07-21）
@@ -3119,6 +3132,39 @@ apiRoutes.get("/api/digital-humans/jobs/:id/output", async (c) => {
   } catch {
     return c.json({ error: "Output not found" }, 404);
   }
+});
+
+// POST /api/works/:id/digital-human/run — 单作品口播 TTS + 数字人渲染（只提交不等待）
+apiRoutes.post("/api/works/:id/digital-human/run", async (c) => {
+  const id = c.req.param("id");
+  try {
+    const result = await runDigitalHumanForWork(id);
+    return c.json(result, result.skipped ? 200 : 201);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Digital human run failed";
+    // 实例未就绪属于状态冲突，返回 409 让前端引导开机
+    if (message.includes("开机")) return c.json({ error: message }, 409);
+    return c.json({ error: message }, 400);
+  }
+});
+
+// GET /api/digital-humans/batch/pending — 待批量渲染的作品列表
+apiRoutes.get("/api/digital-humans/batch/pending", async (c) => {
+  const works = await listPendingWorks();
+  return c.json({ count: works.length, works });
+});
+
+// POST /api/digital-humans/batch/run — 触发批量渲染（fire-and-forget，状态走 batch/status 轮询）
+apiRoutes.post("/api/digital-humans/batch/run", async (c) => {
+  runBatchDigitalHuman().catch((err) => {
+    log("error", "api", "digital_human_batch_run_error", "-", { error: err instanceof Error ? err.message : String(err) });
+  });
+  return c.json(getBatchState(), 202);
+});
+
+// GET /api/digital-humans/batch/status — 批量渲染进度
+apiRoutes.get("/api/digital-humans/batch/status", async (c) => {
+  return c.json(getBatchState());
 });
 
 // ---------------------------------------------------------------------------

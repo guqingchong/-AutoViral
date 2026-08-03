@@ -534,6 +534,37 @@ export async function regenerateDigitalHumanJob(id: string): Promise<DigitalHuma
 }
 
 // ---------------------------------------------------------------------------
+// Digital Human Batch Render
+// ---------------------------------------------------------------------------
+
+export interface DigitalHumanBatchState {
+  running: boolean;
+  total: number;
+  submitted: number;
+  done: number;
+  failed: number;
+  startedAt: string | null;
+  errors: Array<{ workId: string; error: string }>;
+}
+
+export interface PendingDigitalHumanWork {
+  id: string;
+  title: string;
+}
+
+export async function fetchDigitalHumanBatchPending(): Promise<{ count: number; works: PendingDigitalHumanWork[] }> {
+  return get<{ count: number; works: PendingDigitalHumanWork[] }>("/api/digital-humans/batch/pending");
+}
+
+export async function runDigitalHumanBatch(): Promise<DigitalHumanBatchState> {
+  return post<DigitalHumanBatchState>("/api/digital-humans/batch/run", {});
+}
+
+export async function fetchDigitalHumanBatchStatus(): Promise<DigitalHumanBatchState> {
+  return get<DigitalHumanBatchState>("/api/digital-humans/batch/status");
+}
+
+// ---------------------------------------------------------------------------
 // Asset Library API
 // ---------------------------------------------------------------------------
 
