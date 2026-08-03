@@ -819,12 +819,38 @@ apiRoutes.get("/api/shared-assets/:category/:file", async (c) => {
     const data = await readFile(filePath);
     const mime = getMimeType(filePath);
     const isMedia = mime.startsWith("image/") || mime.startsWith("audio/") || mime.startsWith("video/");
+    const baseHeaders: Record<string, string> = {
+      "Content-Type": mime,
+      "X-Content-Type-Options": "nosniff",
+      "Content-Disposition": isMedia ? "inline" : `attachment; filename="${encodeURIComponent(sanitizeFilename(file))}"`,
+    };
+    // HTTP Range 支持：视频/音频预览可拖动进度条、分段加载（否则浏览器需整文件下载）
+    const range = c.req.header("range");
+    if (isMedia && range) {
+      const match = range.match(/bytes=(\d*)-(\d*)/);
+      if (match && (match[1] || match[2])) {
+        const total = data.length;
+        const start = match[1] ? parseInt(match[1], 10) : Math.max(0, total - parseInt(match[2], 10));
+        const end = match[1] && match[2] ? Math.min(parseInt(match[2], 10), total - 1) : total - 1;
+        if (start >= total || start > end) {
+          return new Response(null, { status: 416, headers: { "Content-Range": `bytes */${total}` } });
+        }
+        return new Response(data.subarray(start, end + 1), {
+          status: 206,
+          headers: {
+            ...baseHeaders,
+            "Content-Range": `bytes ${start}-${end}/${total}`,
+            "Accept-Ranges": "bytes",
+            "Content-Length": String(end - start + 1),
+          },
+        });
+      }
+    }
     return new Response(data, {
       headers: {
-        "Content-Type": mime,
+        ...baseHeaders,
+        ...(isMedia ? { "Accept-Ranges": "bytes" } : {}),
         "Content-Length": String(data.length),
-        "X-Content-Type-Options": "nosniff",
-        "Content-Disposition": isMedia ? "inline" : `attachment; filename="${encodeURIComponent(sanitizeFilename(file))}"`,
       },
     });
   } catch (e: any) {

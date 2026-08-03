@@ -38,6 +38,25 @@
   const sources: AssetLibraryItem["source"][] = ["upload", "pexels", "pixabay", "unsplash", "self-generated", "unknown"];
   const licenses: AssetLibraryItem["license"][] = ["cc0", "commercial", "needs-review", "unknown"];
 
+  // 下拉选项/徽标中文标签（值仍为英文枚举，仅显示层翻译）
+  const categoryLabels: Record<string, string> = {
+    characters: "人物形象", scenes: "场景素材", music: "音乐音效",
+    templates: "模板素材", branding: "品牌标识", general: "通用素材",
+  };
+  const sourceLabels: Record<string, string> = {
+    upload: "本地上传", pexels: "Pexels", pixabay: "Pixabay",
+    unsplash: "Unsplash", "self-generated": "AI 生成", unknown: "未知来源",
+  };
+  const licenseLabels: Record<string, string> = {
+    cc0: "CC0 公有领域", commercial: "可商用", "needs-review": "待审核", unknown: "未知授权",
+  };
+  const typeLabels: Record<string, string> = {
+    image: "图片", video: "视频", audio: "音频", font: "字体", other: "其他",
+  };
+  const complianceLabels: Record<string, string> = {
+    passed: "合规通过", pending: "待审核", failed: "不合规",
+  };
+
   onMount(() => {
     const unsub = subscribe(() => { lang = getLanguage(); });
     load();
@@ -178,8 +197,8 @@
         <option value="image">仅图片</option>
         <option value="video">仅视频</option>
       </select>
-      <select bind:value={downloadCategory}>
-        {#each categories as c}<option value={c}>{c}</option>{/each}
+      <select bind:value={downloadCategory} title="下载到哪个分类">
+        {#each categories as c}<option value={c}>{categoryLabels[c] ?? c}</option>{/each}
       </select>
       <button class="btn-primary" disabled={searching} onclick={searchStock}>{searching ? "搜索中..." : "搜索"}</button>
     </div>
@@ -224,14 +243,14 @@
     <h2>{tt("uploadAsset")}</h2>
     <div class="row">
       <input type="file" bind:files={uploadFiles} />
-      <select bind:value={category}>
-        {#each categories as c}<option value={c}>{c}</option>{/each}
+      <select bind:value={category} title="素材分类">
+        {#each categories as c}<option value={c}>{categoryLabels[c] ?? c}</option>{/each}
       </select>
-      <select bind:value={source}>
-        {#each sources as s}<option value={s}>{s}</option>{/each}
+      <select bind:value={source} title="素材来源">
+        {#each sources as s}<option value={s}>{sourceLabels[s] ?? s}</option>{/each}
       </select>
-      <select bind:value={license}>
-        {#each licenses as l}<option value={l}>{l}</option>{/each}
+      <select bind:value={license} title="授权类型">
+        {#each licenses as l}<option value={l}>{licenseLabels[l] ?? l}</option>{/each}
       </select>
       <input type="text" bind:value={tags} placeholder={tt("tags")} />
       <button class="btn-primary" disabled={busy} onclick={handleUpload}>{tt("uploadAsset")}</button>
@@ -242,22 +261,46 @@
     <h2>{tt("filters")}</h2>
     <select bind:value={filterCategory} onchange={load}>
       <option value="">{tt("filterAll")}</option>
-      {#each categories as c}<option value={c}>{c}</option>{/each}
+      {#each categories as c}<option value={c}>{categoryLabels[c] ?? c}</option>{/each}
     </select>
   </section>
 
-  <ul class="list">
+  <div class="asset-grid">
     {#each assets as a}
-      <li class="asset-row">
-        <span class="name">{a.name}</span>
-        <span class="badge">{a.type}</span>
-        <span class="badge compliance-{a.compliance_status}">{a.compliance_status}</span>
-        <span class="meta">{(a.tags || []).join(", ")}</span>
-        <button class="btn-sm" onclick={() => handleRecheck(a.id)}>{tt("recheck")}</button>
-        <button class="btn-sm" onclick={() => handleDelete(a.id)}>{tt("delete")}</button>
-      </li>
+      <div class="asset-card">
+        <div class="asset-preview">
+          {#if a.type === "image"}
+            <img src={a.url} alt={a.name} class="preview-media" loading="lazy" />
+          {:else if a.type === "video"}
+            <video src={a.url} class="preview-media" controls preload="metadata"></video>
+          {:else if a.type === "audio"}
+            <div class="preview-audio">
+              <span class="preview-icon">🎵</span>
+              <audio src={a.url} controls preload="metadata"></audio>
+            </div>
+          {:else}
+            <div class="preview-placeholder">
+              <span class="preview-icon">{a.type === "font" ? "🔤" : "📄"}</span>
+              <span class="preview-type">{typeLabels[a.type] ?? a.type}</span>
+            </div>
+          {/if}
+        </div>
+        <div class="asset-info">
+          <span class="name" title={a.name}>{a.name}</span>
+          <div class="badge-row">
+            <span class="badge">{typeLabels[a.type] ?? a.type}</span>
+            <span class="badge">{categoryLabels[a.category] ?? a.category}</span>
+            <span class="badge compliance-{a.compliance_status}">{complianceLabels[a.compliance_status] ?? a.compliance_status}</span>
+          </div>
+          {#if (a.tags || []).length > 0}<span class="meta">{(a.tags || []).join(", ")}</span>{/if}
+          <div class="asset-actions">
+            <button class="btn-sm" onclick={() => handleRecheck(a.id)}>{tt("recheck")}</button>
+            <button class="btn-sm" onclick={() => handleDelete(a.id)}>{tt("delete")}</button>
+          </div>
+        </div>
+      </div>
     {/each}
-  </ul>
+  </div>
 </div>
 
 <style>
@@ -275,7 +318,19 @@
   .hint { font-size: 0.75rem; color: var(--text-dim); margin: 0.5rem 0 0; }
   .list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 0.5rem; }
   .asset-row { display: flex; align-items: center; gap: 0.75rem; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: 4px; padding: 0.6rem 0.8rem; }
-  .name { font-weight: 600; flex: 1; }
+  .asset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 0.75rem; }
+  .asset-card { background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: 4px; overflow: hidden; display: flex; flex-direction: column; }
+  .asset-preview { width: 100%; height: 150px; background: var(--bg-inset); display: flex; align-items: center; justify-content: center; overflow: hidden; }
+  .preview-media { width: 100%; height: 100%; object-fit: contain; background: #000; }
+  .preview-audio { display: flex; flex-direction: column; align-items: center; gap: 0.5rem; padding: 0.5rem; width: 100%; }
+  .preview-audio audio { width: 90%; height: 32px; }
+  .preview-placeholder { display: flex; flex-direction: column; align-items: center; gap: 0.25rem; color: var(--text-dim); }
+  .preview-icon { font-size: 2rem; }
+  .preview-type { font-size: 0.75rem; }
+  .asset-info { padding: 0.5rem 0.6rem; display: flex; flex-direction: column; gap: 0.35rem; }
+  .badge-row { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+  .asset-actions { display: flex; gap: 0.4rem; margin-top: 0.15rem; }
+  .name { font-weight: 600; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .badge { text-transform: uppercase; font-size: var(--size-xs); background: var(--accent-soft); padding: 0.15rem 0.4rem; border-radius: 4px; }
   .compliance-passed { background: var(--success-soft); color: var(--success); }
   .compliance-pending { background: rgba(245, 158, 11, 0.1); color: var(--state-running); }
