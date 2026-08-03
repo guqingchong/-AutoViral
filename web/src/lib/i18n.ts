@@ -263,6 +263,13 @@ const translations: Record<Language, Record<string, string>> = {
     statusPending: "Pending",
     statusRunning: "Running",
     statusFailed: "Failed",
+    batchRender: "Batch Render",
+    batchPendingCount: "{n} works pending render",
+    noPendingWorks: "No works pending render",
+    startBatchRender: "Start Batch Render",
+    batchRunning: "Batch render running…",
+    batchProgress: "Submitted {submitted}/{total}, done {done}, failed {failed}",
+    batchFinished: "Batch finished: {done} done, {failed} failed",
 
     // Asset Library
     assetLibraryTitle: "Asset Library",
@@ -720,6 +727,13 @@ const translations: Record<Language, Record<string, string>> = {
     statusPending: "待处理",
     statusRunning: "进行中",
     statusFailed: "失败",
+    batchRender: "批量渲染",
+    batchPendingCount: "待渲染 {n} 条作品",
+    noPendingWorks: "暂无待渲染作品",
+    startBatchRender: "开始批量渲染",
+    batchRunning: "批量渲染进行中…",
+    batchProgress: "已提交 {submitted}/共 {total} 条，完成 {done}，失败 {failed}",
+    batchFinished: "批量渲染结束：完成 {done}，失败 {failed}",
 
     // 素材库
     assetLibraryTitle: "合规素材库",

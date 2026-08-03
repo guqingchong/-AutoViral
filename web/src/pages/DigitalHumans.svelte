@@ -4,7 +4,9 @@
     fetchAvatars, uploadAvatar, deleteAvatarApi, fetchDigitalHumanJobs,
     submitDigitalHumanJob, refreshDigitalHumanJob, deleteDigitalHumanJob,
     regenerateDigitalHumanJob, fetchInstanceStatus,
+    fetchDigitalHumanBatchPending, runDigitalHumanBatch, fetchDigitalHumanBatchStatus,
     ApiError, type Avatar, type DigitalHumanJob, type InstanceView,
+    type DigitalHumanBatchState,
   } from "../lib/api.js";
   import { t, getLanguage, subscribe } from "../lib/i18n.js";
 
@@ -18,13 +20,18 @@
   let selectedAvatarId = $state("");
   let busy = $state(false);
   let message = $state("");
+  let pendingCount = $state(0);
+  let batch = $state<DigitalHumanBatchState | null>(null);
 
   onMount(() => {
     const unsub = subscribe(() => { lang = getLanguage(); });
     load();
     loadInstance();
+    loadPending();
+    pollBatch();
     const timer = setInterval(() => { loadInstance(); }, 10000);
-    return () => { unsub(); clearInterval(timer); };
+    const batchTimer = setInterval(() => { pollBatch(); }, 5000);
+    return () => { unsub(); clearInterval(timer); clearInterval(batchTimer); };
   });
 
   function tt(key: string): string { void lang; return t(key); }
@@ -39,6 +46,38 @@
     try {
       instance = await fetchInstanceStatus();
     } catch { /* 状态拉取失败不打断页面 */ }
+  }
+
+  async function loadPending() {
+    try {
+      const data = await fetchDigitalHumanBatchPending();
+      pendingCount = data.count;
+    } catch { /* 待渲染计数拉取失败不打断页面 */ }
+  }
+
+  async function pollBatch() {
+    try {
+      const state = await fetchDigitalHumanBatchStatus();
+      const wasRunning = batch?.running ?? false;
+      batch = state;
+      if (wasRunning && !state.running) {
+        message = tt("batchFinished")
+          .replace("{done}", String(state.done))
+          .replace("{failed}", String(state.failed));
+        await load();
+        await loadPending();
+      }
+    } catch { /* 批量状态拉取失败不打断页面 */ }
+  }
+
+  async function handleBatchRun() {
+    try {
+      message = "";
+      batch = await runDigitalHumanBatch();
+      await loadPending();
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
   }
 
   function instanceStateLabel(state: InstanceView["state"]): string {
@@ -156,6 +195,35 @@
   </section>
 
   <section class="panel">
+    <h2>{tt("batchRender")}</h2>
+    <div class="row">
+      <span class="meta">
+        {pendingCount > 0 ? tt("batchPendingCount").replace("{n}", String(pendingCount)) : tt("noPendingWorks")}
+      </span>
+      <span class="spacer"></span>
+      <button class="btn-primary" disabled={pendingCount === 0 || (batch?.running ?? false)} onclick={handleBatchRun}>
+        {tt("startBatchRender")}
+      </button>
+    </div>
+    {#if batch && (batch.running || batch.total > 0)}
+      <p class="meta batch-progress">
+        {#if batch.running}{tt("batchRunning")} {/if}{tt("batchProgress")
+          .replace("{submitted}", String(batch.submitted))
+          .replace("{total}", String(batch.total))
+          .replace("{done}", String(batch.done))
+          .replace("{failed}", String(batch.failed))}
+      </p>
+      {#if batch.errors.length > 0}
+        <ul class="list">
+          {#each batch.errors as e}
+            <li class="error-text">{e.workId}: {e.error}</li>
+          {/each}
+        </ul>
+      {/if}
+    {/if}
+  </section>
+
+  <section class="panel">
     <h2>{tt("uploadAvatar")}</h2>
     <div class="row">
       <input type="text" bind:value={uploadName} placeholder={tt("avatarName")} />
@@ -258,4 +326,5 @@
   .hint a { color: var(--accent); }
   .idle-banner { font-size: var(--size-sm); color: #92600a; background: #fef3c7; border: 1px solid #f59e0b; border-radius: 4px; padding: 0.5rem 0.75rem; margin-top: 0.75rem; }
   .error-text { font-size: var(--size-sm); color: var(--error); margin-top: 0.5rem; }
+  .batch-progress { margin-top: 0.75rem; }
 </style>
