@@ -21,12 +21,14 @@
 
   // Stock search state
   let stockQuery = $state("");
+  let stockType = $state<"all" | "image" | "video">("all");
   let stockResults = $state<StockResultGroup[]>([]);
   let searching = $state(false);
   let downloadCategory = $state<AssetLibraryItem["category"]>("scenes");
 
   interface StockItem {
     provider: string; id: string; url: string; previewUrl?: string;
+    mediaType?: "image" | "video"; duration?: number;
     width?: number; height?: number; author?: string; description?: string;
     license?: string;
   }
@@ -88,7 +90,7 @@
     searching = true;
     message = "";
     try {
-      const res = await fetch(`/api/stock-assets/search?q=${encodeURIComponent(stockQuery)}`);
+      const res = await fetch(`/api/stock-assets/search?q=${encodeURIComponent(stockQuery)}&type=${stockType}`);
       const data = await res.json();
       if (data.error) {
         message = `搜索出错: ${data.error}`;
@@ -127,7 +129,8 @@
 
   async function downloadStock(item: StockItem) {
     busy = true;
-    message = `正在下载 ${item.provider} 素材...`;
+    const isVideo = item.mediaType === "video";
+    message = `正在下载 ${item.provider} ${isVideo ? "视频" : "图片"}素材...`;
     try {
       const res = await fetch("/api/stock-assets/download", {
         method: "POST",
@@ -135,11 +138,13 @@
         body: JSON.stringify({
           url: item.url,
           provider: item.provider,
+          mediaType: item.mediaType,
           category: downloadCategory,
-          name: `stock_${item.provider}_${item.id}.jpg`,
+          name: `stock_${item.provider}_${item.id}.${isVideo ? "mp4" : "jpg"}`,
           description: item.description,
           author: item.author,
           license: (item as any).license,
+          duration: item.duration,
         }),
       });
       if (!res.ok) {
@@ -168,12 +173,17 @@
     {/if}
     <div class="row">
       <input type="text" bind:value={stockQuery} placeholder="搜索关键词，如 海浪 城市 科技" class="search-input" onkeydown={(e) => e.key === "Enter" && searchStock()} />
+      <select bind:value={stockType} title="素材类型">
+        <option value="all">图片+视频</option>
+        <option value="image">仅图片</option>
+        <option value="video">仅视频</option>
+      </select>
       <select bind:value={downloadCategory}>
         {#each categories as c}<option value={c}>{c}</option>{/each}
       </select>
       <button class="btn-primary" disabled={searching} onclick={searchStock}>{searching ? "搜索中..." : "搜索"}</button>
     </div>
-    <p class="hint">Openverse（免费，无需 Key）默认可用。如需更多高质量素材，可在「设置」中配置 Pexels/Pixabay/Unsplash 免费 API Key。搜索结果可一键下载到本地素材库。</p>
+    <p class="hint">Pexels 的图片与视频共用同一个免费 Key。搜索结果可一键下载到本地素材库；视频工作流的「素材准备」步骤也会自动从这里检索。</p>
 
     {#if stockResults.length > 0}
       <div class="stock-results">
@@ -185,11 +195,19 @@
                 {#each group.items as item}
                   <div class="stock-card">
                     {#if item.previewUrl}
-                      <img src={item.previewUrl} alt={item.description ?? ""} class="stock-thumb" />
+                      <div class="stock-thumb-wrap">
+                        <img src={item.previewUrl} alt={item.description ?? ""} class="stock-thumb" />
+                        {#if item.mediaType === "video"}
+                          <span class="media-badge video">▶ 视频{item.duration ? ` ${Math.round(item.duration)}s` : ""}</span>
+                        {/if}
+                      </div>
+                    {:else if item.mediaType === "video"}
+                      <div class="stock-thumb-wrap"><span class="media-badge video">▶ 视频{item.duration ? ` ${Math.round(item.duration)}s` : ""}</span></div>
                     {/if}
                     <div class="stock-info">
                       <span class="stock-desc">{item.description ?? item.id}</span>
                       {#if item.author}<span class="stock-author">@{item.author}</span>{/if}
+                      {#if item.width && item.height}<span class="stock-author">{item.width}×{item.height}{item.height > item.width ? " 竖版" : ""}</span>{/if}
                       <button class="btn-sm download-btn" disabled={busy} onclick={() => downloadStock(item)}>下载</button>
                     </div>
                   </div>
@@ -270,6 +288,9 @@
   .stock-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 0.75rem; }
   .stock-card { background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: 4px; overflow: hidden; display: flex; flex-direction: column; }
   .stock-thumb { width: 100%; height: 120px; object-fit: cover; }
+  .stock-thumb-wrap { position: relative; min-height: 40px; }
+  .media-badge { position: absolute; top: 4px; left: 4px; font-size: 0.65rem; padding: 1px 6px; border-radius: 3px; background: rgba(0,0,0,0.65); color: #fff; }
+  .media-badge.video { background: rgba(30,100,220,0.85); }
   .stock-info { padding: 0.4rem; display: flex; flex-direction: column; gap: 0.25rem; }
   .stock-desc { font-size: 0.7rem; color: var(--text-secondary); line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
   .stock-author { font-size: 0.65rem; color: var(--text-dim); }
