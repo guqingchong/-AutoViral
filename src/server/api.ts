@@ -36,6 +36,9 @@ import {
   isValidAvatarId,
 } from "../services/digital-human.js";
 import { getInstanceView } from "../services/instance-service.js";
+import type { TemplateElements } from "../services/template-dna.js";
+import { researchTemplates } from "../services/template-research.js";
+import { listSkills, deleteSkill } from "../db/template-skills-repo.js";
 import {
   runDigitalHumanForWork,
   runBatchDigitalHuman,
@@ -3321,6 +3324,7 @@ function templateToApi(t: DbTemplate) {
     previewUrl: t.preview_url,
     posterUrl,
     status: t.status,
+    usageCount: t.usage_count ?? 0,
     createdAt: t.created_at,
     updatedAt: t.updated_at,
   };
@@ -3328,14 +3332,14 @@ function templateToApi(t: DbTemplate) {
 
 // POST /api/templates/generate - start async AI template generation (DB-backed, survives page switches)
 apiRoutes.post("/api/templates/generate", async (c) => {
-  const body = await c.req.json<{ reference?: string; count?: number; contentForm?: string }>().catch(() => ({ reference: undefined, count: undefined, contentForm: undefined }));
+  const body = await c.req.json<{ reference?: string; count?: number; contentForm?: string; elements?: TemplateElements }>().catch(() => ({ reference: undefined, count: undefined, contentForm: undefined, elements: undefined }));
   const jobId = "tplgen_" + Date.now();
   const count = body.count ?? 5;
 
   // Persist job to DB so it survives page switches / component unmounts
   try {
     const db = getDb();
-    db.prepare("INSERT INTO template_gen_jobs (id, status, count, generated) VALUES (?, 'running', ?, 0)").run(jobId, count);
+    db.prepare("INSERT INTO template_gen_jobs (id, status, count, generated, kind) VALUES (?, 'running', ?, 0, 'generate')").run(jobId, count);
   } catch {
     // If table doesn't exist yet (migration not run), fall back to in-memory
   }
@@ -3345,6 +3349,7 @@ apiRoutes.post("/api/templates/generate", async (c) => {
     reference: body.reference,
     count: body.count,
     contentForm: body.contentForm as "hot_comment" | "knowledge" | "industry" | "insight" | undefined,
+    elements: body.elements,
   })
     .then((templates) => {
       try {
@@ -3383,12 +3388,80 @@ apiRoutes.get("/api/templates/generate/active", async (c) => {
     // Template generation runs in batches of 3 (each ~4 min), so 10 templates can
     // legitimately take ~16 minutes.
     db.prepare("UPDATE template_gen_jobs SET status = 'error', error = 'Job timed out (no status update in 20 min)' WHERE status = 'running' AND created_at < datetime('now', '-20 minutes')").run();
-    const row = db.prepare("SELECT * FROM template_gen_jobs WHERE status = 'running' ORDER BY created_at DESC LIMIT 1").get() as Record<string, unknown> | undefined;
+    const row = db.prepare("SELECT * FROM template_gen_jobs WHERE status = 'running' AND kind = 'generate' ORDER BY created_at DESC LIMIT 1").get() as Record<string, unknown> | undefined;
     if (!row) return c.json({ active: false });
     return c.json({ active: true, jobId: row.id, count: row.count });
   } catch {
     return c.json({ active: false });
   }
+});
+
+// ---------------------------------------------------------------------------
+// 模板调研学习 + 技能库（2026-08-03 模板自进化）
+// ---------------------------------------------------------------------------
+
+// POST /api/templates/research - 按要素组合调研全网优秀模板，蒸馏技能入库（异步）
+apiRoutes.post("/api/templates/research", async (c) => {
+  const body = await c.req.json<{ elements?: TemplateElements }>().catch(() => ({} as { elements?: TemplateElements }));
+  const jobId = "tplresearch_" + Date.now();
+  try {
+    const db = getDb();
+    db.prepare("INSERT INTO template_gen_jobs (id, status, count, generated, kind) VALUES (?, 'running', 0, 0, 'research')").run(jobId);
+  } catch {}
+
+  researchTemplates(body.elements ?? {})
+    .then((result) => {
+      try {
+        const db = getDb();
+        db.prepare("UPDATE template_gen_jobs SET status = 'done', generated = ?, updated_at = datetime('now') WHERE id = ?").run(result.added, jobId);
+      } catch {}
+    })
+    .catch((err) => {
+      try {
+        const db = getDb();
+        db.prepare("UPDATE template_gen_jobs SET status = 'error', error = ?, updated_at = datetime('now') WHERE id = ?").run(err instanceof Error ? err.message : String(err), jobId);
+      } catch {}
+    });
+
+  return c.json({ jobId, status: "running", message: "模板调研学习已启动（约 2-5 分钟），可切换页面" });
+});
+
+// GET /api/templates/research/status/:jobId
+apiRoutes.get("/api/templates/research/status/:jobId", async (c) => {
+  const jobId = c.req.param("jobId");
+  try {
+    const db = getDb();
+    const row = db.prepare("SELECT * FROM template_gen_jobs WHERE id = ?").get(jobId) as Record<string, unknown> | undefined;
+    if (!row) return c.json({ error: "Job not found" }, 404);
+    return c.json({ jobId, status: row.status, added: row.generated, error: row.error });
+  } catch {
+    return c.json({ error: "Job tracking not available" }, 500);
+  }
+});
+
+// GET /api/templates/research/active
+apiRoutes.get("/api/templates/research/active", async (c) => {
+  try {
+    const db = getDb();
+    const row = db.prepare("SELECT * FROM template_gen_jobs WHERE status = 'running' AND kind = 'research' ORDER BY created_at DESC LIMIT 1").get() as Record<string, unknown> | undefined;
+    if (!row) return c.json({ active: false });
+    return c.json({ active: true, jobId: row.id });
+  } catch {
+    return c.json({ active: false });
+  }
+});
+
+// GET /api/templates/skills - 技能库列表（生成时自动注入的经验）
+apiRoutes.get("/api/templates/skills", async (c) => {
+  const skills = listSkills(undefined, 100);
+  return c.json({ skills });
+});
+
+// DELETE /api/templates/skills/:id - 删除一条技能
+apiRoutes.delete("/api/templates/skills/:id", async (c) => {
+  const id = Number(c.req.param("id"));
+  if (!Number.isInteger(id)) return c.json({ error: "Invalid skill id" }, 400);
+  return deleteSkill(id) ? c.json({ deleted: true }) : c.json({ error: "Skill not found" }, 404);
 });
 
 // GET /api/templates/:id/preview-file — stream the rendered 5s preview mp4

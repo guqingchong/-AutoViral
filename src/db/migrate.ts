@@ -565,6 +565,28 @@ ALTER TABLE works ADD COLUMN review_comment TEXT;
       UPDATE digital_human_jobs SET provider = 'heygem' WHERE provider IN ('chanjing', 'bailian');
     `,
   },
+  {
+    version: 15,
+    name: "template-evolution",
+    sql: `
+-- 模板使用频次（自进化信号：渲染一次 +1，生成时优先参考高频模板要素组合）
+ALTER TABLE templates ADD COLUMN usage_count INTEGER NOT NULL DEFAULT 0;
+
+-- 模板设计技能库：调研学习按钮蒸馏出的全网优秀模板设计经验，生成时注入 prompt
+CREATE TABLE IF NOT EXISTS template_skills (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  content_form TEXT,
+  elements TEXT NOT NULL DEFAULT '{}',
+  skill TEXT NOT NULL,
+  source TEXT,
+  use_count INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- 任务类型区分：generate（模板生成）/ research（调研学习）
+ALTER TABLE template_gen_jobs ADD COLUMN kind TEXT NOT NULL DEFAULT 'generate';
+`,
+  },
 ];
 
 export function migrate(): void {

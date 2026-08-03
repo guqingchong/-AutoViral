@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { getTemplate } from "../db/templates-repo.js";
+import { getTemplate, incrementTemplateUsage } from "../db/templates-repo.js";
 import { createRenderJob, updateRenderJob, getRenderJob, listRenderJobs } from "../db/render-jobs-repo.js";
 import { updateWork, getWork } from "../work-store.js";
 import { renderTimeline } from "../video/renderer.js";
@@ -67,6 +67,8 @@ export async function startRender(req: RenderRequest): Promise<RenderJobInfo> {
     status: "pending",
     progress: 0,
   });
+  // 使用频次 +1：模板自进化的偏好信号（生成时优先参考高频模板风格）
+  incrementTemplateUsage(req.templateId);
 
   // Run asynchronously; errors are handled inside runRenderLoop
   runRenderLoop(jobId, template, req, outputPath);

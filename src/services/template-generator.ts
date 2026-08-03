@@ -11,20 +11,25 @@ import { mkdir } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { dataDir } from "../config.js";
 import { runJsonPrompt } from "./llm-json.js";
-import { createTemplate, getTemplate, updateTemplate } from "../db/templates-repo.js";
+import { createTemplate, getTemplate, updateTemplate, listTopUsedTemplates } from "../db/templates-repo.js";
+import { listSkills, touchSkill } from "../db/template-skills-repo.js";
 import { renderTimeline } from "../video/renderer.js";
+import { buildElementsPrompt, GOLDEN_EXAMPLE, GOLDEN_EXAMPLE_NOTES, type TemplateElements } from "./template-dna.js";
+import { checkTemplateQuality } from "./template-quality.js";
 import type { DbTemplate, TemplateCanvas } from "../db/templates-repo.js";
 import type { Timeline, TimelineLayer } from "../video/types.js";
 
-const CONTENT_FORMS = ["hot_comment", "knowledge", "industry", "insight"] as const;
+const CONTENT_FORMS = ["hot_comment", "knowledge", "industry", "insight", "data_show", "listicle"] as const;
 
 export interface GenerateTemplatesInput {
-  /** Reference / theme hint for the generated templates */
+  /** Reference / theme hint for the generated templates（兼容旧调用，等价于 elements.freeText） */
   reference?: string;
   /** Number of templates to generate (default 5) */
   count?: number;
   /** Target content form */
   contentForm?: (typeof CONTENT_FORMS)[number];
+  /** 要素化设计需求（2026-08-03 模板库优化）：版式/配色/动效/装饰 + 自由描述 */
+  elements?: TemplateElements;
 }
 
 interface GeneratedTemplateRaw {
@@ -71,69 +76,69 @@ export async function generateTemplates(input: GenerateTemplatesInput = {}): Pro
 /** 单批生成（≤3 个模板，一次 LLM 调用） */
 async function generateTemplatesBatch(input: GenerateTemplatesInput = {}): Promise<DbTemplate[]> {
   const count = Math.min(Math.max(input.count ?? 5, 1), 10);
-  const form = input.contentForm ?? "knowledge";
+  const form = input.elements?.contentForm ?? input.contentForm ?? "knowledge";
+  const elements: TemplateElements = {
+    ...input.elements,
+    contentForm: form,
+    freeText: input.elements?.freeText ?? input.reference,
+  };
+
+  // 技能库：调研学习沉淀的设计经验，同内容形式优先（Phase C 自进化）
+  const skills = listSkills(form, 12);
+  const skillsSection = skills.length > 0
+    ? ["## 已调研验证的优秀模板经验（务必吸收）", ...skills.map((s, i) => `${i + 1}. ${s.skill}`), ""].join("\n")
+    : "";
+
+  // 使用统计：高频模板的要素组合是用户偏好的直接证据（Phase D 自进化）
+  const topUsed = listTopUsedTemplates(3);
+  const usageSection = topUsed.length > 0
+    ? ["## 用户偏好信号（这些模板被实际使用最多，向它们的风格靠拢）",
+        ...topUsed.map((t) => `- 「${t.name}」（${t.content_form ?? "通用"}，已用 ${t.usage_count} 次）`), ""].join("\n")
+    : "";
 
   const prompt = [
     "你是顶级短视频视觉设计师，为抖音/小红书知识类视频设计可复用的排版模板。",
-    `内容形式：${form}。生成 ${count} 个视觉风格明显不同的模板。`,
-    input.reference ? `参考方向：${input.reference}` : "",
+    `生成 ${count} 个符合下方设计需求的模板。`,
+    "",
+    "## 设计需求（由用户点选的要素组装，每条都必须满足）",
+    buildElementsPrompt(elements),
+    "",
+    skillsSection,
+    usageSection,
+    "## 黄金范例（这是「精品」的标准，感受它的结构密度与参数精度）",
+    "```json",
+    JSON.stringify(GOLDEN_EXAMPLE, null, 1),
+    "```",
+    "范例为何是精品：",
+    GOLDEN_EXAMPLE_NOTES,
+    "你的输出必须在排版纪律、色彩纪律、节奏感上达到同等水准；若需求指定了不同的版式/配色，做同水准的变换。",
     "",
     "## 硬性规则（违反将无法解析）",
     "1. 颜色一律使用 #RRGGBB 六位实色。禁止 rgba()/rgb() 函数、禁止半透明写法",
     "2. variables 必须是数组：[{name,type,default,label}]，禁止输出对象形式",
     "3. audio 和 transitions 一律输出空数组 []",
-    "4. 每个图层必须包含: id, type(shape|text), start, duration, position:{x,y}, size:{width,height}",
+    "4. 每个图层必须包含: id, type(shape|text), start, duration, position:{x,y}, size:{width,height}（text 层 size 可省）",
     "5. text 层必须有: content, fontSize, color, align(left|center)",
     "6. shape 层必须有: shape:\"rect\", fill, size",
     "7. canvas 固定: {width:1080, height:1920, fps:30, backgroundColor:背景色}",
-    "",
-    "## 设计系统",
-    "画布 1080x1920，左右安全边距 70px，内容区宽 940px。",
-    "配色方案（每个模板选一组，或自创同等水准的配色）：",
-    "- 深蓝科技: bg=#0B1B33, 卡片=#16283F, 强调=#4D8DFF, 主文=#FFFFFF, 次文=#9FB4D0",
-    "- 暖黑金: bg=#16130E, 卡片=#241F16, 强调=#F0B64C, 主文=#FFF7E8, 次文=#B8A88A",
-    "- 墨绿知识: bg=#0C1F17, 卡片=#173024, 强调=#3FD68F, 主文=#EFFFF5, 次文=#8FC7A8",
-    "- 深紫洞察: bg=#1A1030, 卡片=#271B45, 强调=#A98BFF, 主文=#F5F0FF, 次文=#B3A3D9",
-    "- 米白简约: bg=#F5F1E8, 卡片=#FFFFFF, 强调=#E85D4A, 主文=#241F16, 次文=#8A8070",
-    "- 雾蓝清爽: bg=#101820, 卡片=#1C2836, 强调=#5AC8D8, 主文=#FFFFFF, 次文=#8FA5B3",
-    "",
-    "## 排版结构（每个模板完整实现）",
-    "1. bg: 全屏背景 shape（fill=bg 色, position {x:0,y:0}, size 1080x1920, start 0, duration 10）",
-    "2. 顶部装饰条: shape, 宽 120-200px, 高 8-12px, 强调色, y≈64",
-    "3. 标签文字: 小号(22-26px)强调色, y≈96, 内容如「行业周报」「知识卡片」",
-    "4. 主标题: 56-72px 主文色, 左对齐, y≈170, 不超过 13 个字",
-    "5. 副标题: 28-34px 次文色, y≈270, 不超过 20 个字",
-    "6. 三张内容卡片，每张包含:",
-    "   - 卡片底 shape: 卡片色, x=70, 宽 940, 高 240-300",
-    "   - 左侧强调条 shape: 宽 8px, 高与卡片相同, 强调色, 与卡片同 x,y",
-    "   - 序号文字: 24-30px 强调色（如 01 / 02 / 03）",
-    "   - 卡片标题: 32-38px 主文色, 不超过 16 字, 用 {{cardN_title}} 变量",
-    "   - 卡片正文: 26-30px 次文色, 不超过 26 字, 用 {{cardN_body}} 变量",
-    "   - 三张卡片 y 坐标依次排开（如 420 / 760 / 1100）",
-    "7. 数据区: 大数字(80-96px 强调色, {{stat_value}}) + 说明小字(24-28px 次文色, {{stat_label}}), y≈1450",
-    "8. 底部 CTA: 强调色条 shape(宽 940 高 72, y≈1700) + CTA 文字(30px, 居中, {{cta_text}})",
-    "",
-    "## 动效（让模板有节奏感）",
-    "- bg、装饰条 start=0, duration=10",
-    "- 标题组 start=0.2；卡片组 start 依次为 0.5 / 0.8 / 1.1；数据区 start=1.4；CTA start=1.7",
-    "- 所有非 bg 图层 duration 补到 10 秒（如 start=0.5 则 duration=9.5）",
-    "- text 层附 animations: [{\"type\":\"slidein\",\"duration\":0.4,\"direction\":\"bottom\"}]",
+    "8. 左右安全边距 70px，最底元素下缘距画布底 ≥40px",
     "",
     "## 变量",
-    "把主题相关文字抽象为变量: topic, card1_title, card1_body, card2_title, card2_body, card3_title, card3_body, stat_value, stat_label, cta_text。",
+    "把主题相关文字抽象为变量（如 topic, card1_title, card1_body, stat_value, cta_text 等，按版式需要增减）。",
     "default 给出有质感的示例值，label 用中文说明。图层 content 用 {{变量名}} 引用。",
-    "",
-    "## 多样性要求",
-    "多个模板之间版式必须明显不同（左对齐杂志风 / 居中大数字风 / 顶部大色块标题风 / 上下分屏风等），不允许只换配色。",
+    "装饰性固定文字（如序号 01/02/03、栏目名）直接写死，不要做成变量。",
     "",
     '输出: {"templates":[{name,content_form,canvas,variables,layers,audio,transitions}]}',
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 
   const result = await runJsonPrompt<LlmTemplateResponse>(prompt, { timeoutMs: 300_000 });
+  if (skills.length > 0) for (const s of skills) touchSkill(s.id);
   const list = result.templates ?? [];
 
   const created: DbTemplate[] = [];
-  for (const raw of list.slice(0, count)) {
+  for (const raw0 of list.slice(0, count)) {
+    // Phase B：程序化质检 + LLM 自修复（最多 2 轮），把"丑模板"拦在入库前
+    const raw = await repairUntilClean(raw0, elements);
     const id = `tpl_${randomUUID().slice(0, 8)}`;
 
     // variables: LLM 有时返回对象 {"varName": "默认值"} 而非数组，统一转成数组
@@ -253,6 +258,48 @@ async function generateTemplatesBatch(input: GenerateTemplatesInput = {}): Promi
   }
 
   return created;
+}
+
+/**
+ * Phase B 质检自修复：对 LLM 产出的单个模板跑程序化设计规则检查，
+ * 有问题则连同问题清单让 LLM 定点修复，最多 2 轮；仍有残留问题也入库
+ * （问题会打进日志），避免一次质检误杀整批生成。
+ */
+async function repairUntilClean(raw: GeneratedTemplateRaw, elements: TemplateElements): Promise<GeneratedTemplateRaw> {
+  let current = raw;
+  for (let round = 1; round <= 2; round++) {
+    const issues = checkTemplateQuality(current as never);
+    if (issues.length === 0) return current;
+    console.warn(`[template-gen] quality issues (round ${round}) for "${current.name}": ${issues.map((i) => i.rule).join(", ")}`);
+    const repairPrompt = [
+      "你是短视频模板修复师。下面这个模板 JSON 未通过设计质检，请定点修复后原样返回完整 JSON。",
+      "只修复列出的问题，不得改动其他图层结构、变量命名和整体版式。",
+      "",
+      "## 设计需求（修复不得偏离）",
+      buildElementsPrompt(elements),
+      "",
+      "## 质检发现的问题",
+      ...issues.map((i, idx) => `${idx + 1}. ${i.message}`),
+      "",
+      "## 待修复的模板 JSON",
+      "```json",
+      JSON.stringify(current),
+      "```",
+      "",
+      '输出修复后的单个模板对象（不要包 templates 数组）: {name,content_form,canvas,variables,layers,audio,transitions}',
+    ].join("\n");
+    try {
+      current = await runJsonPrompt<GeneratedTemplateRaw>(repairPrompt, { timeoutMs: 180_000, maxAttempts: 2 });
+    } catch (err) {
+      console.warn(`[template-gen] repair round ${round} failed:`, err instanceof Error ? err.message : err);
+      break;
+    }
+  }
+  const remaining = checkTemplateQuality(current as never);
+  if (remaining.length > 0) {
+    console.warn(`[template-gen] "${current.name}" still has ${remaining.length} issues after repair, keeping anyway`);
+  }
+  return current;
 }
 
 /**
