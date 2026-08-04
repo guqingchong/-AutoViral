@@ -2884,8 +2884,10 @@ interface BatchConvertOptions {
   videoSource?: string;
   /** 素材搜索关键词（缺省用选题标题） */
   videoSearchQuery?: string;
-  /** 配音风格（MiniMax voice_id） */
+  /** 配音风格（MiniMax voice_id / 克隆音色 ID） */
   voiceStyle?: string;
+  /** 配音模式：克隆音色 | AI 音色 */
+  voiceMode?: "cloned" | "ai";
 }
 
 const CONTENT_FORM_LABELS: Record<string, string> = {
@@ -2916,7 +2918,10 @@ async function runBatchConvert(
     controlLines.push(`视频时长: 约${duration}秒`);
     if (body.contentForm) controlLines.push(`视频风格: ${CONTENT_FORM_LABELS[body.contentForm] ?? body.contentForm}`);
     if (body.videoSource) controlLines.push(`素材样式: ${body.videoSource === "ai-generate" ? "AI 生成素材" : "素材库搜索"}`);
-    if (body.voiceStyle) controlLines.push(`配音风格: 使用配音音色 voice_id="${body.voiceStyle}"（配音时必须使用该音色）`);
+    if (body.voiceStyle) {
+      const modeLabel = body.voiceMode === "cloned" ? "克隆真人音色" : "AI 合成音色";
+      controlLines.push(`配音风格: 使用${modeLabel} voice_id="${body.voiceStyle}"（配音时必须使用该音色，调用 /api/generate/audio 时 voice 参数传该值）`);
+    }
   }
 
   const processItem = async (item: BatchConvertItem): Promise<void> => {
@@ -2941,6 +2946,7 @@ async function runBatchConvert(
           topicHint: [topic.title, topic.description, `情绪：${topic.emotion_type}/${topic.emotion_subtype}`, `标签：${topic.tags.join(",")}`, ...controlLines].filter(Boolean).join("\n"),
           templateId: body.templateId,
           digitalHumanId: body.digitalHumanId,
+          voiceId: body.voiceStyle,
         });
         item.workId = work.id;
 
@@ -3033,6 +3039,7 @@ apiRoutes.post("/api/topics/batch-convert", async (c) => {
     videoSource?: string;
     videoSearchQuery?: string;
     voiceStyle?: string;
+    voiceMode?: "cloned" | "ai";
   }>().catch(() => ({ topicIds: [] } as any));
 
   if (!body.topicIds?.length) return c.json({ error: "topicIds is required" }, 400);

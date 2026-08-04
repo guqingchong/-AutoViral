@@ -101,7 +101,7 @@ async function getTtsProvider(): Promise<GenerateProvider> {
  * 单作品数字人口播渲染：TTS 生成口播音频 → 提交 HeyGem 渲染任务（只提交不等待）。
  * 已有 done 任务时直接取现成产物（流水线兜底，不重复渲染）。
  */
-export async function runDigitalHumanForWork(workId: string): Promise<{ jobId: string; skipped: boolean }> {
+export async function runDigitalHumanForWork(workId: string, opts?: { voice?: string }): Promise<{ jobId: string; skipped: boolean }> {
   const existingDone = jobsRepo.listJobs(workId).find((j) => j.status === "done");
   if (existingDone) return { jobId: existingDone.id, skipped: true };
 
@@ -114,8 +114,10 @@ export async function runDigitalHumanForWork(workId: string): Promise<{ jobId: s
   const narration = script ? extractNarration(script.content) : "";
   if (!narration) throw new Error("作品无脚本文案");
 
+  // 音色优先级：显式入参 > works.voice_id > undefined（provider 默认音色，向后兼容）
+  const voice = opts?.voice ?? work.voice_id;
   const tts = await getTtsProvider();
-  const audio = await tts.generateAudio!({ text: narration, workId, filename: "narration.mp3" });
+  const audio = await tts.generateAudio!({ text: narration, workId, filename: "narration.mp3", voice });
   if (!audio.success || !audio.assetPath) throw new Error(`TTS 合成失败：${audio.error ?? "未知错误"}`);
 
   const job = await submitJob({

@@ -26,6 +26,7 @@ export interface DbWork {
   article_id?: number;             // FK → articles.id
   script_id?: number;              // FK → scripts.id
   digital_human_id?: string;       // column exists since migration v2, type was missing
+  voice_id?: string;               // TTS 音色（MiniMax voice_id / 克隆音色 ID），缺省用 provider 默认音色
   cli_session_id?: string;
   account_id?: string;
   eval_session_ids?: Record<string, string>;

@@ -88,11 +88,12 @@ describe("digital-human-pipeline", () => {
     });
   }
 
-  function makeWork(id: string, avatarId?: string) {
+  function makeWork(id: string, avatarId?: string, voiceId?: string) {
     return worksRepo.createWork({
       id, title: `Work ${id}`, type: "short-video", status: "draft",
       platforms: ["douyin"], evaluation_mode: false, tags: [],
       digital_human_id: avatarId,
+      voice_id: voiceId,
       created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
     }, []);
   }
@@ -198,6 +199,31 @@ describe("digital-human-pipeline", () => {
       const job = jobsRepo.getJob(result.jobId);
       expect(job?.work_id).toBe("w1");
       expect(job?.audio_path).toBe(join(dir, "works", "w1", "assets", "audio", "narration.mp3"));
+    });
+
+    it("TTS 使用 work.voice_id 指定的音色", async () => {
+      makeAvatar("av1");
+      makeWork("w1", "av1", "avc-clone001");
+      makeScript("w1", { narration: "克隆音色口播" });
+      heygem.submitJob.mockResolvedValue("hg-1");
+
+      const result = await svc.runDigitalHumanForWork("w1");
+      expect(result.skipped).toBe(false);
+      expect(fakeTts.generateAudio).toHaveBeenCalledWith(
+        expect.objectContaining({ voice: "avc-clone001" }),
+      );
+    });
+
+    it("opts.voice 优先于 work.voice_id", async () => {
+      makeAvatar("av1");
+      makeWork("w1", "av1", "avc-clone001");
+      makeScript("w1", { narration: "口播" });
+      heygem.submitJob.mockResolvedValue("hg-1");
+
+      await svc.runDigitalHumanForWork("w1", { voice: "avc-override" });
+      expect(fakeTts.generateAudio).toHaveBeenCalledWith(
+        expect.objectContaining({ voice: "avc-override" }),
+      );
     });
   });
 
