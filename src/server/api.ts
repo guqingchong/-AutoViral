@@ -958,6 +958,7 @@ apiRoutes.post("/api/voices/clone", async (c) => {
 // POST /api/voices/:id/demo — 生成/复用试听
 apiRoutes.post("/api/voices/:id/demo", async (c) => {
   const id = c.req.param("id");
+  if (!isValidVoiceId(id)) return c.json({ error: "Invalid id" }, 400);
   try {
     const body = await c.req.json().catch(() => ({}));
     await generateVoiceDemo(id, (body as any).text);
@@ -981,7 +982,9 @@ apiRoutes.get("/api/voices/:id/demo.mp3", async (c) => {
 
 // POST /api/voices/builtin-demo — 内置音色试听
 apiRoutes.post("/api/voices/builtin-demo", async (c) => {
-  const { voiceId, text } = await c.req.json();
+  const body = await c.req.json().catch(() => null);
+  if (!body) return c.json({ error: "Invalid JSON body" }, 400);
+  const { voiceId, text } = body as { voiceId?: string; text?: string };
   if (!voiceId || !isValidVoiceId(voiceId)) return c.json({ error: "voiceId is required" }, 400);
   try {
     await generateBuiltinDemo(voiceId, text);
@@ -1004,8 +1007,11 @@ apiRoutes.get("/api/voices/builtin-demos/:filename", async (c) => {
 
 // POST /api/voices/favorite — 收藏内置音色
 apiRoutes.post("/api/voices/favorite", async (c) => {
-  const { voiceId, name, metadata } = await c.req.json();
+  const body = await c.req.json().catch(() => null);
+  if (!body) return c.json({ error: "Invalid JSON body" }, 400);
+  const { voiceId, name, metadata } = body as { voiceId?: string; name?: string; metadata?: Record<string, unknown> };
   if (!voiceId || !name) return c.json({ error: "voiceId and name are required" }, 400);
+  if (!isValidVoiceId(voiceId)) return c.json({ error: "Invalid voiceId" }, 400);
   const voice = await favoriteBuiltinVoice(voiceId, name, metadata ?? {});
   return c.json(voice, 201);
 });
