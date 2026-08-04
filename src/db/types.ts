@@ -122,6 +122,24 @@ export interface DbAvatar {
   updated_at: string;
 }
 
+export type DbVoiceType = "cloned" | "builtin_fav";
+export type DbVoiceStatus = "cloning" | "ready" | "failed";
+
+export interface DbVoice {
+  id: string;                 // 内部 ID（nanoid 风格字符串）
+  name: string;
+  voice_id: string;           // MiniMax voice_id
+  type: DbVoiceType;
+  status: DbVoiceStatus;
+  source_file_path?: string;
+  demo_audio_path?: string;
+  error?: string;
+  metadata: Record<string, unknown>;
+  usage_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export type DbDigitalHumanJobStatus = "pending" | "queued" | "running" | "done" | "failed";
 export type DbDigitalHumanProvider = "heygem";
 

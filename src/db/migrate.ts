@@ -587,6 +587,31 @@ CREATE TABLE IF NOT EXISTS template_skills (
 ALTER TABLE template_gen_jobs ADD COLUMN kind TEXT NOT NULL DEFAULT 'generate';
 `,
   },
+  {
+    version: 16,
+    name: "voices",
+    sql: `
+CREATE TABLE IF NOT EXISTS voices (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  voice_id TEXT NOT NULL,
+  type TEXT NOT NULL DEFAULT 'cloned',
+  status TEXT NOT NULL DEFAULT 'cloning',
+  source_file_path TEXT,
+  demo_audio_path TEXT,
+  error TEXT,
+  metadata TEXT NOT NULL DEFAULT '{}',
+  usage_count INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+ALTER TABLE works ADD COLUMN voice_id TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_voices_voice_id ON voices(voice_id);
+CREATE INDEX IF NOT EXISTS idx_voices_type ON voices(type);
+`,
+  },
 ];
 
 export function migrate(): void {
