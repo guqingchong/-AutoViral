@@ -1,0 +1,20 @@
+{
+  "male-qn-qingse": { "name": "清朗男声", "category": "男声", "description": "清澈干净的青年男声" },
+  "male-qn-jingying": { "name": "精英男声", "category": "男声", "description": "沉稳专业的商务男声" },
+  "male-qn-badao": { "name": "霸道男声", "category": "男声", "description": "强势有气场的青年男声" },
+  "male-qn-daxuesheng": { "name": "大学生男声", "category": "男声", "description": "阳光青涩的大学生" },
+  "presenter_male": { "name": "新闻男声", "category": "场景", "description": "新闻播报风格男声" },
+  "audiobook_male_1": { "name": "有声书男声 1", "category": "场景", "description": "沉稳叙述，适合长文案" },
+  "audiobook_male_2": { "name": "有声书男声 2", "category": "场景", "description": "磁性低沉的讲述者" },
+  "female-shaonv": { "name": "甜美女声", "category": "女声", "description": "活泼甜美的少女音" },
+  "female-yujie": { "name": "成熟女声", "category": "女声", "description": "成熟知性的御姐音" },
+  "female-chengshu": { "name": "知性女声", "category": "女声", "description": "温和稳重，适合知识内容" },
+  "female-tianmei": { "name": "软萌女声", "category": "女声", "description": "软萌可爱，亲和力强" },
+  "presenter_female": { "name": "新闻女声", "category": "场景", "description": "新闻播报风格女声" },
+  "audiobook_female_1": { "name": "有声书女声 1", "category": "场景", "description": "温柔叙述，适合长文案" },
+  "audiobook_female_2": { "name": "有声书女声 2", "category": "场景", "description": "富有情感的讲述者" },
+  "clever_boy": { "name": "机灵男童", "category": "童声", "description": "聪明活泼的男孩音" },
+  "cute_boy": { "name": "可爱男童", "category": "童声", "description": "天真可爱的男孩音" },
+  "lovely_girl": { "name": "甜美童声", "category": "童声", "description": "软萌的小女孩音" },
+  "cartoon_pig": { "name": "卡通小猪", "category": "童声", "description": "卡通角色音，适合趣味内容" }
+}
