@@ -4,6 +4,11 @@
     fetchLibraryAssets, uploadLibraryAsset, deleteLibraryAsset,
     recheckAssetCompliance, type AssetLibraryItem,
   } from "../lib/api.js";
+  import {
+    fetchVoices, fetchBuiltinVoices, cloneVoice, requestVoiceDemo,
+    requestBuiltinDemo, favoriteVoice, deleteVoice,
+    type VoiceItem, type BuiltinVoice,
+  } from "../lib/api.js";
   import { t, getLanguage, subscribe } from "../lib/i18n.js";
 
   let { onOpenSettings }: { onOpenSettings?: () => void } = $props();
@@ -18,6 +23,24 @@
   let filterCategory = $state<AssetLibraryItem["category"] | "">("");
   let busy = $state(false);
   let message = $state("");
+
+  // 配音音色（voice cloning）state
+  let mainTab = $state<"assets" | "voices">("assets");
+  let voices = $state<VoiceItem[]>([]);
+  let builtinVoices = $state<BuiltinVoice[]>([]);
+  let builtinCategories = $state<string[]>([]);
+  let voiceCategoryFilter = $state<string>("");
+  let voiceSearch = $state<string>("");
+  let showCloneModal = $state(false);
+  let cloneName = $state("");
+  let cloneFile = $state<FileList | null>(null);
+  let cloneBusy = $state(false);
+  let recording = $state(false);
+  let mediaRecorder: MediaRecorder | null = null;
+  let recordChunks: Blob[] = [];
+  let recordedBlob = $state<Blob | null>(null);
+  let demoLoadingKey = $state<string>("");
+  let demoUrls = $state<Record<string, string>>({});
 
   // Stock search state
   let stockQuery = $state("");
@@ -56,10 +79,20 @@
   const complianceLabels: Record<string, string> = {
     passed: "合规通过", pending: "待审核", failed: "不合规",
   };
+  const voiceStatusLabels: Record<string, string> = {
+    cloning: "克隆中", ready: "可用", failed: "失败",
+  };
+
+  const filteredBuiltin = $derived(builtinVoices.filter((v) =>
+    (!voiceCategoryFilter || v.category === voiceCategoryFilter) &&
+    (!voiceSearch || v.name.includes(voiceSearch) || v.voice_id.includes(voiceSearch))
+  ));
+  const favoritedIds = $derived(new Set(voices.filter((v) => v.type === "builtin_fav").map((v) => v.voice_id)));
 
   onMount(() => {
     const unsub = subscribe(() => { lang = getLanguage(); });
     load();
+    loadVoices();
     return () => unsub();
   });
 
@@ -178,12 +211,104 @@
       busy = false;
     }
   }
+
+  // ---------------------------------------------------------------------------
+  // 配音音色：克隆 / 录音 / 试听 / 收藏 / 删除
+  // ---------------------------------------------------------------------------
+
+  async function loadVoices() {
+    try {
+      const [vRes, bRes] = await Promise.all([fetchVoices(), fetchBuiltinVoices()]);
+      voices = vRes.voices;
+      builtinVoices = bRes.voices;
+      builtinCategories = bRes.categories;
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  async function handleClone() {
+    const file = cloneFile?.[0] ?? (recordedBlob ? new File([recordedBlob], "recording.webm", { type: "audio/webm" }) : null);
+    if (!file || !cloneName.trim()) { message = "请填写名称并选择音频（或录音）"; return; }
+    cloneBusy = true;
+    try {
+      await cloneVoice(cloneName.trim(), file);
+      message = "克隆成功，音色已入库";
+      showCloneModal = false;
+      cloneName = ""; cloneFile = null; recordedBlob = null;
+      await loadVoices();
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    } finally {
+      cloneBusy = false;
+    }
+  }
+
+  async function toggleRecording() {
+    if (recording) { mediaRecorder?.stop(); return; }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      recordChunks = [];
+      mediaRecorder = new MediaRecorder(stream);
+      mediaRecorder.ondataavailable = (e) => recordChunks.push(e.data);
+      mediaRecorder.onstop = () => {
+        recordedBlob = new Blob(recordChunks, { type: "audio/webm" });
+        stream.getTracks().forEach((t) => t.stop());
+        recording = false;
+      };
+      mediaRecorder.start();
+      recording = true;
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  async function playVoiceDemo(v: VoiceItem) {
+    demoLoadingKey = v.id;
+    try {
+      const { url } = await requestVoiceDemo(v.id);
+      demoUrls = { ...demoUrls, [v.id]: url };
+    } catch (err) { message = err instanceof Error ? err.message : String(err); }
+    finally { demoLoadingKey = ""; }
+  }
+
+  async function playBuiltinDemo(v: BuiltinVoice) {
+    demoLoadingKey = v.voice_id;
+    try {
+      const { url } = await requestBuiltinDemo(v.voice_id);
+      demoUrls = { ...demoUrls, [v.voice_id]: url };
+    } catch (err) { message = err instanceof Error ? err.message : String(err); }
+    finally { demoLoadingKey = ""; }
+  }
+
+  async function handleFavorite(v: BuiltinVoice) {
+    try {
+      await favoriteVoice(v.voice_id, v.name, { category: v.category });
+      await loadVoices();
+    } catch (err) { message = err instanceof Error ? err.message : String(err); }
+  }
+
+  async function handleDeleteVoice(id: string) {
+    if (!confirm("确认删除该音色？")) return;
+    try {
+      await deleteVoice(id);
+      await loadVoices();
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+  }
 </script>
 
 <div class="page">
   <h1>{tt("assetLibraryTitle")}</h1>
   {#if message}<p class="message">{message}</p>{/if}
 
+  <div class="main-tabs">
+    <button class="main-tab" class:active={mainTab === "assets"} onclick={() => (mainTab = "assets")}>素材</button>
+    <button class="main-tab" class:active={mainTab === "voices"} onclick={() => (mainTab = "voices")}>配音音色</button>
+  </div>
+
+  {#if mainTab === "assets"}
   <section class="panel">
     <h2>素材搜索（Openverse 免费 + Pexels / Pixabay / Unsplash）</h2>
     <p class="hint">Openverse 无需 API Key 即可搜索。配置 Pexels/Pixabay/Unsplash API Key 可获得更多高质量素材。</p>
@@ -301,7 +426,107 @@
       </div>
     {/each}
   </div>
+
+  {:else}
+  <!-- 配音音色选项卡 -->
+  <section class="panel">
+    <div class="voice-section-head">
+      <h2>我的声音</h2>
+      <button class="btn-primary" onclick={() => (showCloneModal = true)}>克隆新声音</button>
+    </div>
+    {#if voices.length === 0}
+      <p class="hint">还没有音色。点击「克隆新声音」上传音频或录音，或在下方 AI 音色库中收藏喜欢的音色。</p>
+    {:else}
+      <div class="voice-grid">
+        {#each voices as v (v.id)}
+          <div class="voice-card">
+            <div class="voice-card-head">
+              <span class="name" title={v.name}>{v.name}</span>
+              <span class="badge">{v.type === "cloned" ? "克隆" : "收藏"}</span>
+              <span class="badge voice-status-{v.status}">{voiceStatusLabels[v.status] ?? v.status}</span>
+            </div>
+            {#if v.status === "failed" && v.error}
+              <span class="voice-error">{v.error}</span>
+            {/if}
+            {#if demoUrls[v.id]}
+              <audio controls src={demoUrls[v.id]} class="voice-audio"></audio>
+            {:else if v.status === "ready"}
+              <button class="btn-sm" disabled={demoLoadingKey === v.id} onclick={() => playVoiceDemo(v)}>
+                {demoLoadingKey === v.id ? "生成试听中..." : "试听"}
+              </button>
+            {/if}
+            <div class="asset-actions">
+              <button class="btn-sm" onclick={() => handleDeleteVoice(v.id)}>删除</button>
+            </div>
+          </div>
+        {/each}
+      </div>
+    {/if}
+  </section>
+
+  <section class="panel">
+    <h2>AI 音色库</h2>
+    <div class="row">
+      <select bind:value={voiceCategoryFilter} title="音色分类">
+        <option value="">全部分类</option>
+        {#each builtinCategories as c}<option value={c}>{c}</option>{/each}
+      </select>
+      <input type="text" bind:value={voiceSearch} placeholder="搜索音色名称或 ID" class="search-input" />
+    </div>
+    <div class="voice-grid builtin-grid">
+      {#each filteredBuiltin as v (v.voice_id)}
+        <div class="voice-card">
+          <div class="voice-card-head">
+            <span class="name" title={v.name}>{v.name}</span>
+            <span class="badge">{v.category}</span>
+          </div>
+          {#if v.description}<span class="meta">{v.description}</span>{/if}
+          {#if demoUrls[v.voice_id]}
+            <audio controls src={demoUrls[v.voice_id]} class="voice-audio"></audio>
+          {:else}
+            <button class="btn-sm" disabled={demoLoadingKey === v.voice_id} onclick={() => playBuiltinDemo(v)}>
+              {demoLoadingKey === v.voice_id ? "生成试听中..." : "试听"}
+            </button>
+          {/if}
+          <div class="asset-actions">
+            <button class="btn-sm" disabled={favoritedIds.has(v.voice_id)} onclick={() => handleFavorite(v)}>
+              {favoritedIds.has(v.voice_id) ? "已收藏" : "收藏"}
+            </button>
+          </div>
+        </div>
+      {/each}
+    </div>
+    {#if filteredBuiltin.length === 0}
+      <p class="hint">没有匹配的音色，请调整分类或搜索关键词。</p>
+    {/if}
+  </section>
+  {/if}
 </div>
+
+{#if showCloneModal}
+  <div class="modal-backdrop" onclick={(e) => { if (e.target === e.currentTarget) showCloneModal = false; }} onkeydown={(e) => e.key === "Escape" && (showCloneModal = false)} role="presentation">
+    <div class="modal" role="dialog" tabindex="-1" aria-label="克隆新声音">
+      <h2>克隆新声音</h2>
+      <div class="modal-body">
+        <input type="text" bind:value={cloneName} placeholder="音色名称，如 我的声音" />
+        <input type="file" accept="audio/*" bind:files={cloneFile} />
+        <p class="hint">上传音频（mp3/wav/m4a，10秒~5分钟）</p>
+        <div class="row">
+          <button class="btn-sm" onclick={toggleRecording}>{recording ? "⏹ 停止录音" : "🎙 开始录音"}</button>
+          {#if recordedBlob}
+            <span class="hint">已录音 ✓ 可播放确认</span>
+            <audio controls src={URL.createObjectURL(recordedBlob)} class="voice-audio"></audio>
+          {/if}
+        </div>
+        <p class="hint">请录制/上传清晰干声，避免背景音。</p>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-sm" onclick={() => (showCloneModal = false)}>取消</button>
+        <button class="btn-primary" disabled={cloneBusy} onclick={handleClone}>{cloneBusy ? "克隆中..." : "开始克隆"}</button>
+      </div>
+    </div>
+  </div>
+{/if}
 
 <style>
   .page { padding: 2rem; color: var(--text); font-family: var(--font-body); }
@@ -368,4 +593,63 @@
     background: var(--accent, #333);
     color: var(--accent-text, #fff);
   }
+
+  .main-tabs { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+  .main-tab {
+    background: var(--bg-elevated);
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.5rem 1.2rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .main-tab.active {
+    background: var(--accent);
+    color: var(--accent-text);
+    border-color: var(--accent);
+  }
+
+  .voice-section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.75rem; }
+  .voice-section-head h2 { margin: 0; }
+  .voice-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0.75rem; }
+  .builtin-grid { margin-top: 0.75rem; }
+  .voice-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: 4px;
+    padding: 0.6rem 0.7rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+  .voice-card-head { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+  .voice-audio { width: 100%; height: 32px; }
+  .voice-error { font-size: var(--size-xs); color: var(--error); }
+  .voice-status-ready { background: var(--success-soft); color: var(--success); }
+  .voice-status-cloning { background: rgba(245, 158, 11, 0.1); color: var(--state-running); }
+  .voice-status-failed { background: var(--error-soft); color: var(--error); }
+
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+  }
+  .modal {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--card-radius);
+    padding: 1.25rem;
+    width: min(480px, 92vw);
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+  .modal h2 { margin: 0; }
+  .modal-body { display: flex; flex-direction: column; gap: 0.6rem; }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 0.5rem; }
 </style>
