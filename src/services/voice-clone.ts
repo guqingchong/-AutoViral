@@ -2,7 +2,7 @@ import { mkdir, writeFile, rm, access } from "node:fs/promises";
 import { join, extname } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { randomBytes } from "node:crypto";
+import { randomBytes, createHash } from "node:crypto";
 import { dataDir, loadConfig } from "../config.js";
 import * as voicesRepo from "../db/voices-repo.js";
 import type { DbVoice } from "../db/types.js";
@@ -19,6 +19,21 @@ const CONVERT_EXTS = new Set([".webm", ".ogg", ".opus", ".mp4", ".aac"]);
 export function voicesDir(id: string): string { return join(dataDir, "voices", id); }
 export function builtinDemoDir(): string { return join(dataDir, "voices", "builtin-demos"); }
 export function isValidVoiceId(id: string): boolean { return /^[a-zA-Z0-9_-]+$/.test(id); }
+
+/**
+ * MiniMax 外部 voice_id 校验：官方系统音色 ID 可能含空格/括号/尾随空格
+ * （如 "Chinese (Mandarin)_LyricMan"、"Santa_Claus "），仅禁止路径危险字符。
+ */
+export function isSafeExternalVoiceId(id: string): boolean {
+  return typeof id === "string" && id.length > 0 && id.length <= 256
+    && !id.includes("..") && !/[\/\\]/.test(id) && !/[\x00-\x1f]/.test(id);
+}
+
+/** 内置音色试听文件名：简单 ID 直用（保留既有缓存），含特殊字符的 ID 用 sha1 哈希（文件系统安全） */
+export function builtinDemoFileName(voiceId: string): string {
+  if (isValidVoiceId(voiceId)) return `${voiceId}.mp3`;
+  return `${createHash("sha1").update(voiceId).digest("hex").slice(0, 16)}.mp3`;
+}
 
 function newId(): string { return `v_${randomBytes(8).toString("hex")}`; }
 // MiniMax voice_id 规则：字母开头、8-256 字符、仅字母数字及 -_
@@ -86,8 +101,8 @@ export async function generateVoiceDemo(id: string, text?: string): Promise<stri
 }
 
 export async function generateBuiltinDemo(voiceId: string, text?: string): Promise<string> {
-  if (!isValidVoiceId(voiceId)) throw new Error("非法 voice_id");
-  const outPath = join(builtinDemoDir(), `${voiceId}.mp3`);
+  if (!isSafeExternalVoiceId(voiceId)) throw new Error("非法 voice_id");
+  const outPath = join(builtinDemoDir(), builtinDemoFileName(voiceId));
   try { await access(outPath); return outPath; } catch { /* 未缓存 */ }
   const cfg = await getMinimaxCfg();
   await mkdir(builtinDemoDir(), { recursive: true });

@@ -88,7 +88,7 @@ import * as voicesRepo from "../db/voices-repo.js";
 import {
   cloneVoiceFromUpload, generateVoiceDemo, generateBuiltinDemo,
   favoriteBuiltinVoice, deleteVoiceWithFiles,
-  voicesDir, builtinDemoDir, isValidVoiceId,
+  voicesDir, builtinDemoDir, isValidVoiceId, isSafeExternalVoiceId, builtinDemoFileName,
 } from "../services/voice-clone.js";
 import { listBuiltinVoices, BUILTIN_CATEGORIES } from "../services/builtin-voices.js";
 
@@ -986,10 +986,10 @@ apiRoutes.post("/api/voices/builtin-demo", async (c) => {
   const body = await c.req.json().catch(() => null);
   if (!body) return c.json({ error: "Invalid JSON body" }, 400);
   const { voiceId, text } = body as { voiceId?: string; text?: string };
-  if (!voiceId || !isValidVoiceId(voiceId)) return c.json({ error: "voiceId is required" }, 400);
+  if (!voiceId || !isSafeExternalVoiceId(voiceId)) return c.json({ error: "voiceId is required" }, 400);
   try {
     await generateBuiltinDemo(voiceId, text);
-    return c.json({ url: `/api/voices/builtin-demos/${voiceId}.mp3?t=${Date.now()}` });
+    return c.json({ url: `/api/voices/builtin-demos/${builtinDemoFileName(voiceId)}?t=${Date.now()}` });
   } catch (err) {
     return c.json({ error: err instanceof Error ? err.message : "试听生成失败" }, 500);
   }
@@ -1012,7 +1012,7 @@ apiRoutes.post("/api/voices/favorite", async (c) => {
   if (!body) return c.json({ error: "Invalid JSON body" }, 400);
   const { voiceId, name, metadata } = body as { voiceId?: string; name?: string; metadata?: Record<string, unknown> };
   if (!voiceId || !name) return c.json({ error: "voiceId and name are required" }, 400);
-  if (!isValidVoiceId(voiceId)) return c.json({ error: "Invalid voiceId" }, 400);
+  if (!isSafeExternalVoiceId(voiceId)) return c.json({ error: "Invalid voiceId" }, 400);
   const voice = await favoriteBuiltinVoice(voiceId, name, metadata ?? {});
   return c.json(voice, 201);
 });
@@ -3044,8 +3044,8 @@ apiRoutes.post("/api/topics/batch-convert", async (c) => {
   }>().catch(() => ({ topicIds: [] } as any));
 
   if (!body.topicIds?.length) return c.json({ error: "topicIds is required" }, 400);
-  if (body.voiceStyle && !/^[a-zA-Z0-9_-]+$/.test(body.voiceStyle)) {
-    return c.json({ error: "voiceStyle 非法：仅允许字母、数字、-、_" }, 400);
+  if (body.voiceStyle && !isSafeExternalVoiceId(body.voiceStyle)) {
+    return c.json({ error: "voiceStyle 非法：不允许路径字符" }, 400);
   }
 
   const jobId = "batch_" + Date.now();

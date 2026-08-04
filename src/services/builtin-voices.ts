@@ -42,12 +42,17 @@ export async function listBuiltinVoices(): Promise<BuiltinVoice[]> {
     if (!config.minimax?.apiKey) throw new Error("no apiKey");
     const remote = await listSystemVoices({ apiKey: config.minimax.apiKey, groupId: (config.minimax as any).groupId });
     if (!remote.length) throw new Error("empty list");
-    voices = remote.map((v) => {
-      const m = meta[v.voice_id];
-      return m
-        ? { voice_id: v.voice_id, name: m.name, category: m.category, description: m.description }
-        : { voice_id: v.voice_id, name: v.name || v.voice_id, category: "其他", description: v.description };
-    });
+    // MiniMax 数据存在首尾空格的脏 ID（如 "Santa_Claus "，TTS 只认 trim 后的值），统一 trim 并去重
+    const seen = new Map<string, BuiltinVoice>();
+    for (const v of remote) {
+      const id = v.voice_id.trim();
+      if (!id || seen.has(id)) continue;
+      const m = meta[id];
+      seen.set(id, m
+        ? { voice_id: id, name: m.name, category: m.category, description: m.description }
+        : { voice_id: id, name: v.name?.trim() || id, category: "其他", description: v.description });
+    }
+    voices = [...seen.values()];
   } catch {
     // 回退：静态精选（已验证音色子集），短缓存以便快速自愈
     voices = Object.entries(meta).map(([voice_id, m]) => ({ voice_id, ...m }));
