@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { fetchTopics, convertTopicToWork, collectTrends, fetchConfig, updateConfig, type Topic } from "../lib/api.js";
+  import { fetchTopics, convertTopicToWork, collectTrends, fetchConfig, updateConfig, fetchVoices, fetchBuiltinVoices, type Topic, type VoiceItem, type BuiltinVoice } from "../lib/api.js";
   import { t, getLanguage, subscribe } from "../lib/i18n.js";
   import { activeTab } from "../lib/navigation.js";
 
@@ -24,6 +24,9 @@
   let batchContentForm = $state<string>("knowledge");
   let batchVideoSource = $state<string>("search");
   let batchVoiceStyle = $state<string>("male-qn-qingse");
+  let myVoices = $state<VoiceItem[]>([]);
+  let builtinVoices = $state<BuiltinVoice[]>([]);
+  let batchVoiceMode = $state<"cloned" | "ai">("ai");
   const DURATION_OPTIONS = [
     { value: 30, label: "约 30 秒" },
     { value: 60, label: "约 1 分钟" },
@@ -40,16 +43,6 @@
   const VIDEO_SOURCE_OPTIONS = [
     { value: "search", label: "素材库搜索（真实视频素材）" },
     { value: "ai-generate", label: "AI 生成素材" },
-  ];
-  const VOICE_OPTIONS = [
-    { value: "male-qn-qingse", label: "清朗男声" },
-    { value: "male-qn-jingying", label: "精英男声" },
-    { value: "presenter_male", label: "新闻男声" },
-    { value: "presenter_female", label: "新闻女声" },
-    { value: "female-shaonv", label: "甜美女声" },
-    { value: "female-yujie", label: "成熟女声" },
-    { value: "audiobook_male_1", label: "有声书男声" },
-    { value: "audiobook_female_1", label: "有声书女声" },
   ];
   let templates = $state<any[]>([]);
   let avatars = $state<any[]>([]);
@@ -205,6 +198,11 @@
         avatars = data.avatars ?? [];
       }
     } catch {}
+    try {
+      const [vRes, bRes] = await Promise.all([fetchVoices(), fetchBuiltinVoices()]);
+      myVoices = vRes.voices.filter((v) => v.status === "ready");
+      builtinVoices = bRes.voices;
+    } catch {}
   }
 
   async function batchConvert() {
@@ -227,6 +225,7 @@
           contentForm: batchType === "short-video" ? batchContentForm : undefined,
           videoSource: batchType === "short-video" ? batchVideoSource : undefined,
           voiceStyle: batchType === "short-video" ? batchVoiceStyle : undefined,
+          voiceMode: batchType === "short-video" ? batchVoiceMode : undefined,
         }),
       });
       const data = await res.json();
@@ -637,11 +636,27 @@
                   </select>
                 </div>
                 <div class="batch-field">
-                  <label>配音风格</label>
+                  <label>配音模式</label>
+                  <select bind:value={batchVoiceMode}>
+                    <option value="ai">AI 合成音色</option>
+                    <option value="cloned">我的克隆声音</option>
+                  </select>
+                </div>
+                <div class="batch-field">
+                  <label>配音音色</label>
                   <select bind:value={batchVoiceStyle}>
-                    {#each VOICE_OPTIONS as o}
-                      <option value={o.value}>{o.label}</option>
-                    {/each}
+                    {#if batchVoiceMode === "cloned"}
+                      {#each myVoices as v}
+                        <option value={v.voice_id}>{v.name}</option>
+                      {/each}
+                      {#if myVoices.length === 0}
+                        <option value="" disabled>暂无克隆声音，请先到素材库克隆</option>
+                      {/if}
+                    {:else}
+                      {#each builtinVoices as v}
+                        <option value={v.voice_id}>{v.name}（{v.category}）</option>
+                      {/each}
+                    {/if}
                   </select>
                 </div>
               </div>

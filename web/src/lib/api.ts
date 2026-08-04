@@ -850,3 +850,60 @@ export async function fetchWorkPublishRecords(workId: string): Promise<PublishRe
 export function getWorkPublishFallbackUrl(workId: string, platform: string): string {
   return `/api/works/${encodeURIComponent(workId)}/publish/${encodeURIComponent(platform)}/fallback`;
 }
+
+// ---------------------------------------------------------------------------
+// Voices（声音克隆 / 配音音色）
+// ---------------------------------------------------------------------------
+
+export interface VoiceItem {
+  id: string;
+  name: string;
+  voice_id: string;
+  type: "cloned" | "builtin_fav";
+  status: "cloning" | "ready" | "failed";
+  source_file_path?: string;
+  demo_audio_path?: string;
+  error?: string;
+  metadata: Record<string, unknown>;
+  usage_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BuiltinVoice {
+  voice_id: string;
+  name: string;
+  category: string;
+  description?: string;
+}
+
+export async function fetchVoices() {
+  return get<{ voices: VoiceItem[] }>("/api/voices");
+}
+
+export async function fetchBuiltinVoices() {
+  return get<{ voices: BuiltinVoice[]; categories: string[] }>("/api/voices/builtin");
+}
+
+export async function cloneVoice(name: string, file: File) {
+  const form = new FormData();
+  form.append("name", name);
+  form.append("file", file);
+  return request<VoiceItem>("/api/voices/clone", { method: "POST", body: form });
+}
+
+export async function requestVoiceDemo(id: string, text?: string) {
+  return post<{ url: string }>(`/api/voices/${id}/demo`, { text });
+}
+
+export async function requestBuiltinDemo(voiceId: string, text?: string) {
+  return post<{ url: string }>("/api/voices/builtin-demo", { voiceId, text });
+}
+
+export async function favoriteVoice(voiceId: string, name: string, metadata?: Record<string, unknown>) {
+  return post<VoiceItem>("/api/voices/favorite", { voiceId, name, metadata });
+}
+
+export async function deleteVoice(id: string) {
+  return request<{ deleted: boolean }>(`/api/voices/${id}`, { method: "DELETE" });
+}
