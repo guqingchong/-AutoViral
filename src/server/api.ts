@@ -3043,6 +3043,9 @@ apiRoutes.post("/api/topics/batch-convert", async (c) => {
   }>().catch(() => ({ topicIds: [] } as any));
 
   if (!body.topicIds?.length) return c.json({ error: "topicIds is required" }, 400);
+  if (body.voiceStyle && !/^[a-zA-Z0-9_-]+$/.test(body.voiceStyle)) {
+    return c.json({ error: "voiceStyle 非法：仅允许字母、数字、-、_" }, 400);
+  }
 
   const jobId = "batch_" + Date.now();
   const job: BatchConvertJob = {

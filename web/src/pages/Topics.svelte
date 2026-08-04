@@ -211,7 +211,7 @@
     } catch {}
     try {
       const [vRes, bRes] = await Promise.all([fetchVoices(), fetchBuiltinVoices()]);
-      myVoices = vRes.voices.filter((v) => v.status === "ready");
+      myVoices = vRes.voices.filter((v) => v.status === "ready" && v.type === "cloned");
       builtinVoices = bRes.voices;
     } catch {}
   }
