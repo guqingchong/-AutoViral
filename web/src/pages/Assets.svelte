@@ -1,5 +1,5 @@
 ﻿<script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
   import {
     fetchLibraryAssets, uploadLibraryAsset, deleteLibraryAsset,
     recheckAssetCompliance, type AssetLibraryItem,
@@ -38,7 +38,9 @@
   let recording = $state(false);
   let mediaRecorder: MediaRecorder | null = null;
   let recordChunks: Blob[] = [];
+  let discardRecording = false;
   let recordedBlob = $state<Blob | null>(null);
+  let recordedUrl = $state<string>("");
   let demoLoadingKey = $state<string>("");
   let demoUrls = $state<Record<string, string>>({});
 
@@ -236,6 +238,7 @@
       message = "克隆成功，音色已入库";
       showCloneModal = false;
       cloneName = ""; cloneFile = null; recordedBlob = null;
+      if (recordedUrl) { URL.revokeObjectURL(recordedUrl); recordedUrl = ""; }
       await loadVoices();
     } catch (err) {
       message = err instanceof Error ? err.message : String(err);
@@ -252,9 +255,14 @@
       mediaRecorder = new MediaRecorder(stream);
       mediaRecorder.ondataavailable = (e) => recordChunks.push(e.data);
       mediaRecorder.onstop = () => {
-        recordedBlob = new Blob(recordChunks, { type: "audio/webm" });
         stream.getTracks().forEach((t) => t.stop());
         recording = false;
+        if (!discardRecording) {
+          recordedBlob = new Blob(recordChunks, { type: "audio/webm" });
+          if (recordedUrl) URL.revokeObjectURL(recordedUrl);
+          recordedUrl = URL.createObjectURL(recordedBlob);
+        }
+        discardRecording = false;
       };
       mediaRecorder.start();
       recording = true;
@@ -262,6 +270,26 @@
       message = err instanceof Error ? err.message : String(err);
     }
   }
+
+  function closeCloneModal() {
+    if (recording) {
+      discardRecording = true;
+      mediaRecorder?.stop(); // onstop 中释放 stream tracks
+    }
+    showCloneModal = false;
+    cloneName = "";
+    cloneFile = null;
+    recordedBlob = null;
+    if (recordedUrl) { URL.revokeObjectURL(recordedUrl); recordedUrl = ""; }
+  }
+
+  onDestroy(() => {
+    if (recording) {
+      discardRecording = true;
+      mediaRecorder?.stop();
+    }
+    if (recordedUrl) URL.revokeObjectURL(recordedUrl);
+  });
 
   async function playVoiceDemo(v: VoiceItem) {
     demoLoadingKey = v.id;
@@ -504,7 +532,7 @@
 </div>
 
 {#if showCloneModal}
-  <div class="modal-backdrop" onclick={(e) => { if (e.target === e.currentTarget) showCloneModal = false; }} onkeydown={(e) => e.key === "Escape" && (showCloneModal = false)} role="presentation">
+  <div class="modal-backdrop" onclick={(e) => { if (e.target === e.currentTarget) closeCloneModal(); }} onkeydown={(e) => e.key === "Escape" && closeCloneModal()} role="presentation">
     <div class="modal" role="dialog" tabindex="-1" aria-label="克隆新声音">
       <h2>克隆新声音</h2>
       <div class="modal-body">
@@ -515,14 +543,14 @@
           <button class="btn-sm" onclick={toggleRecording}>{recording ? "⏹ 停止录音" : "🎙 开始录音"}</button>
           {#if recordedBlob}
             <span class="hint">已录音 ✓ 可播放确认</span>
-            <audio controls src={URL.createObjectURL(recordedBlob)} class="voice-audio"></audio>
+            <audio controls src={recordedUrl} class="voice-audio"></audio>
           {/if}
         </div>
         <p class="hint">请录制/上传清晰干声，避免背景音。</p>
       </div>
       <div class="modal-actions">
-        <button class="btn-sm" onclick={() => (showCloneModal = false)}>取消</button>
-        <button class="btn-primary" disabled={cloneBusy} onclick={handleClone}>{cloneBusy ? "克隆中..." : "开始克隆"}</button>
+        <button class="btn-sm" onclick={closeCloneModal}>取消</button>
+        <button class="btn-primary" disabled={cloneBusy || recording} onclick={handleClone}>{cloneBusy ? "克隆中..." : "开始克隆"}</button>
       </div>
     </div>
   </div>
