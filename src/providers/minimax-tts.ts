@@ -1,5 +1,5 @@
 import { mkdir, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { dataDir } from '../config.js'
 import type { GenerateProvider, ImageOpts, VideoOpts, AudioOpts, GenerateResult } from './base.js'
 
@@ -12,6 +12,72 @@ const DEFAULT_LANGUAGE_BOOST = 'Chinese'
 
 export interface MiniMaxTTSConfig {
   apiKey: string
+}
+
+/**
+ * 独立 TTS 合成函数：构造 payload → fetch → 解 hex → 写文件。
+ * outPath 为绝对路径，父目录自行 mkdir。MiniMaxTTSProvider.generateAudio 复用它。
+ */
+export async function synthesizeToFile(apiKey: string, opts: {
+  text: string; voice?: string; speed?: number; languageBoost?: string; outPath: string;
+}): Promise<{ success: boolean; assetPath?: string; error?: string }> {
+  const {
+    text,
+    voice = 'male-qn-qingse',
+    speed = 1,
+    languageBoost = DEFAULT_LANGUAGE_BOOST,
+    outPath,
+  } = opts
+
+  try {
+    const payload = {
+      model: DEFAULT_MODEL,
+      text,
+      stream: false,
+      language_boost: languageBoost,
+      voice_setting: {
+        voice_id: voice,
+        speed,
+        vol: 1,
+        pitch: 0,
+      },
+      audio_setting: {
+        sample_rate: 32000,
+        bitrate: 128000,
+        format: 'mp3',
+        channel: 1,
+      },
+    }
+
+    const res = await fetch(MINIMAX_TTS_URL, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    })
+
+    if (!res.ok) {
+      const errBody = await res.text()
+      return { success: false, error: `MiniMax API error ${res.status}: ${errBody}` }
+    }
+
+    const data = await res.json() as any
+    const audioHex = data.data?.audio
+
+    if (!audioHex || typeof audioHex !== 'string') {
+      return { success: false, error: 'No audio data in MiniMax response' }
+    }
+
+    const buffer = Buffer.from(audioHex, 'hex')
+    await mkdir(dirname(outPath), { recursive: true })
+    await writeFile(outPath, buffer)
+
+    return { success: true, assetPath: outPath }
+  } catch (err: any) {
+    return { success: false, error: err.message }
+  }
 }
 
 export class MiniMaxTTSProvider implements GenerateProvider {
@@ -29,69 +95,28 @@ export class MiniMaxTTSProvider implements GenerateProvider {
   async generateAudio(opts: AudioOpts): Promise<GenerateResult> {
     const {
       text,
-      voice = 'male-qn-qingse',
-      speed = 1,
-      languageBoost = DEFAULT_LANGUAGE_BOOST,
+      voice,
+      speed,
+      languageBoost,
       workId,
       filename,
     } = opts
 
-    try {
-      const outFilename = filename.endsWith('.mp3') ? filename : `${filename}.mp3`
-      const assetPath = join(dataDir, 'works', workId, 'assets', 'audio', outFilename)
+    const outFilename = filename.endsWith('.mp3') ? filename : `${filename}.mp3`
+    const assetPath = join(dataDir, 'works', workId, 'assets', 'audio', outFilename)
 
-      const payload = {
-        model: DEFAULT_MODEL,
-        text,
-        stream: false,
-        language_boost: languageBoost,
-        voice_setting: {
-          voice_id: voice,
-          speed,
-          vol: 1,
-          pitch: 0,
-        },
-        audio_setting: {
-          sample_rate: 32000,
-          bitrate: 128000,
-          format: 'mp3',
-          channel: 1,
-        },
-      }
+    const result = await synthesizeToFile(this.apiKey, {
+      text, voice, speed, languageBoost, outPath: assetPath,
+    })
 
-      const res = await fetch(MINIMAX_TTS_URL, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${this.apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-      })
+    if (!result.success) {
+      return { success: false, error: result.error, code: 'API_ERROR' }
+    }
 
-      if (!res.ok) {
-        const errBody = await res.text()
-        return { success: false, error: `MiniMax API error ${res.status}: ${errBody}`, code: 'API_ERROR' }
-      }
-
-      const data = await res.json() as any
-      const audioHex = data.data?.audio
-
-      if (!audioHex || typeof audioHex !== 'string') {
-        return { success: false, error: 'No audio data in MiniMax response', code: 'API_ERROR' }
-      }
-
-      const buffer = Buffer.from(audioHex, 'hex')
-      const dir = join(dataDir, 'works', workId, 'assets', 'audio')
-      await mkdir(dir, { recursive: true })
-      await writeFile(assetPath, buffer)
-
-      return {
-        success: true,
-        assetPath,
-        previewUrl: `/api/works/${workId}/assets/audio/${outFilename}`,
-      }
-    } catch (err: any) {
-      return { success: false, error: err.message, code: 'API_ERROR' }
+    return {
+      success: true,
+      assetPath,
+      previewUrl: `/api/works/${workId}/assets/audio/${outFilename}`,
     }
   }
 

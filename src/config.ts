@@ -31,7 +31,7 @@ export interface Config {
   model: string;
   jimeng: { accessKey: string; secretKey: string };
   openrouter?: { apiKey: string };
-  minimax?: { apiKey: string };
+  minimax?: { apiKey: string; groupId?: string };
   heygem?: {
     apiToken: string;
     baseUrl: string;              // 实例 API 地址（SSH 隧道模式默认 http://localhost:6006）
