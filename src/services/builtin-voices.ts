@@ -24,16 +24,19 @@ const META_PATH_CANDIDATES = [
 const META_PATH = META_PATH_CANDIDATES.find((p) => existsSync(p)) ?? META_PATH_CANDIDATES[0];
 
 const CACHE_TTL_MS = 60 * 60 * 1000;
-let cache: { at: number; voices: BuiltinVoice[] } | null = null;
+// 回退结果只短缓存：避免一次网络抖动把目录降级为静态精选整整 1 小时
+export const FALLBACK_CACHE_TTL_MS = 5 * 60 * 1000;
+let cache: { at: number; ttl: number; voices: BuiltinVoice[] } | null = null;
 
 async function loadMeta(): Promise<Record<string, VoiceMeta>> {
   return JSON.parse(await readFile(META_PATH, "utf-8")) as Record<string, VoiceMeta>;
 }
 
 export async function listBuiltinVoices(): Promise<BuiltinVoice[]> {
-  if (cache && Date.now() - cache.at < CACHE_TTL_MS) return cache.voices;
+  if (cache && Date.now() - cache.at < cache.ttl) return cache.voices;
   const meta = await loadMeta();
   let voices: BuiltinVoice[];
+  let ttl = CACHE_TTL_MS;
   try {
     const config = await loadConfig();
     if (!config.minimax?.apiKey) throw new Error("no apiKey");
@@ -46,9 +49,10 @@ export async function listBuiltinVoices(): Promise<BuiltinVoice[]> {
         : { voice_id: v.voice_id, name: v.name || v.voice_id, category: "其他", description: v.description };
     });
   } catch {
-    // 回退：静态精选（已验证音色子集）
+    // 回退：静态精选（已验证音色子集），短缓存以便快速自愈
     voices = Object.entries(meta).map(([voice_id, m]) => ({ voice_id, ...m }));
+    ttl = FALLBACK_CACHE_TTL_MS;
   }
-  cache = { at: Date.now(), voices };
+  cache = { at: Date.now(), ttl, voices };
   return voices;
 }
