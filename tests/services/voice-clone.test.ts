@@ -12,7 +12,7 @@ vi.mock("../../src/providers/minimax-tts.js", () => ({
 
 import { mkdtemp, rm, access, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, basename } from "node:path";
 
 const cfg = { minimax: { apiKey: "k" } } as any;
 
@@ -98,6 +98,31 @@ describe("voice-clone service", () => {
     const p = await svc.generateBuiltinDemo("male-qn-qingse");
     expect(p).toContain("builtin-demos");
     expect(voicesRepo.listVoices()).toHaveLength(0);
+  });
+
+  it("内置音色试听支持含空格/括号的 MiniMax voice_id（哈希文件名缓存）", async () => {
+    tts.synthesizeToFile.mockImplementation(async (_k: string, opts: any) => {
+      await writeFile(opts.outPath, Buffer.from("demo"));
+      return { success: true, assetPath: opts.outPath };
+    });
+    const voiceId = "Chinese (Mandarin)_LyricMan";
+    const p1 = await svc.generateBuiltinDemo(voiceId);
+    expect(p1).toContain("builtin-demos");
+    expect(basename(p1)).toMatch(/^[a-zA-Z0-9_-]+\.mp3$/);
+    await access(p1);
+    // 第二次调用命中缓存，不再合成
+    const p2 = await svc.generateBuiltinDemo(voiceId);
+    expect(p2).toBe(p1);
+    expect(tts.synthesizeToFile).toHaveBeenCalledTimes(1);
+    // 带尾随空格的 ID（MiniMax 真实数据，如 "Santa_Claus "）同样可用
+    const p3 = await svc.generateBuiltinDemo("Santa_Claus ");
+    expect(basename(p3)).toMatch(/^[a-zA-Z0-9_-]+\.mp3$/);
+  });
+
+  it("内置音色试听拒绝路径穿越 voice_id", async () => {
+    await expect(svc.generateBuiltinDemo("../evil")).rejects.toThrow("非法 voice_id");
+    await expect(svc.generateBuiltinDemo("a/b")).rejects.toThrow("非法 voice_id");
+    await expect(svc.generateBuiltinDemo("a\\b")).rejects.toThrow("非法 voice_id");
   });
 
   it("收藏内置音色落库为 builtin_fav/ready，重复收藏返回已有", async () => {

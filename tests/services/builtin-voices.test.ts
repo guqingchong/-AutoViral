@@ -35,6 +35,18 @@ describe("builtin-voices", () => {
     expect(voices.every((v) => v.name && v.category)).toBe(true);
   });
 
+  it("MiniMax 脏数据：首尾空格的 voice_id 被 trim 且去重", async () => {
+    client.listSystemVoices.mockResolvedValue([
+      { voice_id: "Santa_Claus " },
+      { voice_id: "Santa_Claus" },
+      { voice_id: "male-qn-qingse" },
+    ]);
+    const voices = await svc.listBuiltinVoices();
+    const santa = voices.filter((v) => v.voice_id === "Santa_Claus");
+    expect(santa).toHaveLength(1);
+    expect(voices.some((v) => v.voice_id !== v.voice_id.trim())).toBe(false);
+  });
+
   it("回退结果短缓存：TTL 内不重试，过期后重新拉取动态列表", async () => {
     vi.useFakeTimers();
     try {
