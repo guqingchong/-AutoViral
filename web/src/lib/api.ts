@@ -893,7 +893,7 @@ export async function cloneVoice(name: string, file: File) {
 }
 
 export async function requestVoiceDemo(id: string, text?: string) {
-  return post<{ url: string }>(`/api/voices/${id}/demo`, { text });
+  return post<{ url: string }>(`/api/voices/${encodeURIComponent(id)}/demo`, { text });
 }
 
 export async function requestBuiltinDemo(voiceId: string, text?: string) {
@@ -905,5 +905,5 @@ export async function favoriteVoice(voiceId: string, name: string, metadata?: Re
 }
 
 export async function deleteVoice(id: string) {
-  return request<{ deleted: boolean }>(`/api/voices/${id}`, { method: "DELETE" });
+  return request<{ deleted: boolean }>(`/api/voices/${encodeURIComponent(id)}`, { method: "DELETE" });
 }

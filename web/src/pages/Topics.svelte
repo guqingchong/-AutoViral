@@ -27,6 +27,17 @@
   let myVoices = $state<VoiceItem[]>([]);
   let builtinVoices = $state<BuiltinVoice[]>([]);
   let batchVoiceMode = $state<"cloned" | "ai">("ai");
+
+  // 模式/列表变化时同步选中的音色，避免提交了另一模式下的 voice_id
+  $effect(() => {
+    if (batchVoiceMode === "cloned") {
+      batchVoiceStyle = myVoices[0]?.voice_id ?? "";
+    } else {
+      batchVoiceStyle = builtinVoices.some((v) => v.voice_id === batchVoiceStyle)
+        ? batchVoiceStyle
+        : (builtinVoices[0]?.voice_id ?? "");
+    }
+  });
   const DURATION_OPTIONS = [
     { value: 30, label: "约 30 秒" },
     { value: 60, label: "约 1 分钟" },
@@ -670,7 +681,7 @@
               <p class="batch-hint">未选择模板/数字人 → <strong>深度介入模式</strong>：每个作品需要在制作对话中逐步确认。选择模板或数字人后切换为全自动模式。</p>
             {/if}
           </div>
-          <button class="btn-batch-start" disabled={batchConverting} onclick={batchConvert}>
+          <button class="btn-batch-start" disabled={batchConverting || (batchType === "short-video" && batchVoiceMode === "cloned" && myVoices.length === 0)} onclick={batchConvert}>
             {batchConverting ? "启动中..." : `批量创建 ${selectedTopicIds.size} 个作品`}
           </button>
         {/if}
