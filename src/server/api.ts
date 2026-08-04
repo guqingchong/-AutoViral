@@ -84,6 +84,13 @@ import {
   listPublishRecords,
 } from "../db/publish-records-repo.js";
 import { listLatestWorkMetrics } from "../db/platform-metrics-repo.js";
+import * as voicesRepo from "../db/voices-repo.js";
+import {
+  cloneVoiceFromUpload, generateVoiceDemo, generateBuiltinDemo,
+  favoriteBuiltinVoice, deleteVoiceWithFiles,
+  voicesDir, builtinDemoDir, isValidVoiceId,
+} from "../services/voice-clone.js";
+import { listBuiltinVoices, BUILTIN_CATEGORIES } from "../services/builtin-voices.js";
 
 export const apiRoutes = new Hono();
 
@@ -913,6 +920,102 @@ apiRoutes.delete("/api/shared-assets/:category/:file", async (c) => {
     if (e.message?.includes("Invalid")) return c.json({ error: e.message }, 400);
     return c.json({ error: "Delete failed" }, 500);
   }
+});
+
+// ---------------------------------------------------------------------------
+// Voices（声音克隆 / 配音音色库）
+// ---------------------------------------------------------------------------
+
+apiRoutes.get("/api/voices", async (c) => {
+  return c.json({ voices: voicesRepo.listVoices() });
+});
+
+apiRoutes.get("/api/voices/builtin", async (c) => {
+  const voices = await listBuiltinVoices();
+  return c.json({ voices, categories: [...BUILTIN_CATEGORIES] });
+});
+
+// POST /api/voices/clone — 上传样本克隆真人声音（multipart: name, file）
+apiRoutes.post("/api/voices/clone", async (c) => {
+  try {
+    const body = await c.req.parseBody();
+    const name = (body.name as string) || "";
+    const file = body.file as File | undefined;
+    if (!file) return c.json({ error: "file is required" }, 400);
+    if (!name.trim()) return c.json({ error: "name is required" }, 400);
+    const buffer = Buffer.from(await file.arrayBuffer());
+    const voice = await cloneVoiceFromUpload(name, buffer, file.name);
+    return c.json(voice, 201);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "克隆失败";
+    if (message.includes("不支持的音频格式") || message.includes("20MB")) {
+      return c.json({ error: message }, 400);
+    }
+    return c.json({ error: message }, 500);
+  }
+});
+
+// POST /api/voices/:id/demo — 生成/复用试听
+apiRoutes.post("/api/voices/:id/demo", async (c) => {
+  const id = c.req.param("id");
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    await generateVoiceDemo(id, (body as any).text);
+    return c.json({ url: `/api/voices/${id}/demo.mp3?t=${Date.now()}` });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "试听生成失败";
+    return c.json({ error: message }, message.includes("不存在") ? 404 : 500);
+  }
+});
+
+apiRoutes.get("/api/voices/:id/demo.mp3", async (c) => {
+  const id = c.req.param("id");
+  if (!isValidVoiceId(id)) return c.json({ error: "Invalid id" }, 400);
+  try {
+    const data = await readFile(join(voicesDir(id), "demo.mp3"));
+    return new Response(data, { headers: { "Content-Type": "audio/mpeg", "Cache-Control": "public, max-age=3600" } });
+  } catch {
+    return c.json({ error: "Demo not found" }, 404);
+  }
+});
+
+// POST /api/voices/builtin-demo — 内置音色试听
+apiRoutes.post("/api/voices/builtin-demo", async (c) => {
+  const { voiceId, text } = await c.req.json();
+  if (!voiceId || !isValidVoiceId(voiceId)) return c.json({ error: "voiceId is required" }, 400);
+  try {
+    await generateBuiltinDemo(voiceId, text);
+    return c.json({ url: `/api/voices/builtin-demos/${voiceId}.mp3?t=${Date.now()}` });
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : "试听生成失败" }, 500);
+  }
+});
+
+apiRoutes.get("/api/voices/builtin-demos/:filename", async (c) => {
+  const filename = c.req.param("filename");
+  if (!/^[a-zA-Z0-9_-]+\.mp3$/.test(filename)) return c.json({ error: "Invalid filename" }, 400);
+  try {
+    const data = await readFile(join(builtinDemoDir(), filename));
+    return new Response(data, { headers: { "Content-Type": "audio/mpeg", "Cache-Control": "public, max-age=86400" } });
+  } catch {
+    return c.json({ error: "Demo not found" }, 404);
+  }
+});
+
+// POST /api/voices/favorite — 收藏内置音色
+apiRoutes.post("/api/voices/favorite", async (c) => {
+  const { voiceId, name, metadata } = await c.req.json();
+  if (!voiceId || !name) return c.json({ error: "voiceId and name are required" }, 400);
+  const voice = await favoriteBuiltinVoice(voiceId, name, metadata ?? {});
+  return c.json(voice, 201);
+});
+
+apiRoutes.delete("/api/voices/:id", async (c) => {
+  const id = c.req.param("id");
+  if (!isValidVoiceId(id)) return c.json({ error: "Voice not found" }, 404);
+  const ok = await deleteVoiceWithFiles(id);
+  if (!ok) return c.json({ error: "Voice not found" }, 404);
+  return c.json({ deleted: true });
 });
 
 // GET /api/interests — 获取用户兴趣列表
