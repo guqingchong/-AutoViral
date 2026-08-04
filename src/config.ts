@@ -151,7 +151,9 @@ export async function loadConfig(): Promise<Config> {
     if (process.env.OPENROUTER_API_KEY) {
       config.openrouter = { apiKey: process.env.OPENROUTER_API_KEY };
     }
-    if (process.env.MINIMAX_API_KEY) {
+    if (process.env.MINIMAX_API_KEY && !config.minimax?.apiKey) {
+      // 仅在 YAML 未配置时兜底：设置页可填 minimaxKey，若 env 永远优先，
+      // 用户在设置页保存的 key 会被静默屏蔽（2026-08-04 设置页显性化修复）
       config.minimax = { apiKey: process.env.MINIMAX_API_KEY };
     }
     if (process.env.EVERMEMOS_API_KEY) {
