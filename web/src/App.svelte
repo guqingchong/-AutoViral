@@ -41,6 +41,7 @@
   let unsplashAccessKey: string = $state("");
   let jimengAccessKey: string = $state("");
   let jimengSecretKey: string = $state("");
+  let minimaxKey: string = $state("");
   let heygemBaseUrl: string = $state("");
   let heygemApiToken: string = $state("");
   let heygemGpuHourlyRateYuan: number = $state(1.78);
@@ -50,6 +51,7 @@
   let showPexelsKey: boolean = $state(false);
   let showPixabayKey: boolean = $state(false);
   let showUnsplashKey: boolean = $state(false);
+  let showMinimaxKey: boolean = $state(false);
 
   function openStudio(workId: string) {
     initialPrompt = "";
@@ -155,6 +157,7 @@
           interval, model, autoRun,
           pexelsApiKey, pixabayApiKey, unsplashAccessKey,
           jimengAccessKey, jimengSecretKey,
+          minimaxKey,
           heygemBaseUrl, heygemApiToken, heygemGpuHourlyRateYuan,
           heygemTunnelHost, heygemTunnelPort,
         }),
@@ -165,6 +168,9 @@
       const verify = await (await fetch("/api/config")).json();
       if (pexelsApiKey.trim() !== (verify.pexelsApiKey ?? "")) {
         throw new Error("Pexels Key 未能写入，请重试");
+      }
+      if (minimaxKey.trim() !== (verify.minimaxKey ?? "")) {
+        throw new Error("MiniMax Key 未能写入，请重试");
       }
       settingsMessage = tt("settingsSaved");
       setTimeout(() => { settingsMessage = ""; }, 3000);
@@ -203,6 +209,7 @@
         unsplashAccessKey = data.unsplashAccessKey ?? "";
         jimengAccessKey = data.jimengAccessKey ?? "";
         jimengSecretKey = data.jimengSecretKey ?? "";
+        minimaxKey = data.minimaxKey ?? "";
         heygemBaseUrl = data.heygemBaseUrl ?? "";
         heygemApiToken = data.heygemApiToken ?? "";
         heygemGpuHourlyRateYuan = data.heygemGpuHourlyRateYuan ?? 1.78;
@@ -415,6 +422,20 @@
               <input type="text" bind:value={jimengSecretKey} placeholder="火山引擎 SecretKey" class="key-input" />
             </label>
             <p class="hint-sm">Pexels/Pixabay/Unsplash 用于素材搜索；即梦用于 AI 生图/生视频。Openverse 无需配置即可使用。</p>
+          </div>
+        </div>
+
+        <div class="field-group">
+          <span class="field-label-upper">MiniMax（配音 / 声音克隆 / 音乐）</span>
+          <div class="stack">
+            <label class="field-row">
+              <span class="field-label-sm">MiniMax API Key</span>
+              <div class="key-input-row">
+                <input type={showMinimaxKey ? "text" : "password"} bind:value={minimaxKey} placeholder="minimax.chat 平台 API Key" class="key-input" />
+                <button class="key-toggle" onclick={() => showMinimaxKey = !showMinimaxKey}>{showMinimaxKey ? "🙈" : "👁"}</button>
+              </div>
+            </label>
+            <p class="hint-sm">用于 AI 配音、真人声音克隆和 BGM 生成。未配置时配音音色功能不可用。</p>
           </div>
         </div>
 

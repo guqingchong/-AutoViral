@@ -241,7 +241,8 @@ apiRoutes.put("/api/config", async (c) => {
     config.openrouter = { apiKey: body.openrouterKey as string };
   }
   if (body.minimaxKey !== undefined) {
-    config.minimax = { apiKey: body.minimaxKey as string };
+    // 保留 groupId 等其他 minimax 字段，避免保存 key 时被覆盖丢失
+    config.minimax = { ...config.minimax, apiKey: body.minimaxKey as string };
   }
   if (body.researchEnabled !== undefined) {
     if (!config.research) config.research = { enabled: false, schedule: "0 9 * * *", platforms: ["douyin", "xiaohongshu"] };
