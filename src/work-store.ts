@@ -59,6 +59,8 @@ export interface Work {
   articleId?: number;
   scriptId?: number;
   digitalHumanId?: string;
+  /** TTS 音色（MiniMax voice_id / 克隆音色 ID），缺省用 provider 默认音色 */
+  voiceId?: string;
   templateId?: string;
   accountId?: string;
   evaluationMode?: boolean;
@@ -177,6 +179,7 @@ function dbWorkToWork(w: DbWork, steps?: DbPipelineStep[]): Work {
     articleId: w.article_id,
     scriptId: w.script_id,
     digitalHumanId: w.digital_human_id,
+    voiceId: w.voice_id,
     templateId: w.template_id,
     accountId: w.account_id ?? undefined,
     evaluationMode: w.evaluation_mode,
@@ -239,6 +242,7 @@ export async function createWork(input: {
   accountId?: string;
   templateId?: string;
   digitalHumanId?: string;
+  voiceId?: string;
 }): Promise<Work> {
   await maybeMigrateLegacy();
   const now = new Date().toISOString();
@@ -259,6 +263,7 @@ export async function createWork(input: {
     account_id: input.accountId,
     template_id: input.templateId,
     digital_human_id: input.digitalHumanId,
+    voice_id: input.voiceId,
     tags: [],
     created_at: now,
     updated_at: now,
@@ -304,6 +309,7 @@ export async function updateWork(id: string, updates: Partial<Work>): Promise<Wo
   if (updates.articleId !== undefined) dbUpdates.article_id = updates.articleId;
   if (updates.scriptId !== undefined) dbUpdates.script_id = updates.scriptId;
   if (updates.digitalHumanId !== undefined) dbUpdates.digital_human_id = updates.digitalHumanId;
+  if (updates.voiceId !== undefined) dbUpdates.voice_id = updates.voiceId;
   if (updates.templateId !== undefined) dbUpdates.template_id = updates.templateId;
   if (updates.cliSessionId !== undefined) dbUpdates.cli_session_id = updates.cliSessionId;
   if (updates.evalSessionIds !== undefined) dbUpdates.eval_session_ids = updates.evalSessionIds;
