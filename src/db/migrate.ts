@@ -612,6 +612,23 @@ CREATE INDEX IF NOT EXISTS idx_voices_voice_id ON voices(voice_id);
 CREATE INDEX IF NOT EXISTS idx_voices_type ON voices(type);
 `,
   },
+  {
+    version: 17,
+    name: "work_queue",
+    sql: `
+CREATE TABLE IF NOT EXISTS work_queue (
+  work_id TEXT PRIMARY KEY,
+  position INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued',
+  enqueued_at TEXT NOT NULL,
+  started_at TEXT,
+  finished_at TEXT,
+  resume_attempts INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_work_queue_status_pos ON work_queue(status, position);
+ALTER TABLE digital_human_jobs ADD COLUMN queue_position INTEGER;
+`,
+  },
 ];
 
 export function migrate(): void {
