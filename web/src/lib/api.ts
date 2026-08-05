@@ -598,6 +598,33 @@ export async function fetchDigitalHumanBatchStatus(): Promise<DigitalHumanBatchS
 }
 
 // ---------------------------------------------------------------------------
+// Digital Human Render Pool（渲染池：攒批 + 立即渲染）
+// ---------------------------------------------------------------------------
+
+export interface RenderPoolItem {
+  jobId: string;
+  workId: string;
+  title: string;
+  queuePosition: number | null;
+  status: string;
+}
+
+export interface RenderPoolView {
+  items: RenderPoolItem[];
+  pendingBoot: boolean;
+  instance: { state: InstanceView["state"]; consoleUrl: string };
+  batch: DigitalHumanBatchState;
+}
+
+export async function fetchRenderPool(): Promise<RenderPoolView> {
+  return get<RenderPoolView>("/api/digital-humans/render-pool");
+}
+
+export async function renderNow(): Promise<DigitalHumanBatchState & { pendingBoot: boolean }> {
+  return post<DigitalHumanBatchState & { pendingBoot: boolean }>("/api/digital-humans/render-now", {});
+}
+
+// ---------------------------------------------------------------------------
 // Asset Library API
 // ---------------------------------------------------------------------------
 

@@ -5,8 +5,9 @@
     submitDigitalHumanJob, refreshDigitalHumanJob, deleteDigitalHumanJob,
     regenerateDigitalHumanJob, fetchInstanceStatus,
     fetchDigitalHumanBatchPending, runDigitalHumanBatch, fetchDigitalHumanBatchStatus,
+    fetchRenderPool, renderNow,
     ApiError, type Avatar, type DigitalHumanJob, type InstanceView,
-    type DigitalHumanBatchState,
+    type DigitalHumanBatchState, type RenderPoolView,
   } from "../lib/api.js";
   import { t, getLanguage, subscribe } from "../lib/i18n.js";
 
@@ -22,6 +23,9 @@
   let message = $state("");
   let pendingCount = $state(0);
   let batch = $state<DigitalHumanBatchState | null>(null);
+  let renderPool = $state<RenderPoolView | null>(null);
+  let renderDoneBanner = $state(false);
+  let renderBusy = $state(false);
 
   onMount(() => {
     const unsub = subscribe(() => { lang = getLanguage(); });
@@ -29,9 +33,11 @@
     loadInstance();
     loadPending();
     pollBatch();
+    pollRenderPool();
     const timer = setInterval(() => { loadInstance(); }, 10000);
     const batchTimer = setInterval(() => { pollBatch(); }, 5000);
-    return () => { unsub(); clearInterval(timer); clearInterval(batchTimer); };
+    const poolTimer = setInterval(() => { pollRenderPool(); }, 6000);
+    return () => { unsub(); clearInterval(timer); clearInterval(batchTimer); clearInterval(poolTimer); };
   });
 
   function tt(key: string): string { void lang; return t(key); }
@@ -77,6 +83,49 @@
       await loadPending();
     } catch (err) {
       message = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  async function pollRenderPool() {
+    try {
+      const prev = renderPool;
+      const view = await fetchRenderPool();
+      renderPool = view;
+      const wasActive = !!prev && (prev.items.length > 0 || prev.batch.running);
+      const nowIdle = view.items.length === 0 && !view.batch.running;
+      if (wasActive && nowIdle && view.batch.total > 0) {
+        // 池刚清空且刚完成过批次 → 强提醒关机省费
+        renderDoneBanner = true;
+        await load();
+      } else if (!nowIdle) {
+        renderDoneBanner = false;
+      }
+    } catch { /* 渲染池拉取失败不打断页面 */ }
+  }
+
+  async function handleRenderNow() {
+    if (!renderPool) return;
+    // 实例离线：引导去 AutoDL 控制台开机；同时通知后端挂起待渲（pendingBoot），上线后自动开渲
+    if (renderPool.instance.state !== "ready") {
+      renderBusy = true;
+      try {
+        await renderNow();
+      } catch { /* 挂起失败不阻塞开机引导 */ }
+      window.open(renderPool.instance.consoleUrl, "_blank", "noopener");
+      renderBusy = false;
+      await pollRenderPool();
+      return;
+    }
+    renderBusy = true;
+    try {
+      message = "";
+      await renderNow();
+      renderDoneBanner = false;
+      await pollRenderPool();
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    } finally {
+      renderBusy = false;
     }
   }
 
@@ -191,6 +240,53 @@
     {/if}
     {#if instance && instance.state === "ready" && instance.idleMinutes >= instance.idleReminderMinutes}
       <p class="idle-banner">{tt("idleReminder").replace("{n}", String(instance.idleMinutes))}</p>
+    {/if}
+  </section>
+
+  <section class="panel">
+    <h2>{tt("renderQueue")}</h2>
+    {#if renderDoneBanner}
+      <p class="done-banner">{tt("renderAllDone")}</p>
+    {/if}
+    {#if renderPool}
+      {#if renderPool.items.length > 0}
+        <ul class="list">
+          {#each renderPool.items as item}
+            <li class="pool-row">
+              <span class="name">{item.title || item.workId || item.jobId}</span>
+              {#if item.queuePosition !== null}
+                <span class="meta">{tt("renderPoolQueueOrder").replace("{n}", String(item.queuePosition))}</span>
+              {/if}
+              <span class="badge">{item.status}</span>
+            </li>
+          {/each}
+        </ul>
+      {:else}
+        <p class="meta">{tt("renderPoolEmpty")}</p>
+      {/if}
+      {#if renderPool.pendingBoot}
+        <p class="pending-boot">{tt("pendingBootHint")}</p>
+      {/if}
+      <div class="row pool-actions">
+        <span class="spacer"></span>
+        <button
+          class="btn-primary"
+          disabled={renderBusy || renderPool.items.length === 0 || (renderPool.batch.running ?? false)}
+          onclick={handleRenderNow}
+        >
+          {renderPool.instance.state === "ready" ? tt("renderNow") : tt("goPowerOn")}
+        </button>
+      </div>
+      {#if renderPool.batch.running}
+        <p class="meta batch-progress">{tt("batchRunning")} {tt("batchProgress")
+          .replace("{submitted}", String(renderPool.batch.submitted))
+          .replace("{total}", String(renderPool.batch.total))
+          .replace("{done}", String(renderPool.batch.done))
+          .replace("{failed}", String(renderPool.batch.failed))}
+        </p>
+      {/if}
+    {:else}
+      <p class="meta">{tt("loading")}</p>
     {/if}
   </section>
 
@@ -327,4 +423,8 @@
   .idle-banner { font-size: var(--size-sm); color: #92600a; background: #fef3c7; border: 1px solid #f59e0b; border-radius: 4px; padding: 0.5rem 0.75rem; margin-top: 0.75rem; }
   .error-text { font-size: var(--size-sm); color: var(--error); margin-top: 0.5rem; }
   .batch-progress { margin-top: 0.75rem; }
+  .pool-row { display: flex; align-items: center; gap: 0.75rem; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: 4px; padding: 0.6rem 0.8rem; }
+  .pool-actions { margin-top: 0.75rem; }
+  .pending-boot { font-size: var(--size-sm); color: #92600a; background: #fef3c7; border: 1px solid #f59e0b; border-radius: 4px; padding: 0.5rem 0.75rem; margin-top: 0.75rem; }
+  .done-banner { font-weight: 600; color: #166534; background: #dcfce7; border: 1px solid #22c55e; border-radius: 4px; padding: 0.6rem 0.8rem; margin: 0 0 0.75rem; }
 </style>
