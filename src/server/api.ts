@@ -1470,6 +1470,9 @@ export async function startWorkSession(id: string, extraInstruction?: string): P
     `你是一个内容创作助手。你正在帮助用户创作: "${work.title}" (类型: ${work.type})。`,
     `目标平台: ${work.platforms.map((p: any) => typeof p === "string" ? p : p.platform).join(", ")}。`,
     work.topicHint ? `选题方向: ${work.topicHint}` : "",
+    // 素材三维约束（批量制作传入并落库 works.asset_*，会话启动时拼入指令）
+    buildAssetConstraintSection(work.assetForm, work.assetSource, work.assetBudget),
+    work.dualOutput ? `双产物: 本作品需同时产出短视频与图文（内容一致、素材共用），视频合成完成后派生图文产物` : "",
     hasTemplate ? `使用模板: ${work.templateId}` : "",
     hasDigitalHuman ? `使用数字人: ${work.digitalHumanId}` : "",
     digitalHumanDone
@@ -2911,7 +2914,8 @@ interface BatchConvertOptions {
   templateId?: string;
   digitalHumanId?: string;
   platforms?: string[];
-  type?: "short-video" | "image-text";
+  /** video+image-text = 短视频作品 + 双产物标记（works.dual_output=1） */
+  type?: "short-video" | "video+image-text" | "image-text";
   /** 视频时长（秒），默认 180 */
   duration?: number;
   /** 视频风格：hot_comment | knowledge | industry | insight */
@@ -2924,6 +2928,12 @@ interface BatchConvertOptions {
   voiceStyle?: string;
   /** 配音模式：克隆音色 | AI 音色 */
   voiceMode?: "cloned" | "ai";
+  /** 素材形态：video-mix | image-carousel | slides | auto */
+  assetForm?: string;
+  /** 素材来源：stock | ai | user | auto */
+  assetSource?: string;
+  /** 成本档：eco（禁 AI 视频生成）| premium */
+  assetBudget?: string;
 }
 
 const CONTENT_FORM_LABELS: Record<string, string> = {
@@ -2933,13 +2943,54 @@ const CONTENT_FORM_LABELS: Record<string, string> = {
   insight: "观点输出",
 };
 
+/** 素材三维合法值（非法值静默丢弃，不阻断批量任务） */
+const ASSET_FORMS = new Set(["video-mix", "image-carousel", "slides", "auto"]);
+const ASSET_SOURCES = new Set(["stock", "ai", "user", "auto"]);
+const ASSET_BUDGETS = new Set(["eco", "premium"]);
+
+const ASSET_FORM_LABELS: Record<string, string> = {
+  "video-mix": "以真实视频混剪为主",
+  "image-carousel": "图片轮播配讲解",
+  slides: "AI 生成讲解幻灯片",
+  auto: "不限制",
+};
+const ASSET_SOURCE_LABELS: Record<string, string> = {
+  stock: "仅用素材库真实素材",
+  ai: "仅 AI 生成",
+  user: "仅用用户指定素材",
+  auto: "不限制",
+};
+const ASSET_BUDGET_LABELS: Record<string, string> = {
+  eco: "禁止 AI 生成视频（只允许 AI 图片，控制成本）",
+  premium: "不限制",
+};
+
+function sanitizeAssetForm(v?: string): string | undefined { return v && ASSET_FORMS.has(v) ? v : undefined; }
+function sanitizeAssetSource(v?: string): string | undefined { return v && ASSET_SOURCES.has(v) ? v : undefined; }
+function sanitizeAssetBudget(v?: string): string | undefined { return v && ASSET_BUDGETS.has(v) ? v : undefined; }
+
+/** 素材三维 → prompt 约束段（三维全空时返回空串） */
+function buildAssetConstraintSection(assetForm?: string, assetSource?: string, assetBudget?: string): string {
+  const lines: string[] = [];
+  if (assetForm) lines.push(`- 素材形态: ${ASSET_FORM_LABELS[assetForm] ?? assetForm}`);
+  if (assetSource) lines.push(`- 素材来源: ${ASSET_SOURCE_LABELS[assetSource] ?? assetSource}`);
+  if (assetBudget) lines.push(`- 成本档: ${ASSET_BUDGET_LABELS[assetBudget] ?? assetBudget}`);
+  return lines.length ? `素材约束:\n${lines.join("\n")}` : "";
+}
+
 async function runBatchConvert(
   job: BatchConvertJob,
   body: BatchConvertOptions,
 ): Promise<void> {
   const platforms = body.platforms ?? ["douyin", "xiaohongshu"];
   const type = body.type ?? "short-video";
+  // video+image-text：作品仍建 short-video（先走短视频流水线），dual_output=1 标记双产物
+  const dualOutput = type === "video+image-text";
+  const workType: "short-video" | "image-text" = dualOutput ? "short-video" : type;
   const duration = body.duration && body.duration > 0 ? body.duration : 180;
+  const assetForm = workType === "short-video" ? sanitizeAssetForm(body.assetForm) : undefined;
+  const assetSource = workType === "short-video" ? sanitizeAssetSource(body.assetSource) : undefined;
+  const assetBudget = workType === "short-video" ? sanitizeAssetBudget(body.assetBudget) : undefined;
 
   // 串行队列：一次只处理一个选题。
   // 2026-07-21 Bug3 根因：并发 2 条链同时 spawn `claude -p`，LLM 订阅并发
@@ -2950,10 +3001,13 @@ async function runBatchConvert(
 
   // 视频制作控制条件 → 注入 topicHint，随 startWorkSession 的 prompt 直达 agent
   const controlLines: string[] = [];
-  if (type === "short-video") {
+  if (workType === "short-video") {
     controlLines.push(`视频时长: 约${duration}秒`);
     if (body.contentForm) controlLines.push(`视频风格: ${CONTENT_FORM_LABELS[body.contentForm] ?? body.contentForm}`);
     if (body.videoSource) controlLines.push(`素材样式: ${body.videoSource === "ai-generate" ? "AI 生成素材" : "素材库搜索"}`);
+    if (dualOutput) controlLines.push(`双产物: 本作品需同时产出短视频与图文（内容一致、素材共用），视频合成完成后派生图文产物`);
+    const assetSection = buildAssetConstraintSection(assetForm, assetSource, assetBudget);
+    if (assetSection) controlLines.push(assetSection);
     if (body.voiceStyle) {
       const modeLabel = body.voiceMode === "cloned" ? "克隆真人音色" : "AI 合成音色";
       controlLines.push(`配音风格: 使用${modeLabel} voice_id="${body.voiceStyle}"（配音时必须使用该音色，调用 /api/generate/audio 时 voice 参数传该值）`);
@@ -2971,11 +3025,11 @@ async function runBatchConvert(
         item.stage = "creating";
         const work = await createWork({
           title: topic.title,
-          type,
+          type: workType,
           contentCategory: topic.emotion_type as any,
           contentForm: body.contentForm,
-          videoSource: type === "short-video" ? (body.videoSource as any) : undefined,
-          videoSearchQuery: type === "short-video" && body.videoSource === "search"
+          videoSource: workType === "short-video" ? (body.videoSource as any) : undefined,
+          videoSearchQuery: workType === "short-video" && body.videoSource === "search"
             ? (body.videoSearchQuery ?? topic.title)
             : undefined,
           platforms,
@@ -2983,6 +3037,10 @@ async function runBatchConvert(
           templateId: body.templateId,
           digitalHumanId: body.digitalHumanId,
           voiceId: body.voiceStyle,
+          assetForm: assetForm as any,
+          assetSource: assetSource as any,
+          assetBudget: assetBudget as any,
+          dualOutput,
         });
         item.workId = work.id;
 
@@ -3064,7 +3122,7 @@ apiRoutes.post("/api/topics/batch-convert", async (c) => {
     templateId?: string;
     digitalHumanId?: string;
     platforms?: string[];
-    type?: "short-video" | "image-text";
+    type?: "short-video" | "video+image-text" | "image-text";
     autoPipeline?: boolean;
     duration?: number;
     contentForm?: string;
@@ -3072,6 +3130,9 @@ apiRoutes.post("/api/topics/batch-convert", async (c) => {
     videoSearchQuery?: string;
     voiceStyle?: string;
     voiceMode?: "cloned" | "ai";
+    assetForm?: string;
+    assetSource?: string;
+    assetBudget?: string;
   }>().catch(() => ({ topicIds: [] } as any));
 
   if (!body.topicIds?.length) return c.json({ error: "topicIds is required" }, 400);

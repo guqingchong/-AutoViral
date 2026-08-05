@@ -638,6 +638,17 @@ ALTER TABLE templates ADD COLUMN kind TEXT NOT NULL DEFAULT 'video';
 CREATE INDEX IF NOT EXISTS idx_templates_kind ON templates(kind);
 `,
   },
+  {
+    version: 19,
+    name: "works_asset_dimensions",
+    sql: `
+-- 批量制作素材三维（形态/来源/成本档）与双产物标记（短视频+图文）
+ALTER TABLE works ADD COLUMN asset_form TEXT;
+ALTER TABLE works ADD COLUMN asset_source TEXT;
+ALTER TABLE works ADD COLUMN asset_budget TEXT;
+ALTER TABLE works ADD COLUMN dual_output INTEGER NOT NULL DEFAULT 0;
+`,
+  },
 ];
 
 export function migrate(): void {
