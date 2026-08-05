@@ -37,4 +37,28 @@ describe("work-queue-repo", () => {
     repo.enqueue("w1");
     expect(repo.dequeueNext()?.workId).toBe("w2");
   });
+
+  it("终态任务重新入队 + afterRunning：插在 running 之后、其他 queued 之前（打回重做主路径）", () => {
+    // 真实打回流程：入队 → 执行（running）→ settle done → 人工打回 → 重入队
+    repo.enqueue("w_run");
+    repo.enqueue("w_done");
+    repo.enqueue("w_queued");
+    repo.setStatus("w_run", "running");
+    repo.setStatus("w_done", "done");
+
+    repo.enqueue("w_done", { afterRunning: true });
+
+    const item = repo.getItem("w_done");
+    expect(item?.status).toBe("queued");
+    expect(repo.listQueue().map((i) => i.workId)).toEqual(["w_run", "w_done", "w_queued"]);
+    expect(repo.dequeueNext()?.workId).toBe("w_done");
+  });
+
+  it("终态任务重新入队 + afterRunning 且无 running：退化为队尾", () => {
+    repo.enqueue("w1");
+    repo.setStatus("w1", "done");
+    repo.enqueue("w2");
+    repo.enqueue("w1", { afterRunning: true });
+    expect(repo.listQueue().map((i) => i.workId)).toEqual(["w2", "w1"]);
+  });
 });
