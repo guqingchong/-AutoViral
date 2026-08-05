@@ -34,17 +34,19 @@ export function recordActivity(): void {
 }
 
 /**
- * 实例上线（offline→ready 跳变）时尝试触发渲染池攒批：
- * 离线期间池内可能积压 queued 任务（Task 6）。动态 import + 静默容错，
- * 渲染池未就绪或触发失败不阻塞健康探测。
+ * 实例上线（offline→ready 跳变）时通知渲染池：先清 pendingBoot（即使阈值未满），
+ * 再尝试触发攒批 —— 离线期间池内可能积压 queued 任务（Task 6）。
+ * 动态 import + 静默容错，渲染池未就绪或触发失败不阻塞健康探测。
  */
 function notifyInstanceReady(): void {
   void (async () => {
     try {
       const mod = (await import("./digital-human-pipeline.js")) as {
+        onInstanceReady?: () => Promise<unknown>;
         maybeTriggerRenderBatch?: () => Promise<unknown>;
       };
-      await mod.maybeTriggerRenderBatch?.();
+      if (typeof mod.onInstanceReady === "function") await mod.onInstanceReady();
+      else await mod.maybeTriggerRenderBatch?.();
     } catch {
       // 忽略：下次探测上线跳变或队列变更时会重试
     }

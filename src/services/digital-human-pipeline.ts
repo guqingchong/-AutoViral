@@ -137,6 +137,18 @@ function nextPoolPosition(workId: string): number {
 }
 
 /**
+ * 按口播文案长度估算渲染成本（元）：中文 TTS ≈ 4 字/秒，10 秒起步（渲染开销下限），
+ * 成本 = 时长 × GPU 时价（与 finalizeJob 的 actual_cost 口径一致）。未配置时价时为 0。
+ */
+export function estimateRenderCostYuan(narration: string): number {
+  const rate = getConfig().heygem?.gpuHourlyRateYuan ?? 0;
+  if (rate <= 0) return 0;
+  const chars = narration.replace(/\s/g, "").length;
+  const seconds = Math.max(chars / 4, 10);
+  return Math.round(((seconds * rate) / 3600) * 10000) / 10000;
+}
+
+/**
  * 口播 TTS + 建 queued 渲染任务（不提交 HeyGem）。
  * 已有 done 任务时直接取现成产物（流水线兜底，不重复渲染）。
  */
@@ -162,7 +174,9 @@ async function prepareQueuedJobForWork(
   const audio = await tts.generateAudio!({ text: narration, workId, filename: "narration.mp3", voice });
   if (!audio.success || !audio.assetPath) throw new Error(`TTS 合成失败：${audio.error ?? "未知错误"}`);
 
-  assertWithinBudget(0);
+  // 入池时按口播时长估算真实成本并过预算闸；提交时 submitQueuedJob 会按该值再次断言
+  const estimatedCost = estimateRenderCostYuan(narration);
+  assertWithinBudget(estimatedCost);
   const job: DbDigitalHumanJob = {
     id: `dhjob_${randomUUID()}`,
     work_id: workId,
@@ -172,7 +186,7 @@ async function prepareQueuedJobForWork(
     provider: "heygem",
     status: "queued",
     progress: 0,
-    estimated_cost: 0,
+    estimated_cost: estimatedCost,
     actual_cost: 0,
     queue_position: nextPoolPosition(workId),
     created_at: now(),
@@ -218,15 +232,32 @@ export async function maybeTriggerRenderBatch(): Promise<BatchState | null> {
   return null;
 }
 
-/** 手动立即渲染：集中提交池内 queued 任务并轮询完成（条件 c） */
-export async function triggerRenderNow(): Promise<BatchState> {
-  return executeRenderBatch();
+/**
+ * 手动立即渲染：集中提交池内 queued 任务并轮询完成（条件 c）。
+ * 并发安全：in-flight Promise 缓存 —— 批次运行期间的并发触发共享同一批次，
+ * 不会重复提交同一批 queued 任务。
+ */
+let activeBatch: Promise<BatchState> | null = null;
+
+export function triggerRenderNow(): Promise<BatchState> {
+  activeBatch ??= executeRenderBatch().finally(() => {
+    activeBatch = null;
+  });
+  return activeBatch;
+}
+
+/**
+ * 实例上线通知（instance-service 探测到 offline→ready 跳变时调用）：
+ * 无论是否达到触发条件都先清 pendingBoot（避免前端残留"去开机"），再检查攒批触发。
+ */
+export async function onInstanceReady(): Promise<void> {
+  pendingBoot = false;
+  await maybeTriggerRenderBatch();
 }
 
 /**
  * 渲染池同步（队列变更后由队列路由调用）：
- * - 按 work_queue position 重排 queued 任务的 queue_position
- * - 作品已 paused 的任务保持 queued（提交时跳过）
+ * - 按 work_queue position 重排 queued 任务的 queue_position（paused 作品同样重排，仅提交时跳过）
  * - 作品已移出队列的任务取消（status=failed，遵循表现有状态值）
  */
 export function syncRenderPool(): void {
@@ -236,8 +267,6 @@ export function syncRenderPool(): void {
     const item = queueRepo.getItem(job.work_id);
     if (!item) {
       jobsRepo.updateJob(job.id, { status: "failed", error: "作品已移出队列，渲染取消" });
-    } else if (item.status === "paused") {
-      continue;
     } else if (job.queue_position !== item.position) {
       jobsRepo.updateJob(job.id, { queue_position: item.position });
     }
@@ -265,19 +294,13 @@ export function getRenderPool(): RenderPoolItem[] {
 
 /** 集中提交池内 queued 任务（按 queue_position 顺序）并轮询完成。实例离线时不提交，置 pendingBoot */
 async function executeRenderBatch(opts?: { intervalMs?: number; timeoutMs?: number }): Promise<BatchState> {
+  // 原子置位先于任何 await：并发触发在第一步就被拦截，杜绝双批次重复提交同一批任务
   if (batchState.running) return getBatchState();
+  batchState.running = true;
 
   const intervalMs = opts?.intervalMs ?? 10_000;
   const timeoutMs = opts?.timeoutMs ?? 3_600_000; // 60 分钟总上限
 
-  const view = await getInstanceView();
-  if (view.state !== "ready") {
-    if (jobsRepo.listQueuedJobsByPosition().length > 0) pendingBoot = true;
-    return getBatchState();
-  }
-  pendingBoot = false;
-
-  batchState.running = true;
   batchState.total = 0;
   batchState.submitted = 0;
   batchState.done = 0;
@@ -285,25 +308,44 @@ async function executeRenderBatch(opts?: { intervalMs?: number; timeoutMs?: numb
   batchState.startedAt = now();
   batchState.errors = [];
 
-  // jobId -> workId（仅跟踪本次新提交的任务）
+  // jobId -> workId（仅跟踪本次提交/接管的 running 任务）
   const pending = new Map<string, string>();
 
   try {
-    const pool = jobsRepo.listQueuedJobsByPosition();
-    batchState.total = pool.length;
+    const view = await getInstanceView();
+    if (view.state !== "ready") {
+      if (jobsRepo.listQueuedJobsByPosition().length > 0) pendingBoot = true;
+      return getBatchState();
+    }
+    pendingBoot = false;
 
-    for (const job of pool) {
+    const pool = jobsRepo.listQueuedJobsByPosition();
+    // total 只计实际会提交的任务（paused 跳过不计），避免进度对不上
+    const submittable = pool.filter((job) => {
       const item = job.work_id ? queueRepo.getItem(job.work_id) : undefined;
-      // 作品队列中已 paused：跳过不提交，任务保持 queued
-      if (item?.status === "paused") continue;
+      return item?.status !== "paused";
+    });
+    batchState.total = submittable.length;
+
+    for (const job of submittable) {
       try {
         await submitQueuedJob(job.id);
         batchState.submitted++;
         pending.set(job.id, job.work_id ?? "");
       } catch (err) {
-        batchState.failed++;
-        batchState.errors.push({ workId: job.work_id ?? "", error: (err as Error).message });
-        jobsRepo.updateJob(job.id, { status: "failed", error: (err as Error).message });
+        // 复查当前状态：仅当仍是 queued 才标 failed ——
+        // 若已被并发路径提交（running）或完成（done），错标 failed 会把已付费渲染判为失败
+        const current = jobsRepo.getJob(job.id);
+        if (!current || current.status === "queued") {
+          batchState.failed++;
+          batchState.errors.push({ workId: job.work_id ?? "", error: (err as Error).message });
+          if (current) jobsRepo.updateJob(job.id, { status: "failed", error: (err as Error).message });
+        } else if (current.status === "running") {
+          batchState.submitted++;
+          pending.set(job.id, job.work_id ?? "");
+        } else if (current.status === "done") {
+          batchState.done++;
+        }
       }
     }
 
