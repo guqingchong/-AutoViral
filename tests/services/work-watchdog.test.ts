@@ -164,17 +164,12 @@ describe("work-watchdog", () => {
   });
 
   describe("scan（_scanOnceForTest，不真实启动 setInterval）", () => {
-    const startWork = vi.fn<(id: string) => Promise<unknown>>().mockResolvedValue(undefined);
     // scan 内部用真实时钟，夹具时间相对真实 now 构造
     const realAgo = (ms: number) => new Date(Date.now() - ms).toISOString();
 
-    beforeEach(() => {
-      startWork.mockClear();
-    });
-
     it("停滞 + 会话已死 + 不在队列 → 自动入队", async () => {
       createWork(makeWork("w_stall", "assetting", realAgo(60 * 60_000)), []);
-      await _scanOnceForTest({ startWork, isSessionAlive: () => false });
+      await _scanOnceForTest({ isSessionAlive: () => false });
       const item = queueRepo.getItem("w_stall");
       expect(item).toBeDefined();
       expect(item?.status).toBe("queued");
@@ -182,7 +177,7 @@ describe("work-watchdog", () => {
 
     it("停滞 + 会话仍存活 → 不动（只是慢）", async () => {
       createWork(makeWork("w_slow", "assetting", realAgo(60 * 60_000)), []);
-      await _scanOnceForTest({ startWork, isSessionAlive: () => true });
+      await _scanOnceForTest({ isSessionAlive: () => true });
       expect(queueRepo.getItem("w_slow")).toBeUndefined();
     });
 
@@ -190,7 +185,7 @@ describe("work-watchdog", () => {
       createWork(makeWork("w_q", "planning", realAgo(60 * 60_000)), []);
       queueRepo.enqueue("w_q");
       const before = queueRepo.getItem("w_q");
-      await _scanOnceForTest({ startWork, isSessionAlive: () => false });
+      await _scanOnceForTest({ isSessionAlive: () => false });
       const after = queueRepo.getItem("w_q");
       expect(after?.position).toBe(before?.position);
       expect(after?.status).toBe("queued");
@@ -198,7 +193,7 @@ describe("work-watchdog", () => {
 
     it("无停滞作品 → 不入队任何东西", async () => {
       createWork(makeWork("w_ok", "researching", realAgo(60_000)), []);
-      await _scanOnceForTest({ startWork, isSessionAlive: () => false });
+      await _scanOnceForTest({ isSessionAlive: () => false });
       expect(queueRepo.listQueue()).toHaveLength(0);
     });
   });

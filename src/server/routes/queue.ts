@@ -61,7 +61,10 @@ queueRoutes.post("/:workId/prioritize", async (c) => {
   return c.json({ item: queueRepo.getItem(workId) });
 });
 
-// POST /:workId/pause — 暂停（queued/running → paused）
+// POST /:workId/pause — 暂停（queued/running → paused）。
+// 语义裁决（Task 5）：pause 一个 running 项不会停止其活跃会话 —— 会话跑完当前
+// 阶段后自然推进/退出，runner 的健康检查只扫描 running 项，paused 后不再为其
+// 恢复会话或启动新动作；resume 后回到 queued 由 runner 重新调度。
 queueRoutes.post("/:workId/pause", async (c) => {
   const workId = c.req.param("workId");
   const item = queueRepo.getItem(workId);

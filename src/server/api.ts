@@ -53,6 +53,7 @@ import {
   recheckCompliance,
 } from "../services/asset-library.js";
 import { syncStepConversation } from "../memory-sync.js";
+import { enqueueWork, notifyWorkSettled } from "../services/work-queue.js";
 import { log, readLogs } from "../logger.js";
 import { runPipeline, getRunStatus, listRuns, getRunReport, type RunConfig } from "../test-runner.js";
 import { evaluateWork } from "../test-evaluator.js";
@@ -442,7 +443,8 @@ apiRoutes.delete("/api/works/:id", async (c) => {
 // 1) 持久化审核意见（works.review_comment）；
 // 2) 流水线重置：目标阶段 → active，其后阶段 → pending，之前阶段 → done；
 // 3) works.status 跟随流水线派生（planning/assetting/assembling），不再滞留待审核列表；
-// 4) 审核意见直达 AI：会话活跃则发指令；会话已死则重建全自动会话并注入打回上下文。
+// 4) 作品入队（排在 running 之后），由串行 runner 重建会话 —— 审核意见已入库，
+//    runner 调 startWorkSession 时会随 prompt 自动注入，无需在此直接驱动会话。
 apiRoutes.post("/api/works/:id/reject", async (c) => {
   const id = c.req.param("id");
   try {
@@ -482,33 +484,12 @@ apiRoutes.post("/api/works/:id/reject", async (c) => {
     broadcastPipelineUpdate(id, work.pipeline);
     log("info", "api", "work_rejected", id, { stage, status: newStatus });
 
-    // 3. 审核意见直达 AI
-    const stageName = work.pipeline[stage].name ?? stage;
-    const rejectInstruction = [
-      `## 审核打回（人工复审未通过）`,
-      ``,
-      `审核意见：${comment}`,
-      ``,
-      `请从「${stageName}」阶段重新执行：根据以上审核意见修改该阶段产出，完成后调用 pipeline/advance 推进，并依次完成后续所有阶段直至成片。不要询问确认，直接开始。`,
-    ].join("\n");
+    // 3. 入队等待串行 runner 驱动重做（afterRunning：排在当前运行中作品之后、
+    // 其余排队作品之前）。即使该作品此刻有活跃会话也不直接 sendMessage ——
+    // 会话跑完当前阶段后自然停滞，runner 健康检查会重建会话并注入审核意见。
+    enqueueWork(id, { afterRunning: true });
 
-    let delivery: "message" | "session" | "none" = "none";
-    if (wsBridge) {
-      const session = wsBridge.getSession(id);
-      if (session?.cliProcess) {
-        await wsBridge.sendMessage(id, rejectInstruction);
-        delivery = "message";
-      } else {
-        try {
-          await startWorkSession(id, rejectInstruction);
-          delivery = "session";
-        } catch (err) {
-          log("error", "api", "reject_session_start_failed", id, { error: (err as Error).message });
-        }
-      }
-    }
-
-    return c.json({ ok: true, status: newStatus, pipeline: work.pipeline, delivery });
+    return c.json({ ok: true, status: newStatus, pipeline: work.pipeline, delivery: "queued" });
   } catch (err) {
     return c.json({ error: err instanceof Error ? err.message : "Reject error" }, 500);
   }
@@ -1435,7 +1416,7 @@ apiRoutes.post("/api/works/:id/abort", async (c) => {
  * POST /api/works/:id/session 与批量自动流水线共用。
  * extraInstruction：额外指令（如发布中心打回的审核意见），拼入开场 prompt。
  */
-async function startWorkSession(id: string, extraInstruction?: string): Promise<{ status: string; step?: string }> {
+export async function startWorkSession(id: string, extraInstruction?: string): Promise<{ status: string; step?: string }> {
   if (!wsBridge) throw new Error("WsBridge not initialized");
   const existing = wsBridge.getSession(id);
   if (existing?.cliProcess) return { status: "already_running" };
@@ -2466,6 +2447,11 @@ apiRoutes.post("/api/works/:id/pipeline/advance", async (c) => {
     const clearReview = derivedStatus === "reviewing" && work.reviewComment ? { reviewComment: "" } : {};
     await storeUpdateWork(id, { pipeline: work.pipeline, status: derivedStatus, ...clearReview });
 
+    // 队列闭环：作品到达终态时通知 runner 出队并启动下一个排队作品。
+    // notifyWorkSettled 仅在该作品处于队列 running 状态时生效，未入队作品调用无副作用。
+    if (derivedStatus === "reviewing") notifyWorkSettled(id, "reviewing");
+    else if (derivedStatus === "failed") notifyWorkSettled(id, "failed");
+
     // Memory sync (keep existing logic)
     if (completedStep) {
       loadStepHistory(id, completedStep).then(history => {
@@ -2869,13 +2855,13 @@ apiRoutes.post("/api/topics/:id/convert", async (c) => {
 
 // POST /api/topics/batch-convert - Convert multiple topics to works with auto-pipeline (async)
 //
-// 立即返回 jobId，后台串行处理：创建作品 → 生成文章/脚本 → 启动 agent 会话
-// （有模板/数字人时全自动走完流水线）。前端轮询 batch-status 获取逐项进度。
+// 立即返回 jobId，后台串行处理：创建作品 → 生成文章/脚本 → 入队（由串行 runner
+// 启动 agent 会话，有模板/数字人时全自动走完流水线）。前端轮询 batch-status 获取逐项进度。
 interface BatchConvertItem {
   topicId: number;
   title?: string;
   workId?: string;
-  /** queued → creating → generating → starting → running / done / error */
+  /** queued → creating → generating → queued（已入作品队列）/ done / error */
   stage: string;
   error?: string;
   /** item 级自动重试计数（配合 LLM 层重试，应对会话启动失败等非 LLM 错误） */
@@ -3005,22 +2991,18 @@ async function runBatchConvert(
         }
       }
 
-      // 全自动模式：真正启动 agent 会话，让流水线自动执行后续阶段
+      // 全自动模式：入队等待串行 runner 启动 agent 会话（不再直接 startWorkSession ——
+      // 并发 spawn 多个 claude 进程会触发订阅限流，串行启动由 runner 统一保证）。
+      // item.stage 置回 "queued"：语义为"已入作品队列，等待 runner 调度"。
       if (job.autoPipeline) {
-        item.stage = "starting";
-        try {
-          await startWorkSession(item.workId!);
-          item.stage = "running";
-        } catch (err) {
-          // 抛出给外层 catch 统一走 item 级重排
-          throw new Error("会话启动失败：" + (err instanceof Error ? err.message : String(err)));
-        }
+        enqueueWork(item.workId!);
+        item.stage = "queued";
       } else {
         item.stage = "done";
       }
     } catch (err) {
-      // item 级自动重试（1 次）：LLM 层已有指数退避重试，这里兜底会话启动
-      // 失败、DB 抖动等非 LLM 瞬态错误。重排回队尾，不阻塞其他选题。
+      // item 级自动重试（1 次）：LLM 层已有指数退避重试，这里兜底建作品、
+      // 文案生成、DB 抖动等非 LLM 瞬态错误。重排回队尾，不阻塞其他选题。
       if ((item.retryCount ?? 0) < 1) {
         item.retryCount = (item.retryCount ?? 0) + 1;
         item.stage = "queued";

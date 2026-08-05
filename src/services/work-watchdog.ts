@@ -21,7 +21,8 @@ export interface StalledWork {
 }
 
 export interface WatchdogDeps {
-  startWork: (workId: string) => Promise<unknown>;
+  // 看门狗只负责"入队 + 唤醒 runner"，不直接启动会话（启动是 runner 的职责），
+  // 因此不需要 startWork 依赖。
   isSessionAlive: (workId: string) => boolean;
 }
 
