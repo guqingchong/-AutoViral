@@ -182,9 +182,9 @@
       const result = await rejectWork(selectedWorkId, rejectStage, reviewComment.trim());
       const stageLabel = REJECT_STAGES.find((s) => s.key === rejectStage)?.label ?? rejectStage;
       showMessage("success",
-        result.delivery === "none"
-          ? `已打回到「${stageLabel}」，审核意见已保存（AI 会话未在线，将在作品页手动继续）`
-          : `已打回到「${stageLabel}」，AI 正在按审核意见重做，完成后自动回到待审核`);
+        result.delivery === "queued"
+          ? `已打回到「${stageLabel}」，已加入任务队列，将按审核意见自动重做`
+          : `已打回到「${stageLabel}」，审核意见已保存（AI 会话未在线，将在作品页手动继续）`);
       reviewComment = "";
       selectedWorkId = "";
       await loadWorks();
