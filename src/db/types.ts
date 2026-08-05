@@ -39,6 +39,10 @@ export interface DbWork {
   estimated_cost?: number;         // PRD: 预估成本
   actual_cost?: number;            // PRD: 实际成本
   review_comment?: string;         // 发布中心最近一次打回的审核意见
+  asset_form?: string;             // 素材形态：video-mix | image-carousel | slides | auto（迁移 v19）
+  asset_source?: string;           // 素材来源：stock | ai | user | auto（迁移 v19）
+  asset_budget?: string;           // 成本档：eco（禁 AI 视频生成）| premium（迁移 v19）
+  dual_output?: boolean;           // 双产物标记：短视频+图文同一作品双产物（迁移 v19）
   created_at: string;
   updated_at: string;
 }

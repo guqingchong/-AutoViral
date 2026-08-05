@@ -41,6 +41,10 @@ export interface PipelineStep {
 
 export type ContentCategory = "anxiety" | "conflict" | "comedy" | "envy" | "other";
 export type VideoSource = "upload" | "search" | "ai-generate";
+/** 素材三维（批量制作）：形态 / 来源 / 成本档 */
+export type AssetForm = "video-mix" | "image-carousel" | "slides" | "auto";
+export type AssetSource = "stock" | "ai" | "user" | "auto";
+export type AssetBudget = "eco" | "premium";
 
 export interface Work {
   id: string;
@@ -70,6 +74,12 @@ export interface Work {
   estimatedCost?: number;
   actualCost?: number;
   reviewComment?: string;
+  /** 素材三维（批量制作） */
+  assetForm?: AssetForm;
+  assetSource?: AssetSource;
+  assetBudget?: AssetBudget;
+  /** 双产物标记：短视频+图文同一作品双产物 */
+  dualOutput?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -193,6 +203,10 @@ function dbWorkToWork(w: DbWork, steps?: DbPipelineStep[]): Work {
     estimatedCost: w.estimated_cost,
     actualCost: w.actual_cost,
     reviewComment: w.review_comment,
+    assetForm: w.asset_form as AssetForm | undefined,
+    assetSource: w.asset_source as AssetSource | undefined,
+    assetBudget: w.asset_budget as AssetBudget | undefined,
+    dualOutput: w.dual_output,
     createdAt: w.created_at,
     updatedAt: w.updated_at,
   };
@@ -255,6 +269,10 @@ export async function createWork(input: {
   templateId?: string;
   digitalHumanId?: string;
   voiceId?: string;
+  assetForm?: AssetForm;
+  assetSource?: AssetSource;
+  assetBudget?: AssetBudget;
+  dualOutput?: boolean;
 }): Promise<Work> {
   await maybeMigrateLegacy();
   const now = new Date().toISOString();
@@ -276,6 +294,10 @@ export async function createWork(input: {
     template_id: input.templateId,
     digital_human_id: input.digitalHumanId,
     voice_id: input.voiceId,
+    asset_form: input.assetForm,
+    asset_source: input.assetSource,
+    asset_budget: input.assetBudget,
+    dual_output: input.dualOutput ?? false,
     tags: [],
     created_at: now,
     updated_at: now,
@@ -330,6 +352,10 @@ export async function updateWork(id: string, updates: Partial<Work>): Promise<Wo
   if (updates.estimatedCost !== undefined) dbUpdates.estimated_cost = updates.estimatedCost;
   if (updates.actualCost !== undefined) dbUpdates.actual_cost = updates.actualCost;
   if (updates.reviewComment !== undefined) dbUpdates.review_comment = updates.reviewComment;
+  if (updates.assetForm !== undefined) dbUpdates.asset_form = updates.assetForm;
+  if (updates.assetSource !== undefined) dbUpdates.asset_source = updates.assetSource;
+  if (updates.assetBudget !== undefined) dbUpdates.asset_budget = updates.assetBudget;
+  if (updates.dualOutput !== undefined) dbUpdates.dual_output = updates.dualOutput;
   if (updates.pipeline !== undefined) {
     // Sync steps back to DB
     for (const [key, step] of Object.entries(updates.pipeline)) {
