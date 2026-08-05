@@ -11,7 +11,9 @@ import type { Server } from "node:http";
 import { loadConfig, dataDir } from "../config.js";
 import { initProviders } from "../providers/registry.js";
 import { ensureSharedDirs } from "../shared-assets.js";
-import { apiRoutes, setWsBridge } from "./api.js";
+import { apiRoutes, setWsBridge, startWorkSession } from "./api.js";
+import { initWorkQueue, startRunner, stopRunner } from "../services/work-queue.js";
+import { startWatchdog, stopWatchdog } from "../services/work-watchdog.js";
 import { analyticsApi } from "./analytics-api.js";
 import { analyticsRoutes } from "./routes/analytics.js";
 import { commentsRoutes } from "./routes/comments.js";
@@ -157,6 +159,13 @@ export async function startServer(port: number): Promise<{ server: Server }> {
   const wsBridge = new WsBridge(port);
   setWsBridge(wsBridge);
 
+  // 4b. 作品队列：串行 runner + 反停滞看门狗。
+  // 必须在 WsBridge 构造之后初始化（isSessionAlive 依赖 wsBridge 会话表）。
+  const isSessionAlive = (id: string) => !!wsBridge.getSession(id)?.cliProcess;
+  initWorkQueue({ startWork: (id) => startWorkSession(id), isSessionAlive });
+  startRunner();
+  startWatchdog({ isSessionAlive });
+
   const app = new Hono();
 
   // 5. Mount Phase 5 analytics / comments / evolution routes (v2 kept first for specificity)
@@ -214,6 +223,8 @@ export async function startServer(port: number): Promise<{ server: Server }> {
   const shutdown = async (signal: string) => {
     console.log(`\n[server] Received ${signal}, draining pending saves...`);
     stopHealthLoop();
+    stopRunner();
+    stopWatchdog();
     wsBridge.destroy();
     closeDb();
     process.exit(0);
