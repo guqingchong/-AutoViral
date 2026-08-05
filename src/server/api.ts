@@ -74,6 +74,7 @@ import { randomUUID } from "node:crypto";
 import { createTemplate, getTemplate, listTemplates, updateTemplate, deleteTemplate, type DbTemplate } from "../db/templates-repo.js";
 import { generateTemplates } from "../services/template-generator.js";
 import { generateImageTextTemplates } from "../services/image-text-template-generator.js";
+import { deriveDualOutputs } from "../services/dual-output.js";
 import { createRenderJob, getRenderJob, listRenderJobs, updateRenderJob, type DbRenderJob } from "../db/render-jobs-repo.js";
 import { startRender } from "../services/video-factory.js";
 import { renderTimeline } from "../video/renderer.js";
@@ -2225,12 +2226,24 @@ async function runEvaluation(workId: string, completedStep: string, nextStep?: s
           freshWork.pipeline[nextStep].status = "active";
           freshWork.pipeline[nextStep].startedAt = new Date().toISOString();
         }
+        // 评审通过即该步 done：派生状态（最后一步过审时进入 reviewing），
+        // 与 pipeline/advance 非评审路径的状态同步逻辑保持一致
+        const derivedAfterEval = deriveStatusFromPipeline(freshWork.pipeline, freshWork.status);
         await storeUpdateWork(workId, {
           pipeline: freshWork.pipeline,
+          status: derivedAfterEval,
           evalSessionIds: cleanedEvalSessionIds,
           evalAttempts: { ...(freshWork.evalAttempts ?? {}), [completedStep]: 0 },
         } as any);
         broadcastPipelineUpdate(workId, freshWork.pipeline);
+        if (derivedAfterEval === "reviewing") {
+          notifyWorkSettled(workId, "reviewing");
+          // 双产物派生（同 advance 路径，失败不阻塞）
+          if (freshWork.dualOutput) {
+            deriveDualOutputs(workId).catch((err) =>
+              log("error", "api", "dual_output_derive_failed", workId, { error: (err as Error).message }));
+          }
+        }
       }
 
       // Persist chat
@@ -2481,7 +2494,15 @@ apiRoutes.post("/api/works/:id/pipeline/advance", async (c) => {
 
     // 队列闭环：作品到达终态时通知 runner 出队并启动下一个排队作品。
     // notifyWorkSettled 仅在该作品处于队列 running 状态时生效，未入队作品调用无副作用。
-    if (derivedStatus === "reviewing") notifyWorkSettled(id, "reviewing");
+    if (derivedStatus === "reviewing") {
+      notifyWorkSettled(id, "reviewing");
+      // 双产物派生：dual_output 作品进 reviewing 时异步派生图文产物
+      // （文章接线验证 + 小红书卡片渲染）；失败不阻塞 reviewing，仅记日志。
+      if (work.dualOutput) {
+        deriveDualOutputs(id).catch((err) =>
+          log("error", "api", "dual_output_derive_failed", id, { error: (err as Error).message }));
+      }
+    }
     else if (derivedStatus === "failed") notifyWorkSettled(id, "failed");
 
     // Memory sync (keep existing logic)

@@ -166,6 +166,24 @@ async function collectContentImages(workDir: string, coverPath: string): Promise
   return results.filter((p) => resolve(p) !== coverResolved).sort();
 }
 
+/**
+ * 收集双产物派生的小红书图片卡片（works/<id>/output/cards/ 下的 PNG）。
+ * 文件名 01-cover.png / 02-card.png … 字典序即展示顺序，封面在最前。
+ */
+async function collectCardImages(outputDir: string): Promise<string[]> {
+  const cardsDir = join(outputDir, "cards");
+  let entries;
+  try {
+    entries = await readdir(cardsDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries
+    .filter((e) => e.isFile() && CONTENT_IMAGE_EXTS.has(extname(e.name).toLowerCase()))
+    .map((e) => join(cardsDir, e.name))
+    .sort();
+}
+
 export async function triggerLogin(platform: string): Promise<boolean> {
   const publisher = resolvePublisher(platform);
   if (publisher.login) return publisher.login();
@@ -203,6 +221,17 @@ export async function buildPublishInput(work: DbWork, platform: string): Promise
     }
     // 正文配图：作品素材图（排除封面），发布器按段落插图；无图时为空数组，维持纯文本
     options.contentImages = await collectContentImages(workDir, coverPath);
+  }
+
+  // 小红书图文（双产物派生的图片卡片）：cards 目录存在即走图文笔记链路，
+  // 配文取文章内容（小红书正文上限 1000 字）
+  if (key === "xiaohongshu") {
+    const cards = await collectCardImages(outputDir);
+    if (cards.length > 0) {
+      options.imagePaths = cards;
+      const article = listArticlesByWork(work.id)[0];
+      if (article?.content) options.description = article.content.slice(0, 1000);
+    }
   }
 
   return {

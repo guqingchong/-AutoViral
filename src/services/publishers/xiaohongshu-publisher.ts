@@ -17,17 +17,36 @@ export class XiaohongshuPublisher extends PlaywrightPublisher {
   protected override async doUpload(page: Page, input: PublishInput): Promise<PublishOutput> {
     await page.goto(this.uploadUrl, { waitUntil: "networkidle" });
 
-    // 选择「发布视频」
-    await page.locator("text=发布视频").first().click();
+    // 图文笔记（双产物图片卡片）：options.imagePaths 非空时走「上传图文」
+    const imagePaths = Array.isArray(input.options?.imagePaths)
+      ? (input.options.imagePaths as unknown[]).filter(
+          (p): p is string => typeof p === "string" && p.length > 0,
+        )
+      : [];
 
-    // 上传视频
-    const fileInput = page.locator('input[type="file"]').first();
-    await fileInput.setInputFiles(input.videoPath);
-    await page.waitForTimeout(3000);
+    if (imagePaths.length > 0) {
+      // 选择「上传图文」
+      await page.locator("text=上传图文").first().click();
+      await page.waitForTimeout(1000);
 
-    // 填写标题
+      // 上传图片卡片（多图一次传入，顺序即展示顺序）
+      const fileInput = page.locator('input[type="file"]').first();
+      await fileInput.setInputFiles(imagePaths);
+      await page.waitForTimeout(3000);
+    } else {
+      // 选择「发布视频」
+      await page.locator("text=发布视频").first().click();
+
+      // 上传视频
+      const fileInput = page.locator('input[type="file"]').first();
+      await fileInput.setInputFiles(input.videoPath);
+      await page.waitForTimeout(3000);
+    }
+
+    // 填写标题（小红书图文标题上限 20 字）
+    const title = imagePaths.length > 0 ? input.title.slice(0, 20) : input.title;
     const titleInput = page.locator('input[placeholder*="标题"]').first();
-    await titleInput.fill(input.title);
+    await titleInput.fill(title);
 
     // 填写正文
     if (input.options?.description) {
