@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { fetchTopics, convertTopicToWork, collectTrends, fetchConfig, updateConfig, fetchVoices, fetchBuiltinVoices, type Topic, type VoiceItem, type BuiltinVoice } from "../lib/api.js";
+  import { fetchTopics, convertTopicToWork, collectTrends, fetchConfig, updateConfig, fetchVoices, type Topic, type VoiceItem } from "../lib/api.js";
   import { t, getLanguage, subscribe } from "../lib/i18n.js";
   import { activeTab } from "../lib/navigation.js";
 
@@ -24,14 +24,16 @@
   let showBatchModal = $state(false);
   let batchTemplateId = $state<string>("");
   let batchDigitalHumanId = $state<string>("");
-  let batchType = $state<"short-video" | "image-text">("short-video");
+  let batchType = $state<"short-video" | "video+image-text" | "image-text">("short-video");
   // 视频制作控制条件（全自动模式）：时长/风格/素材样式/配音风格
   let batchDuration = $state<number>(60);
   let batchContentForm = $state<string>("knowledge");
-  let batchVideoSource = $state<string>("search");
+  let batchAssetForm = $state<string>("auto");
+  let batchAssetSource = $state<string>("stock");
+  let batchAssetBudget = $state<string>("eco");
   let batchVoiceStyle = $state<string>("male-qn-qingse");
   let myVoices = $state<VoiceItem[]>([]);
-  let builtinVoices = $state<BuiltinVoice[]>([]);
+  let favVoices = $state<VoiceItem[]>([]);
   let batchVoiceMode = $state<"cloned" | "ai">("ai");
 
   // 模式/列表变化时同步选中的音色，避免提交了另一模式下的 voice_id
@@ -39,27 +41,58 @@
     if (batchVoiceMode === "cloned") {
       batchVoiceStyle = myVoices[0]?.voice_id ?? "";
     } else {
-      batchVoiceStyle = builtinVoices.some((v) => v.voice_id === batchVoiceStyle)
+      batchVoiceStyle = favVoices.some((v) => v.voice_id === batchVoiceStyle)
         ? batchVoiceStyle
-        : (builtinVoices[0]?.voice_id ?? "");
+        : (favVoices[0]?.voice_id ?? "");
     }
   });
+
+  // 内容类型变化时过滤模板（模板无 kind 字段视为 video），并清掉不适用的选择
+  let filteredTemplates = $derived(
+    templates.filter((tpl) =>
+      batchType === "image-text" ? tpl.kind === "image-text" : (tpl.kind ?? "video") !== "image-text"
+    )
+  );
+  $effect(() => {
+    if (batchTemplateId && !filteredTemplates.some((tpl) => tpl.id === batchTemplateId)) {
+      batchTemplateId = "";
+    }
+    if (batchType === "image-text") batchDigitalHumanId = "";
+  });
+
   const DURATION_OPTIONS = [
-    { value: 30, label: "约 30 秒" },
     { value: 60, label: "约 1 分钟" },
-    { value: 90, label: "约 1 分半" },
-    { value: 120, label: "约 2 分钟" },
     { value: 180, label: "约 3 分钟" },
+    { value: 300, label: "约 5 分钟" },
+    { value: 420, label: "约 7 分钟" },
+    { value: 600, label: "约 10 分钟" },
+    { value: 900, label: "约 15 分钟" },
   ];
   const CONTENT_FORM_OPTIONS = [
-    { value: "knowledge", label: "知识科普" },
-    { value: "hot_comment", label: "热点评述" },
-    { value: "industry", label: "行业洞察" },
-    { value: "insight", label: "观点输出" },
+    { value: "knowledge", label: "知识科普", desc: "白板推演·边讲边画" },
+    { value: "hot_comment", label: "热点评述", desc: "新闻演播室·严肃快讯" },
+    { value: "industry", label: "行业洞察", desc: "数据图表·动态流动" },
+    { value: "insight", label: "观点输出", desc: "大字金句·视觉冲击" },
+    { value: "story", label: "故事叙述", desc: "电影分镜·场景演绎" },
+    { value: "tutorial", label: "教程实操", desc: "步骤演示·操作特写" },
+    { value: "mystery", label: "悬念揭秘", desc: "暗黑纪录·抽丝剥茧" },
+    { value: "emotion", label: "情感共鸣", desc: "生活胶片·真实温度" },
   ];
-  const VIDEO_SOURCE_OPTIONS = [
-    { value: "search", label: "素材库搜索（真实视频素材）" },
-    { value: "ai-generate", label: "AI 生成素材" },
+  const ASSET_FORM_OPTIONS = [
+    { value: "video-mix", label: "视频混剪" },
+    { value: "image-carousel", label: "图片轮播" },
+    { value: "slides", label: "讲解幻灯片" },
+    { value: "auto", label: "LLM 自选" },
+  ];
+  const ASSET_SOURCE_OPTIONS = [
+    { value: "stock", label: "仅素材库" },
+    { value: "ai", label: "仅 AI 生成" },
+    { value: "user", label: "仅用户指定素材" },
+    { value: "auto", label: "LLM 自选" },
+  ];
+  const ASSET_BUDGET_OPTIONS = [
+    { value: "eco", label: "经济型（禁 AI 视频）" },
+    { value: "premium", label: "不计成本" },
   ];
   let templates = $state<any[]>([]);
   let avatars = $state<any[]>([]);
@@ -277,9 +310,9 @@
       }
     } catch {}
     try {
-      const [vRes, bRes] = await Promise.all([fetchVoices(), fetchBuiltinVoices()]);
+      const vRes = await fetchVoices();
       myVoices = vRes.voices.filter((v) => v.status === "ready" && v.type === "cloned");
-      builtinVoices = bRes.voices;
+      favVoices = vRes.voices.filter((v) => v.status === "ready" && v.type === "builtin_fav");
     } catch {}
   }
 
@@ -288,6 +321,9 @@
     batchConverting = true;
     batchResult = "";
     batchJob = null;
+    const isVideo = batchType !== "image-text";
+    // 与旧 videoSource 字段兼容映射：stock→search，ai→ai-generate
+    const legacyVideoSource = batchAssetSource === "stock" ? "search" : batchAssetSource === "ai" ? "ai-generate" : batchAssetSource;
     try {
       const res = await fetch("/api/topics/batch-convert", {
         method: "POST",
@@ -299,11 +335,14 @@
           type: batchType,
           platforms: ["douyin", "xiaohongshu"],
           autoPipeline: true,
-          duration: batchType === "short-video" ? batchDuration : undefined,
-          contentForm: batchType === "short-video" ? batchContentForm : undefined,
-          videoSource: batchType === "short-video" ? batchVideoSource : undefined,
-          voiceStyle: batchType === "short-video" ? batchVoiceStyle : undefined,
-          voiceMode: batchType === "short-video" ? batchVoiceMode : undefined,
+          duration: isVideo ? batchDuration : undefined,
+          contentForm: isVideo ? batchContentForm : undefined,
+          videoSource: isVideo ? legacyVideoSource : undefined,
+          assetForm: isVideo ? batchAssetForm : undefined,
+          assetSource: isVideo ? batchAssetSource : undefined,
+          assetBudget: isVideo ? batchAssetBudget : undefined,
+          voiceStyle: isVideo ? batchVoiceStyle : undefined,
+          voiceMode: isVideo ? batchVoiceMode : undefined,
         }),
       });
       const data = await res.json();
@@ -721,6 +760,7 @@
             <label>内容类型</label>
             <select bind:value={batchType}>
               <option value="short-video">短视频</option>
+              <option value="video+image-text">短视频+图文</option>
               <option value="image-text">图文</option>
             </select>
           </div>
@@ -728,27 +768,27 @@
             <label>使用模板（可选，选择后将自动执行流水线）</label>
             <select bind:value={batchTemplateId}>
               <option value="">不使用模板（手动确认每个环节）</option>
-              {#each templates as tpl}
+              {#each filteredTemplates as tpl}
                 <option value={tpl.id}>{tpl.name}</option>
               {/each}
             </select>
-            {#if templates.length === 0}
-              <p class="batch-hint">暂无已启用模板，可前往模板库生成并启用模板</p>
+            {#if filteredTemplates.length === 0}
+              <p class="batch-hint">{batchType === "image-text" ? "暂无已启用图文模板，可前往模板库生成并启用图文模板" : "暂无已启用模板，可前往模板库生成并启用模板"}</p>
             {/if}
           </div>
-          <div class="batch-field">
-            <label>使用数字人（可选）</label>
-            <select bind:value={batchDigitalHumanId}>
-              <option value="">不使用数字人</option>
-              {#each avatars as av}
-                <option value={av.id}>{av.name ?? av.id}</option>
-              {/each}
-            </select>
-            {#if avatars.length === 0}
-              <p class="batch-hint">暂无数字人，可前往数字人页面创建</p>
-            {/if}
-          </div>
-          {#if batchType === "short-video"}
+          {#if batchType !== "image-text"}
+            <div class="batch-field">
+              <label>使用数字人（可选）</label>
+              <select bind:value={batchDigitalHumanId}>
+                <option value="">不使用数字人</option>
+                {#each avatars as av}
+                  <option value={av.id}>{av.name ?? av.id}</option>
+                {/each}
+              </select>
+              {#if avatars.length === 0}
+                <p class="batch-hint">暂无数字人，可前往数字人页面创建</p>
+              {/if}
+            </div>
             <div class="batch-field-group">
               <p class="batch-group-title">视频制作控制</p>
               <div class="batch-field-row">
@@ -764,20 +804,38 @@
                   <label>视频风格</label>
                   <select bind:value={batchContentForm}>
                     {#each CONTENT_FORM_OPTIONS as o}
-                      <option value={o.value}>{o.label}</option>
+                      <option value={o.value}>{o.label}（{o.desc}）</option>
                     {/each}
                   </select>
                 </div>
               </div>
               <div class="batch-field-row">
                 <div class="batch-field">
-                  <label>素材样式</label>
-                  <select bind:value={batchVideoSource}>
-                    {#each VIDEO_SOURCE_OPTIONS as o}
+                  <label>素材形态</label>
+                  <select bind:value={batchAssetForm}>
+                    {#each ASSET_FORM_OPTIONS as o}
                       <option value={o.value}>{o.label}</option>
                     {/each}
                   </select>
                 </div>
+                <div class="batch-field">
+                  <label>获取策略</label>
+                  <select bind:value={batchAssetSource}>
+                    {#each ASSET_SOURCE_OPTIONS as o}
+                      <option value={o.value}>{o.label}</option>
+                    {/each}
+                  </select>
+                </div>
+                <div class="batch-field">
+                  <label>成本档</label>
+                  <select bind:value={batchAssetBudget}>
+                    {#each ASSET_BUDGET_OPTIONS as o}
+                      <option value={o.value}>{o.label}</option>
+                    {/each}
+                  </select>
+                </div>
+              </div>
+              <div class="batch-field-row">
                 <div class="batch-field">
                   <label>配音模式</label>
                   <select bind:value={batchVoiceMode}>
@@ -796,9 +854,12 @@
                         <option value="" disabled>暂无克隆声音，请先到素材库克隆</option>
                       {/if}
                     {:else}
-                      {#each builtinVoices as v}
-                        <option value={v.voice_id}>{v.name}（{v.category}）</option>
+                      {#each favVoices as v}
+                        <option value={v.voice_id}>{v.name}</option>
                       {/each}
+                      {#if favVoices.length === 0}
+                        <option value="" disabled>请先到素材库收藏音色</option>
+                      {/if}
                     {/if}
                   </select>
                 </div>
@@ -813,9 +874,11 @@
               <p class="batch-hint">未选择模板/数字人 → <strong>深度介入模式</strong>：每个作品需要在制作对话中逐步确认。选择模板或数字人后切换为全自动模式。</p>
             {/if}
           </div>
-          <button class="btn-batch-start" disabled={batchConverting || (batchType === "short-video" && batchVoiceMode === "cloned" && myVoices.length === 0)} onclick={batchConvert}>
-            {batchConverting ? "启动中..." : `批量创建 ${selectedTopicIds.size} 个作品`}
-          </button>
+          <div class="batch-modal-footer">
+            <button class="btn-batch-start" disabled={batchConverting || (batchType !== "image-text" && ((batchVoiceMode === "cloned" && myVoices.length === 0) || (batchVoiceMode === "ai" && favVoices.length === 0)))} onclick={batchConvert}>
+              {batchConverting ? "启动中..." : `批量创建 ${selectedTopicIds.size} 个作品`}
+            </button>
+          </div>
         {/if}
       </div>
     </div>
@@ -1456,6 +1519,9 @@
     border-radius: 8px;
     width: 100%;
     max-width: 440px;
+    max-height: 85vh;
+    display: flex;
+    flex-direction: column;
     box-shadow: var(--shadow-lg, 0 8px 32px rgba(0,0,0,0.3));
   }
   .batch-modal-header {
@@ -1467,7 +1533,15 @@
   }
   .batch-modal-header h2 { font-size: 1rem; font-weight: 700; margin: 0; }
   .batch-close { background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 1.1rem; }
-  .batch-modal-body { padding: 1.25rem; display: flex; flex-direction: column; gap: 1rem; }
+  .batch-modal-body { padding: 1.25rem; display: flex; flex-direction: column; gap: 1rem; overflow-y: auto; flex: 1; min-height: 0; }
+  .batch-modal-footer {
+    position: sticky;
+    bottom: 0;
+    background: var(--bg-elevated);
+    border-top: 1px solid var(--border);
+    margin: 0 -1.25rem -1.25rem;
+    padding: 0.75rem 1.25rem 1.25rem;
+  }
   .batch-field { display: flex; flex-direction: column; gap: 0.35rem; }
   .batch-field label { font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); }
   .batch-field select {
@@ -1480,7 +1554,7 @@
   }
   .batch-field-group { display: flex; flex-direction: column; gap: 0.6rem; padding: 0.7rem; background: var(--bg-inset); border-radius: 6px; border: 1px solid var(--border-subtle, var(--border)); }
   .batch-group-title { font-size: 0.78rem; font-weight: 700; color: var(--text-secondary); margin: 0; }
-  .batch-field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.7rem; }
+  .batch-field-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0.7rem; }
   .batch-hint { font-size: 0.72rem; color: var(--text-dim); margin: 0; }
   .batch-info { padding: 0.6rem; background: var(--bg-inset); border-radius: 4px; }
   .batch-info p { font-size: 0.8rem; margin: 0 0 0.35rem; color: var(--text-secondary); }
