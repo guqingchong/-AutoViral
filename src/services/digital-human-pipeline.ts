@@ -1,14 +1,18 @@
+import { randomUUID } from "node:crypto";
 import { getDb } from "../db/connection.js";
 import * as worksRepo from "../db/works-repo.js";
 import * as scriptsRepo from "../db/scripts-repo.js";
 import * as avatarsRepo from "../db/avatars-repo.js";
 import * as jobsRepo from "../db/digital-human-jobs-repo.js";
-import { submitJob, refreshJob } from "./digital-human.js";
+import * as queueRepo from "../db/work-queue-repo.js";
+import { submitQueuedJob, refreshJob } from "./digital-human.js";
+import { getInstanceView } from "./instance-service.js";
+import { assertWithinBudget } from "./budget-service.js";
 import { getDefaultProvider } from "../providers/registry.js";
 import { MiniMaxTTSProvider } from "../providers/minimax-tts.js";
-import { loadConfig } from "../config.js";
+import { loadConfig, getConfig } from "../config.js";
 import type { GenerateProvider } from "../providers/base.js";
-import type { DbAvatar } from "../db/types.js";
+import type { DbAvatar, DbDigitalHumanJob } from "../db/types.js";
 
 export interface BatchState {
   running: boolean;
@@ -32,6 +36,29 @@ const batchState: BatchState = {
 
 export function getBatchState(): BatchState {
   return { ...batchState, errors: [...batchState.errors] };
+}
+
+// ---------------------------------------------------------------------------
+// 渲染池（Task 6：攒批 + 与作品队列严格对齐）
+// ---------------------------------------------------------------------------
+
+const DEFAULT_BATCH_THRESHOLD = 3;
+/** 作品队列已空闲时，池内最久等待超过该时长即触发（避免零星任务永远等不够阈值） */
+const IDLE_QUEUE_TRIGGER_MS = 10 * 60 * 1000;
+
+/** 实例离线且池内有积压时置位，GET render-pool 返回给前端提示"去开机" */
+let pendingBoot = false;
+export function getPendingBoot(): boolean {
+  return pendingBoot;
+}
+
+function getBatchThreshold(): number {
+  const t = getConfig().digitalHuman?.batchThreshold;
+  return typeof t === "number" && Number.isFinite(t) && t > 0 ? Math.floor(t) : DEFAULT_BATCH_THRESHOLD;
+}
+
+function now(): string {
+  return new Date().toISOString();
 }
 
 // 脚本文案常见键（content-generator 产出 scenes[].narration，手工/其他来源可能直接给字符串字段）
@@ -97,13 +124,28 @@ async function getTtsProvider(): Promise<GenerateProvider> {
   return new MiniMaxTTSProvider(config.minimax);
 }
 
+/** 入池位次：在作品队列中的取队列 position；不在队列的排在队尾与池尾之后 */
+function nextPoolPosition(workId: string): number {
+  const item = queueRepo.getItem(workId);
+  if (item) return item.position;
+  const db = getDb();
+  const q = db.prepare("SELECT COALESCE(MAX(position), 0) AS p FROM work_queue").get() as { p: number };
+  const j = db
+    .prepare("SELECT COALESCE(MAX(queue_position), 0) AS p FROM digital_human_jobs WHERE status = 'queued'")
+    .get() as { p: number };
+  return Math.max(q.p, j.p) + 1;
+}
+
 /**
- * 单作品数字人口播渲染：TTS 生成口播音频 → 提交 HeyGem 渲染任务（只提交不等待）。
+ * 口播 TTS + 建 queued 渲染任务（不提交 HeyGem）。
  * 已有 done 任务时直接取现成产物（流水线兜底，不重复渲染）。
  */
-export async function runDigitalHumanForWork(workId: string, opts?: { voice?: string }): Promise<{ jobId: string; skipped: boolean }> {
+async function prepareQueuedJobForWork(
+  workId: string,
+  opts?: { voice?: string }
+): Promise<{ job: DbDigitalHumanJob; skipped: boolean }> {
   const existingDone = jobsRepo.listJobs(workId).find((j) => j.status === "done");
-  if (existingDone) return { jobId: existingDone.id, skipped: true };
+  if (existingDone) return { job: existingDone, skipped: true };
 
   const work = worksRepo.getWork(workId);
   if (!work) throw new Error("作品不存在");
@@ -120,13 +162,157 @@ export async function runDigitalHumanForWork(workId: string, opts?: { voice?: st
   const audio = await tts.generateAudio!({ text: narration, workId, filename: "narration.mp3", voice });
   if (!audio.success || !audio.assetPath) throw new Error(`TTS 合成失败：${audio.error ?? "未知错误"}`);
 
-  const job = await submitJob({
-    workId,
-    avatarId: avatar.id,
-    audioUrl: audio.assetPath,
-    scriptId: script?.id,
-  });
-  return { jobId: job.id, skipped: false };
+  assertWithinBudget(0);
+  const job: DbDigitalHumanJob = {
+    id: `dhjob_${randomUUID()}`,
+    work_id: workId,
+    avatar_id: avatar.id,
+    audio_path: audio.assetPath,
+    script_id: script?.id,
+    provider: "heygem",
+    status: "queued",
+    progress: 0,
+    estimated_cost: 0,
+    actual_cost: 0,
+    queue_position: nextPoolPosition(workId),
+    created_at: now(),
+    updated_at: now(),
+  };
+  jobsRepo.createJob(job);
+  return { job, skipped: false };
+}
+
+/**
+ * 单作品数字人口播渲染：TTS 生成口播音频 → 入渲染池（status=queued，queue_position=作品队列 position），
+ * 不立即提交 HeyGem，随后检查攒批触发条件（后台 fire-and-forget，不阻塞调用方）。
+ */
+export async function runDigitalHumanForWork(workId: string, opts?: { voice?: string }): Promise<{ jobId: string; skipped: boolean }> {
+  const { job, skipped } = await prepareQueuedJobForWork(workId, opts);
+  if (!skipped) {
+    void maybeTriggerRenderBatch().catch((err) => {
+      console.error("[render-pool] maybeTriggerRenderBatch error:", err);
+    });
+  }
+  return { jobId: job.id, skipped };
+}
+
+/**
+ * 攒批触发检查（先到先触发）：
+ *   a) 池内 queued ≥ config.digitalHuman.batchThreshold（默认 3）
+ *   b) 作品队列已无 queued/running 且池内最久等待 > 10 分钟
+ * 手动触发走 triggerRenderNow()。
+ * 返回触发的批次状态；未触发返回 null。已有批次在跑时不重复触发。
+ */
+export async function maybeTriggerRenderBatch(): Promise<BatchState | null> {
+  if (batchState.running) return null;
+  const pool = jobsRepo.listQueuedJobsByPosition();
+  if (pool.length === 0) return null;
+
+  const queueBusy = queueRepo.listQueue().some((i) => i.status === "queued" || i.status === "running");
+  const oldest = pool.reduce((a, b) => (a.created_at <= b.created_at ? a : b));
+  const waitedMs = Date.now() - Date.parse(oldest.created_at);
+
+  if (pool.length >= getBatchThreshold() || (!queueBusy && waitedMs > IDLE_QUEUE_TRIGGER_MS)) {
+    return triggerRenderNow();
+  }
+  return null;
+}
+
+/** 手动立即渲染：集中提交池内 queued 任务并轮询完成（条件 c） */
+export async function triggerRenderNow(): Promise<BatchState> {
+  return executeRenderBatch();
+}
+
+/**
+ * 渲染池同步（队列变更后由队列路由调用）：
+ * - 按 work_queue position 重排 queued 任务的 queue_position
+ * - 作品已 paused 的任务保持 queued（提交时跳过）
+ * - 作品已移出队列的任务取消（status=failed，遵循表现有状态值）
+ */
+export function syncRenderPool(): void {
+  const pool = jobsRepo.listQueuedJobsByPosition();
+  for (const job of pool) {
+    if (!job.work_id) continue;
+    const item = queueRepo.getItem(job.work_id);
+    if (!item) {
+      jobsRepo.updateJob(job.id, { status: "failed", error: "作品已移出队列，渲染取消" });
+    } else if (item.status === "paused") {
+      continue;
+    } else if (job.queue_position !== item.position) {
+      jobsRepo.updateJob(job.id, { queue_position: item.position });
+    }
+  }
+}
+
+export interface RenderPoolItem {
+  jobId: string;
+  workId: string;
+  title: string;
+  queuePosition: number | null;
+  status: DbDigitalHumanJob["status"];
+}
+
+/** 渲染池现状：queued 任务按 queue_position 排序 */
+export function getRenderPool(): RenderPoolItem[] {
+  return jobsRepo.listQueuedJobsByPosition().map((j) => ({
+    jobId: j.id,
+    workId: j.work_id ?? "",
+    title: j.work_id ? (worksRepo.getWork(j.work_id)?.title ?? "") : "",
+    queuePosition: j.queue_position ?? null,
+    status: j.status,
+  }));
+}
+
+/** 集中提交池内 queued 任务（按 queue_position 顺序）并轮询完成。实例离线时不提交，置 pendingBoot */
+async function executeRenderBatch(opts?: { intervalMs?: number; timeoutMs?: number }): Promise<BatchState> {
+  if (batchState.running) return getBatchState();
+
+  const intervalMs = opts?.intervalMs ?? 10_000;
+  const timeoutMs = opts?.timeoutMs ?? 3_600_000; // 60 分钟总上限
+
+  const view = await getInstanceView();
+  if (view.state !== "ready") {
+    if (jobsRepo.listQueuedJobsByPosition().length > 0) pendingBoot = true;
+    return getBatchState();
+  }
+  pendingBoot = false;
+
+  batchState.running = true;
+  batchState.total = 0;
+  batchState.submitted = 0;
+  batchState.done = 0;
+  batchState.failed = 0;
+  batchState.startedAt = now();
+  batchState.errors = [];
+
+  // jobId -> workId（仅跟踪本次新提交的任务）
+  const pending = new Map<string, string>();
+
+  try {
+    const pool = jobsRepo.listQueuedJobsByPosition();
+    batchState.total = pool.length;
+
+    for (const job of pool) {
+      const item = job.work_id ? queueRepo.getItem(job.work_id) : undefined;
+      // 作品队列中已 paused：跳过不提交，任务保持 queued
+      if (item?.status === "paused") continue;
+      try {
+        await submitQueuedJob(job.id);
+        batchState.submitted++;
+        pending.set(job.id, job.work_id ?? "");
+      } catch (err) {
+        batchState.failed++;
+        batchState.errors.push({ workId: job.work_id ?? "", error: (err as Error).message });
+        jobsRepo.updateJob(job.id, { status: "failed", error: (err as Error).message });
+      }
+    }
+
+    await pollPendingJobs(pending, intervalMs, timeoutMs);
+  } finally {
+    batchState.running = false;
+  }
+
+  return getBatchState();
 }
 
 /** 待渲染作品：绑定了形象、有脚本、且尚无 done 数字人任务 */
@@ -154,8 +340,40 @@ function registerWorkAsset(workId: string, localPath: string): void {
   );
 }
 
+/** 统一轮询直至 pending 中任务全部 done/failed 或超时（渲染池批次与旧批量入口共用） */
+async function pollPendingJobs(pending: Map<string, string>, intervalMs: number, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (pending.size > 0 && Date.now() < deadline) {
+    for (const [jobId, workId] of [...pending]) {
+      try {
+        const job = await refreshJob(jobId);
+        if (job?.status === "done") {
+          if (workId && job.result_local_path) registerWorkAsset(workId, job.result_local_path);
+          batchState.done++;
+          pending.delete(jobId);
+        } else if (job?.status === "failed") {
+          batchState.failed++;
+          batchState.errors.push({ workId, error: job.error ?? "数字人渲染失败" });
+          pending.delete(jobId);
+        }
+      } catch (err) {
+        // 单次刷新异常不阻断批量轮询，下一轮重试
+        batchState.errors.push({ workId, error: `轮询异常：${(err as Error).message}` });
+      }
+    }
+    if (pending.size > 0) await new Promise((r) => setTimeout(r, intervalMs));
+  }
+
+  // 超时仍未完成的任务记为失败
+  for (const [jobId, workId] of pending) {
+    batchState.failed++;
+    batchState.errors.push({ workId, error: `轮询超时（job ${jobId}）` });
+  }
+  pending.clear();
+}
+
 /**
- * 批量渲染：集中提交所有待渲染作品的数字人任务（实例串行消化），
+ * 批量渲染（旧入口保留）：为所有待渲染作品建池任务并立即集中提交（实例串行消化），
  * 然后统一轮询直至全部 done/failed。单个失败不阻断其余作品。
  * 长跑任务 —— API 层 fire-and-forget 调用，调用方通过 getBatchState 轮询进度。
  */
@@ -170,7 +388,7 @@ export async function runBatchDigitalHuman(opts?: { intervalMs?: number; timeout
   batchState.submitted = 0;
   batchState.done = 0;
   batchState.failed = 0;
-  batchState.startedAt = new Date().toISOString();
+  batchState.startedAt = now();
   batchState.errors = [];
 
   // jobId -> workId（仅跟踪本次新提交的任务；skipped 的直接计入 done）
@@ -182,44 +400,22 @@ export async function runBatchDigitalHuman(opts?: { intervalMs?: number; timeout
 
     for (const work of works) {
       try {
-        const { jobId, skipped } = await runDigitalHumanForWork(work.id);
+        const { job, skipped } = await prepareQueuedJobForWork(work.id);
+        if (skipped) {
+          batchState.submitted++;
+          batchState.done++;
+          continue;
+        }
+        await submitQueuedJob(job.id);
         batchState.submitted++;
-        if (skipped) batchState.done++;
-        else pending.set(jobId, work.id);
+        pending.set(job.id, work.id);
       } catch (err) {
         batchState.failed++;
         batchState.errors.push({ workId: work.id, error: (err as Error).message });
       }
     }
 
-    const deadline = Date.now() + timeoutMs;
-    while (pending.size > 0 && Date.now() < deadline) {
-      for (const [jobId, workId] of [...pending]) {
-        try {
-          const job = await refreshJob(jobId);
-          if (job?.status === "done") {
-            if (job.result_local_path) registerWorkAsset(workId, job.result_local_path);
-            batchState.done++;
-            pending.delete(jobId);
-          } else if (job?.status === "failed") {
-            batchState.failed++;
-            batchState.errors.push({ workId, error: job.error ?? "数字人渲染失败" });
-            pending.delete(jobId);
-          }
-        } catch (err) {
-          // 单次刷新异常不阻断批量轮询，下一轮重试
-          batchState.errors.push({ workId, error: `轮询异常：${(err as Error).message}` });
-        }
-      }
-      if (pending.size > 0) await new Promise((r) => setTimeout(r, intervalMs));
-    }
-
-    // 超时仍未完成的任务记为失败
-    for (const [jobId, workId] of pending) {
-      batchState.failed++;
-      batchState.errors.push({ workId, error: `轮询超时（job ${jobId}）` });
-    }
-    pending.clear();
+    await pollPendingJobs(pending, intervalMs, timeoutMs);
   } finally {
     batchState.running = false;
   }

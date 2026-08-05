@@ -159,6 +159,8 @@ export interface DbDigitalHumanJob {
   estimated_cost: number;
   actual_cost: number;
   provider_job_id?: string;
+  /** 渲染池顺序（= 作品队列 position；不在队列的作品排最后）。迁移 v17 新增，旧数据为 null */
+  queue_position?: number | null;
   created_at: string;
   updated_at: string;
 }

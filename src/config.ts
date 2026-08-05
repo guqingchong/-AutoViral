@@ -43,6 +43,8 @@ export interface Config {
   pexels?: { apiKey: string };
   pixabay?: { apiKey: string };
   unsplash?: { accessKey: string };
+  /** 数字人渲染池：攒批阈值（默认 3），达到后集中提交渲染 */
+  digitalHuman?: { batchThreshold?: number };
   research: { enabled: boolean; schedule: string; platforms: string[]; topN?: number };
   interests?: string[];
   memory?: { apiKey: string; userId: string; syncEnabled: boolean };

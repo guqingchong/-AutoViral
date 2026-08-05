@@ -33,15 +33,37 @@ export function recordActivity(): void {
   lastActivity = Date.now();
 }
 
+/**
+ * 实例上线（offline→ready 跳变）时尝试触发渲染池攒批：
+ * 离线期间池内可能积压 queued 任务（Task 6）。动态 import + 静默容错，
+ * 渲染池未就绪或触发失败不阻塞健康探测。
+ */
+function notifyInstanceReady(): void {
+  void (async () => {
+    try {
+      const mod = (await import("./digital-human-pipeline.js")) as {
+        maybeTriggerRenderBatch?: () => Promise<unknown>;
+      };
+      await mod.maybeTriggerRenderBatch?.();
+    } catch {
+      // 忽略：下次探测上线跳变或队列变更时会重试
+    }
+  })();
+}
+
 async function probe(): Promise<void> {
   try {
     if (await checkHealth()) {
+      const cameOnline = state !== "ready";
       state = "ready";
+      if (cameOnline) notifyInstanceReady();
       return;
     }
     // 探测失败：可能是 SSH 隧道掉线。配置了 heygem 时尝试重建隧道并重试一次。
     if (getConfig().heygem?.baseUrl && (await ensureTunnel()) && (await checkHealth())) {
+      const cameOnline = state !== "ready";
       state = "ready";
+      if (cameOnline) notifyInstanceReady();
       return;
     }
     state = "offline";
