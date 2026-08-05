@@ -270,6 +270,13 @@ const translations: Record<Language, Record<string, string>> = {
     batchRunning: "Batch render running…",
     batchProgress: "Submitted {submitted}/{total}, done {done}, failed {failed}",
     batchFinished: "Batch finished: {done} done, {failed} failed",
+    renderQueue: "Render Queue",
+    renderNow: "Render Now",
+    goPowerOn: "Power On (AutoDL Console)",
+    pendingBootHint: "Waiting for the instance to power on. Rendering will start automatically once it is up.",
+    renderAllDone: "✅ All rendering complete. Remember to shut down the AutoDL instance to save costs.",
+    renderPoolEmpty: "Render pool is empty",
+    renderPoolQueueOrder: "Queue #{n}",
 
     // Asset Library
     assetLibraryTitle: "Asset Library",
@@ -734,6 +741,13 @@ const translations: Record<Language, Record<string, string>> = {
     batchRunning: "批量渲染进行中…",
     batchProgress: "已提交 {submitted}/共 {total} 条，完成 {done}，失败 {failed}",
     batchFinished: "批量渲染结束：完成 {done}，失败 {failed}",
+    renderQueue: "渲染队列",
+    renderNow: "立即渲染",
+    goPowerOn: "去开机（AutoDL 控制台）",
+    pendingBootHint: "等待实例开机，开机后将自动开始渲染",
+    renderAllDone: "✅ 渲染完成，请记得关闭 AutoDL 实例以节省费用",
+    renderPoolEmpty: "渲染池为空",
+    renderPoolQueueOrder: "队列 #{n}",
 
     // 素材库
     assetLibraryTitle: "合规素材库",
