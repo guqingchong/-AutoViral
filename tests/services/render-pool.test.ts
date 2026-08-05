@@ -342,4 +342,117 @@ describe("render-pool（渲染池攒批 + 队列对齐）", () => {
     expect(jobsOf("w2")[0].status).toBe("queued");
     expect(svc.getRenderPool().map((i) => i.workId)).toEqual(["w2"]);
   });
+
+  // ── C1: 周期性评估 + 超时触发与队列忙闲无关 ──────────────────────────────
+
+  it("C1: 调度器按注入间隔周期调用 tick，stop 后不再触发", async () => {
+    vi.useFakeTimers();
+    try {
+      const tick = vi.fn();
+      svc.startRenderPoolScheduler({ intervalMs: 60_000, tick });
+      expect(tick).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(60_000);
+      expect(tick).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(120_000);
+      expect(tick).toHaveBeenCalledTimes(3);
+
+      // 重复 start 幂等（不叠加第二个 interval）
+      svc.startRenderPoolScheduler({ intervalMs: 60_000, tick });
+      vi.advanceTimersByTime(60_000);
+      expect(tick).toHaveBeenCalledTimes(4);
+
+      svc.stopRenderPoolScheduler();
+      vi.advanceTimersByTime(300_000);
+      expect(tick).toHaveBeenCalledTimes(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("C1: 超时触发不再被队列忙碌阻塞（running 作品等渲染的场景）", async () => {
+    cfg.digitalHuman = { batchThreshold: 99 }; // 阈值路径不触发，只验超时路径
+    makeAvatar();
+    makeWork("w1");
+    queueRepo.enqueue("w1");
+    queueRepo.setStatus("w1", "running"); // 队列忙碌：该作品正在流水线里等渲染
+    mockHeygemSuccess();
+
+    const { jobId } = await svc.runDigitalHumanForWork("w1");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(heygem.submitJob).not.toHaveBeenCalled();
+
+    // 入池时间回拨 11 分钟 —— 旧逻辑 queueBusy 会判忙碌永不触发（死锁），
+    // 新逻辑池内有 queued 且最久等待 >10 分钟即触发
+    const { getDb } = await import("../../src/db/connection.js");
+    getDb()
+      .prepare("UPDATE digital_human_jobs SET created_at = ? WHERE id = ?")
+      .run(new Date(Date.now() - 11 * 60_000).toISOString(), jobId);
+
+    const state = await svc.maybeTriggerRenderBatch();
+    expect(state).not.toBeNull();
+    expect(heygem.submitJob).toHaveBeenCalledTimes(1);
+    expect(jobsOf("w1")[0].status).toBe("done");
+  });
+
+  // ── I2: 入池去重 ────────────────────────────────────────────────────────
+
+  it("I2: 同作品重复入池复用已有 queued 任务（不重复 TTS、不新建 job）", async () => {
+    cfg.digitalHuman = { batchThreshold: 99 };
+    makeAvatar();
+    makeWork("w1");
+    queueRepo.enqueue("w1");
+
+    const r1 = await svc.runDigitalHumanForWork("w1");
+    const r2 = await svc.runDigitalHumanForWork("w1");
+
+    expect(r2.jobId).toBe(r1.jobId);
+    expect(r2.skipped).toBe(false); // 复用 queued 任务（非 done 兜底）
+    expect(jobsOf("w1")).toHaveLength(1);
+    expect(fakeTts.generateAudio).toHaveBeenCalledTimes(1);
+    expect(jobsOf("w1")[0].status).toBe("queued");
+  });
+
+  // ── I3: 重启接管 running 渲染任务 ────────────────────────────────────────
+
+  it("I3: 重启后接管 running 任务：轮询 → finalize → 登记作品产物", async () => {
+    makeAvatar();
+    makeWork("w1");
+    // 模拟上一进程遗留：已提交 HeyGem（有 provider_job_id）但进程死亡时仍 running
+    jobsRepo.createJob({
+      id: "dhjob_restart1",
+      work_id: "w1",
+      avatar_id: "av1",
+      audio_path: join(dir, "works", "w1", "assets", "audio", "narration.mp3"),
+      provider: "heygem",
+      status: "running",
+      progress: 50,
+      estimated_cost: 0.01,
+      actual_cost: 0,
+      provider_job_id: "hg-restart-1",
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    mockHeygemSuccess();
+
+    const recovered = await svc.recoverRunningRenderJobs({ intervalMs: 1, timeoutMs: 5_000 });
+    expect(recovered).toBe(1);
+
+    const job = jobsRepo.getJob("dhjob_restart1")!;
+    expect(job.status).toBe("done");
+    expect(job.result_local_path).toBeTruthy();
+
+    // registerWorkAsset 链路恢复：产物已登记到 work_assets
+    const { getDb } = await import("../../src/db/connection.js");
+    const asset = getDb()
+      .prepare("SELECT * FROM work_assets WHERE work_id = ? AND kind = 'digital-human'")
+      .get("w1") as any;
+    expect(asset).toBeDefined();
+    expect(asset.path).toBe(job.result_local_path);
+  });
+
+  it("I3: 无遗留 running 任务时接管立即返回 0，不触碰 HeyGem", async () => {
+    const recovered = await svc.recoverRunningRenderJobs({ intervalMs: 1, timeoutMs: 100 });
+    expect(recovered).toBe(0);
+    expect(heygem.getJob).not.toHaveBeenCalled();
+  });
 });

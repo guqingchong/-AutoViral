@@ -14,6 +14,11 @@ import { ensureSharedDirs } from "../shared-assets.js";
 import { apiRoutes, setWsBridge, startWorkSession } from "./api.js";
 import { initWorkQueue, startRunner, stopRunner } from "../services/work-queue.js";
 import { startWatchdog, stopWatchdog } from "../services/work-watchdog.js";
+import {
+  startRenderPoolScheduler,
+  stopRenderPoolScheduler,
+  recoverRunningRenderJobs,
+} from "../services/digital-human-pipeline.js";
 import { analyticsApi } from "./analytics-api.js";
 import { analyticsRoutes } from "./routes/analytics.js";
 import { commentsRoutes } from "./routes/comments.js";
@@ -166,6 +171,13 @@ export async function startServer(port: number): Promise<{ server: Server }> {
   startRunner();
   startWatchdog({ isSessionAlive });
 
+  // 4c. 数字人渲染池：60s 周期评估攒批触发（超时触发不依赖入池/上线钩子）；
+  // 并接管上一进程遗留的 running 渲染任务（重建轮询，恢复 finalize→登记产物链路）。
+  startRenderPoolScheduler();
+  void recoverRunningRenderJobs().catch((err) =>
+    console.error("[render-pool] recover running jobs failed:", err),
+  );
+
   const app = new Hono();
 
   // 5. Mount Phase 5 analytics / comments / evolution routes (v2 kept first for specificity)
@@ -225,6 +237,7 @@ export async function startServer(port: number): Promise<{ server: Server }> {
     stopHealthLoop();
     stopRunner();
     stopWatchdog();
+    stopRenderPoolScheduler();
     wsBridge.destroy();
     closeDb();
     process.exit(0);

@@ -20,6 +20,16 @@ export function parseTsMs(value: string | null | undefined): number | null {
 }
 
 /**
+ * 归一化为 ISO 8601 UTC 字符串（带 Z，如 "2026-08-05T10:00:00.000Z"）；
+ * 无法解析返回 null。用于下发前端 —— Safari 的 Date.parse 不认空格分隔格式，
+ * Chrome 会把它当本地时间，统一带 Z 后两端行为一致。
+ */
+export function toIsoUtc(value: string | null | undefined): string | null {
+  const ms = parseTsMs(value);
+  return ms === null ? null : new Date(ms).toISOString();
+}
+
+/**
  * 从候选时间戳中取最新的一个，返回其原始字符串（不改动格式）；
  * 全部为空或无法解析时返回 null。
  */

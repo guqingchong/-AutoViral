@@ -16,7 +16,7 @@ import {
   updateStep,
 } from "./db/works-repo.js";
 import type { DbWork, DbPipelineStep } from "./db/types.js";
-import { latestTimestamp } from "./db/time.js";
+import { latestTimestamp, toIsoUtc } from "./db/time.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -119,7 +119,8 @@ function outputDir(id: string): string {
 
 function toSummary(w: Work): WorkSummary {
   const stepTimes = Object.values(w.pipeline).flatMap((s) => [s.startedAt, s.completedAt]);
-  return { id: w.id, title: w.title, type: w.type, contentCategory: w.contentCategory, platforms: w.platforms, status: w.status, lastActivityAt: latestTimestamp([w.updatedAt, ...stepTimes]), updatedAt: w.updatedAt };
+  // I6: 归一化为 ISO 8601 带 Z —— 库内并存 datetime('now') 空格格式，直接下发会让 Safari NaN、Chrome 按本地时区偏移
+  return { id: w.id, title: w.title, type: w.type, contentCategory: w.contentCategory, platforms: w.platforms, status: w.status, lastActivityAt: toIsoUtc(latestTimestamp([w.updatedAt, ...stepTimes])), updatedAt: w.updatedAt };
 }
 
 // ── Pipeline templates ───────────────────────────────────────────────────────
@@ -224,10 +225,10 @@ export async function listWorks(): Promise<WorkSummary[]> {
       digitalHumanId: w.digital_human_id,
       pipeline: steps.map((s) => ({ key: s.step_key, name: s.name, status: s.status as string })),
       reviewComment: w.review_comment,
-      lastActivityAt: latestTimestamp([
+      lastActivityAt: toIsoUtc(latestTimestamp([
         w.updated_at,
         ...steps.flatMap((s) => [s.started_at, s.completed_at]),
-      ]),
+      ])),
       updatedAt: w.updated_at,
     };
   });
