@@ -34,6 +34,34 @@
   let interval: string = $state("1h");
   let model: string = $state("sonnet");
   let autoRun: boolean = $state(false);
+  /** 自动调研频率与执行时间（映射为 cron 存 research.schedule） */
+  let researchFreq: string = $state("daily");
+  let researchTime: string = $state("09:00");
+
+  /** 频率+时间 → cron 表达式（分 时 …） */
+  function buildResearchCron(): string {
+    const h = Math.max(0, Math.min(23, parseInt(researchTime.split(":")[0] || "9", 10)));
+    switch (researchFreq) {
+      case "12h": return `0 ${h},${(h + 12) % 24} * * *`;
+      case "2d": return `0 ${h} */2 * * *`;
+      case "3d": return `0 ${h} */3 * * *`;
+      case "weekly": return `0 ${h} * * 1`;
+      default: return `0 ${h} * * *`; // daily
+    }
+  }
+
+  /** cron 表达式 → 频率+时间（回显用，尽力解析，失败回退每天 9 点） */
+  function parseResearchCron(cron: string): void {
+    const m = cron.match(/^0 (\d{1,2})(?:,(\d{1,2}))? (\*\/\d|\*) \* (\*|\d)$/);
+    if (!m) { researchFreq = "daily"; researchTime = "09:00"; return; }
+    const hour = m[1].padStart(2, "0");
+    researchTime = `${hour}:00`;
+    if (m[2]) researchFreq = "12h";
+    else if (m[3] === "*/2") researchFreq = "2d";
+    else if (m[3] === "*/3") researchFreq = "3d";
+    else if (m[4] !== "*") researchFreq = "weekly";
+    else researchFreq = "daily";
+  }
   let saving: boolean = $state(false);
   let settingsMessage: string = $state("");
   let pexelsApiKey: string = $state("");
@@ -42,6 +70,7 @@
   let jimengAccessKey: string = $state("");
   let jimengSecretKey: string = $state("");
   let minimaxKey: string = $state("");
+  let zhihuDataSecret: string = $state("");
   let heygemBaseUrl: string = $state("");
   let heygemApiToken: string = $state("");
   let heygemGpuHourlyRateYuan: number = $state(1.78);
@@ -52,6 +81,7 @@
   let showPixabayKey: boolean = $state(false);
   let showUnsplashKey: boolean = $state(false);
   let showMinimaxKey: boolean = $state(false);
+  let showZhihuSecret: boolean = $state(false);
 
   function openStudio(workId: string) {
     initialPrompt = "";
@@ -155,9 +185,12 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           interval, model, autoRun,
+          researchEnabled: autoRun,
+          researchCron: buildResearchCron(),
           pexelsApiKey, pixabayApiKey, unsplashAccessKey,
           jimengAccessKey, jimengSecretKey,
           minimaxKey,
+          zhihuDataSecret,
           heygemBaseUrl, heygemApiToken, heygemGpuHourlyRateYuan,
           heygemTunnelHost, heygemTunnelPort,
         }),
@@ -210,6 +243,9 @@
         jimengAccessKey = data.jimengAccessKey ?? "";
         jimengSecretKey = data.jimengSecretKey ?? "";
         minimaxKey = data.minimaxKey ?? "";
+        zhihuDataSecret = data.zhihuDataSecret ?? "";
+        autoRun = data.researchEnabled ?? false;
+        if (data.researchCron) parseResearchCron(data.researchCron);
         heygemBaseUrl = data.heygemBaseUrl ?? "";
         heygemApiToken = data.heygemApiToken ?? "";
         heygemGpuHourlyRateYuan = data.heygemGpuHourlyRateYuan ?? 1.78;
@@ -362,14 +398,21 @@
           <span class="field-label-upper">{tt("researchConfig")}</span>
           <div class="stack">
             <label class="field-row">
-              <span class="field-label-sm">{tt("researchInterval")}</span>
-              <select bind:value={interval}>
-                <option value="15m">{tt("minutes15")}</option>
-                <option value="30m">{tt("minutes30")}</option>
-                <option value="1h">{tt("hour1")}</option>
-                <option value="2h">{tt("hours2")}</option>
-                <option value="4h">{tt("hours4")}</option>
-                <option value="8h">{tt("hours8")}</option>
+              <span class="field-label-sm">调研频率</span>
+              <select bind:value={researchFreq}>
+                <option value="12h">每 12 小时</option>
+                <option value="daily">每天</option>
+                <option value="2d">每两天</option>
+                <option value="3d">每 3 天</option>
+                <option value="weekly">每周</option>
+              </select>
+            </label>
+            <label class="field-row">
+              <span class="field-label-sm">执行时间</span>
+              <select bind:value={researchTime}>
+                {#each Array.from({ length: 24 }, (_, h) => String(h).padStart(2, "0") + ":00") as t}
+                  <option value={t}>{t}</option>
+                {/each}
               </select>
             </label>
             <label class="field-row">
@@ -386,6 +429,7 @@
                 <span class="switch-thumb"></span>
               </button>
             </div>
+            <p class="hint-sm">开启后按上方频率自动执行全平台选题调研；调研领域沿用选题中心保存的关注领域（未设置时自动沿用上一次的领域）。</p>
           </div>
         </div>
 
@@ -436,6 +480,20 @@
               </div>
             </label>
             <p class="hint-sm">用于 AI 配音、真人声音克隆和 BGM 生成。未配置时配音音色功能不可用。</p>
+          </div>
+        </div>
+
+        <div class="field-group">
+          <span class="field-label-upper">知乎数据开放平台（选题调研 / 文章素材）</span>
+          <div class="stack">
+            <label class="field-row">
+              <span class="field-label-sm">Access Secret</span>
+              <div class="key-input-row">
+                <input type={showZhihuSecret ? "text" : "password"} bind:value={zhihuDataSecret} placeholder="developer.zhihu.com 个人中心获取" class="key-input" />
+                <button class="key-toggle" onclick={() => showZhihuSecret = !showZhihuSecret}>{showZhihuSecret ? "🙈" : "👁"}</button>
+              </div>
+            </label>
+            <p class="hint-sm">注册免费 5000 次/天，用于知乎热榜调研与搜索素材。获取方式：developer.zhihu.com → 个人中心。未配置时知乎调研自动退回聚合数据源。</p>
           </div>
         </div>
 

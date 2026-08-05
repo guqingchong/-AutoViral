@@ -5,6 +5,7 @@ import { getPublisher } from "./publishers/factory.js";
 import { DouyinPublisher } from "./publishers/douyin-publisher.js";
 import { XiaohongshuPublisher } from "./publishers/xiaohongshu-publisher.js";
 import { ChannelsPublisher } from "./publishers/channels-publisher.js";
+import { ZhihuPublisher } from "./publishers/zhihu-publisher.js";
 import { generateFallbackPackage } from "./publishers/fallback-export.js";
 import * as recordsRepo from "../db/publish-records-repo.js";
 import { updateWork } from "../db/works-repo.js";
@@ -68,6 +69,7 @@ export function resolvePublisher(platform: string): Publisher {
     if (key === "douyin") publisherCache.set(key, new DouyinPublisher());
     else if (key === "xiaohongshu") publisherCache.set(key, new XiaohongshuPublisher());
     else if (key === "channels") publisherCache.set(key, new ChannelsPublisher());
+    else if (key === "zhihu") publisherCache.set(key, new ZhihuPublisher());
     else publisherCache.set(key, getPublisher(key));
   }
   return publisherCache.get(key)!;

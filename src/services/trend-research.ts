@@ -1,23 +1,33 @@
 ﻿import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createSnapshot } from "../db/trends-repo.js";
 import { createTopic, listTopics } from "../db/topics-repo.js";
 import { recordDataSourceReference } from "../db/data-sources-repo.js";
 import type { DbTopic } from "../db/types.js";
 import { resolveClaudeCommand } from "../ws-bridge.js";
 import { buildTonePrompt } from "./tone-profile.js";
+import { fetchZhihuHotList, zhihuSearch } from "./zhihu-data-api.js";
 
 const execFileAsync = promisify(execFile);
-const SCRIPTS_DIR = join(process.cwd(), "skills", "trend-research", "scripts");
+// 以模块位置推导项目根（dist/services 或 src/services 向上两级），
+// 不能用 process.cwd()——服务以守护进程运行时 cwd 是用户主目录，脚本会找不到
+const PROJECT_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const SCRIPTS_DIR = join(PROJECT_ROOT, "skills", "trend-research", "scripts");
 
 const PYTHON_BIN = process.platform === "win32" ? "python" : "python3";
 
-export async function fetchTrendData(platform: string): Promise<string> {
+export async function fetchTrendData(platform: string, interests: string[] = []): Promise<string> {
   try {
     if (platform === "douyin") {
       const { stdout } = await execFileAsync(PYTHON_BIN, [join(SCRIPTS_DIR, "douyin_hot_search.py"), "--top", "30"], { timeout: 30000 });
       return stdout;
+    }
+    // 知乎：配置了数据平台 Secret 时优先官方热榜 + 关注领域搜索素材（失败/未配置退回 newsnow）
+    if (platform === "zhihu") {
+      const official = await fetchZhihuResearchData(interests);
+      if (official) return official;
     }
     const { stdout } = await execFileAsync(PYTHON_BIN, [join(SCRIPTS_DIR, "newsnow_trends.py"), platform, "--top", "20"], { timeout: 30000 });
     return stdout;
@@ -27,64 +37,156 @@ export async function fetchTrendData(platform: string): Promise<string> {
   }
 }
 
-export async function collectTrends(platforms: string[], interests: string[] = [], toneProfile?: Record<string, unknown> | null): Promise<{ platform: string; topics: DbTopic[] }[]> {
-  const results: { platform: string; topics: DbTopic[] }[] = [];
+/**
+ * 知乎官方数据：热榜 top20 + 每个关注领域站内搜索 top3。
+ * 未配置 Secret 或接口失败时返回 null（调用方退回 newsnow）。
+ */
+async function fetchZhihuResearchData(interests: string[]): Promise<string | null> {
+  try {
+    const hotList = await fetchZhihuHotList(20);
+    if (hotList.length === 0) return null; // 未配置 Secret 时为空，走降级
+    const interestResults: Record<string, unknown[]> = {};
+    for (const interest of interests.slice(0, 5)) {
+      try {
+        interestResults[interest] = await zhihuSearch(interest, 3);
+      } catch {
+        interestResults[interest] = [];
+      }
+    }
+    return JSON.stringify({
+      source: "zhihu-official-api",
+      hotList,
+      interestSearch: interestResults,
+    });
+  } catch (err) {
+    console.error("[trends] zhihu official api error:", err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+
+/** 单个平台的调研进度 */
+export interface PlatformProgress {
+  platform: string;
+  status: "pending" | "running" | "done" | "error";
+  count?: number;
+  error?: string;
+}
+
+export interface CollectOptions {
+  /** 全局 TopN：按综合分排序后最终入库的选题数量（0/缺省 = 不限） */
+  topN?: number;
+  /** 每平台进度回调（供任务跟踪/前端轮询） */
+  onProgress?: (progress: PlatformProgress[]) => void;
+}
+
+/**
+ * 综合评分：匹配度已由提示词强制（围绕关注领域），此处按 热度/机会/竞争 排序。
+ * 热度×2 + 机会权重（金矿3/蓝海2/红海1）+ 竞争权重（低2/中1/高0）
+ */
+export function topicScore(t: { heat?: number | string; opportunity?: string; competition?: string }): number {
+  const heat = Number(t.heat) || 0;
+  const opp = t.opportunity === "金矿" ? 3 : t.opportunity === "蓝海" ? 2 : t.opportunity === "红海" ? 1 : 0;
+  const comp = t.competition === "低" ? 2 : t.competition === "中" ? 1 : 0;
+  return heat * 2 + opp + comp;
+}
+
+export async function collectTrends(platforms: string[], interests: string[] = [], toneProfile?: Record<string, unknown> | null, opts: CollectOptions = {}): Promise<{ platform: string; topics: DbTopic[] }[]> {
+  // 每个平台预置结果桶（即使 0 条候选也返回空桶，保持调用方契约）
+  const results: { platform: string; topics: DbTopic[] }[] = platforms.map(p => ({ platform: p, topics: [] }));
 
   // Gather all existing topic titles for dedup across all platforms
   const existingTopics = listTopics(undefined, 500);
   const existingTitles = new Set(existingTopics.map(t => t.title.trim().toLowerCase()));
 
-  for (const platform of platforms) {
-    const raw = await fetchTrendData(platform);
-    const snapshotDate = new Date().toISOString().slice(0, 10);
-    let parsedRaw: Record<string, unknown> = {};
-    if (raw) {
-      try {
-        parsedRaw = JSON.parse(raw);
-      } catch {
-        parsedRaw = { raw };
-      }
-    }
-    const snapshot = createSnapshot({ platform, snapshot_date: snapshotDate, raw_data: parsedRaw });
-    const allTopics = await analyzeTrendsWithAgent(platform, raw, interests, snapshot.id, toneProfile);
+  const progress: PlatformProgress[] = platforms.map(p => ({ platform: p, status: "pending" }));
+  const report = () => opts.onProgress?.(progress.map(p => ({ ...p })));
+  report();
 
-    // Dedup: skip topics whose title already exists (case-insensitive) or is too similar
-    const deduped = allTopics.filter(t => {
-      const titleLower = t.title.trim().toLowerCase();
-      if (existingTitles.has(titleLower)) return false;
-      // Check for near-duplicates: if >60% of words overlap with an existing title, skip
-      const words = titleLower.split(/[\s,，。、]+/).filter((w: string) => w.length >= 2);
-      if (words.length > 0) {
-        for (const existing of existingTopics) {
-          const exWords = existing.title.toLowerCase().split(/[\s,，。、]+/).filter((w: string) => w.length >= 2);
-          const exSet = new Set(exWords);
-          const overlap = words.filter(w => exSet.has(w)).length;
-          const ratio = overlap / Math.max(words.length, exWords.length);
-          if (ratio > 0.6) return false;
+  // 全局候选池（topN 跨平台统一排序截断）
+  const candidates: Omit<DbTopic, "id" | "created_at" | "status">[] = [];
+
+  /** 单平台采集+分析（内部异常自捕获，不影响其他平台） */
+  async function collectOne(platform: string): Promise<void> {
+    const p = progress.find(x => x.platform === platform)!;
+    p.status = "running";
+    report();
+    try {
+      const raw = await fetchTrendData(platform, interests);
+      const snapshotDate = new Date().toISOString().slice(0, 10);
+      let parsedRaw: Record<string, unknown> = {};
+      if (raw) {
+        try {
+          parsedRaw = JSON.parse(raw);
+        } catch {
+          parsedRaw = { raw };
         }
       }
-      return true;
-    });
+      const snapshot = createSnapshot({ platform, snapshot_date: snapshotDate, raw_data: parsedRaw });
+      const allTopics = await analyzeTrendsWithAgent(platform, raw, interests, snapshot.id, toneProfile);
 
-    const created: DbTopic[] = [];
-    for (const t of deduped) {
-      const topic = createTopic({ ...t, snapshot_id: snapshot.id, status: "collected" });
-      created.push(topic);
-      existingTitles.add(t.title.trim().toLowerCase());
-      // PRD 4.1.1: track external data sources referenced via WebSearch; promote to fixed after 5+ references
-      if (t.source_url) {
-        try { recordDataSourceReference({ url: t.source_url, platform, title: t.title }); } catch { /* ignore tracking errors */ }
+      // Dedup: skip topics whose title already exists (case-insensitive) or is too similar
+      const deduped = allTopics.filter(t => {
+        const titleLower = t.title.trim().toLowerCase();
+        if (existingTitles.has(titleLower)) return false;
+        // Check for near-duplicates: if >60% of words overlap with an existing title, skip
+        const words = titleLower.split(/[\s,，。、]+/).filter((w: string) => w.length >= 2);
+        if (words.length > 0) {
+          for (const existing of existingTopics) {
+            const exWords = existing.title.toLowerCase().split(/[\s,，。、]+/).filter((w: string) => w.length >= 2);
+            const exSet = new Set(exWords);
+            const overlap = words.filter(w => exSet.has(w)).length;
+            const ratio = overlap / Math.max(words.length, exWords.length);
+            if (ratio > 0.6) return false;
+          }
+        }
+        return true;
+      });
+      for (const t of deduped) {
+        candidates.push({ ...t, snapshot_id: snapshot.id });
       }
+      p.status = "done";
+      p.count = deduped.length;
+      console.log(`[trends] ${platform}: collected ${allTopics.length} topics, ${deduped.length} new after dedup`);
+    } catch (err) {
+      p.status = "error";
+      p.error = err instanceof Error ? err.message : String(err);
+      console.error(`[trends] ${platform} failed:`, p.error);
     }
-    console.log(`[trends] ${platform}: collected ${allTopics.length} topics, ${deduped.length} new after dedup`);
-    results.push({ platform, topics: created });
+    report();
   }
+
+  // 并发 3 路：串行时 7 平台 × 每平台数分钟 = 数十分钟，用户无从等待；
+  // 并发过高会触发 Claude API 限流，3 是稳妥值
+  const CONCURRENCY = 3;
+  for (let i = 0; i < platforms.length; i += CONCURRENCY) {
+    await Promise.all(platforms.slice(i, i + CONCURRENCY).map(collectOne));
+  }
+
+  // 全局 TopN：综合分降序，同分优先热度；截断后按平台分组入库
+  const ranked = [...candidates].sort((a, b) => topicScore(b) - topicScore(a) || (Number(b.heat) || 0) - (Number(a.heat) || 0));
+  const finalTopics = opts.topN && opts.topN > 0 ? ranked.slice(0, opts.topN) : ranked;
+
+  for (const t of finalTopics) {
+    const topic = createTopic({ ...t, status: "collected" });
+    existingTitles.add(t.title.trim().toLowerCase());
+    // PRD 4.1.1: track external data sources referenced via WebSearch; promote to fixed after 5+ references
+    if (t.source_url) {
+      try { recordDataSourceReference({ url: t.source_url, platform: t.platform, title: t.title }); } catch { /* ignore tracking errors */ }
+    }
+    const bucket = results.find(r => r.platform === t.platform);
+    if (bucket) bucket.topics.push(topic);
+  }
+  report();
   return results;
 }
 
 function analyzeTrendsWithAgent(platform: string, rawData: string, interests: string[], snapshotId: number, toneProfile?: Record<string, unknown> | null): Promise<Omit<DbTopic, "id" | "created_at" | "status">[]> {
   return new Promise((resolve) => {
-    const platformLabel = platform === "xiaohongshu" ? "小红书" : platform === "douyin" ? "抖音" : platform;
+    const PLATFORM_LABELS: Record<string, string> = {
+      xiaohongshu: "小红书", douyin: "抖音", bilibili: "B站",
+      zhihu: "知乎", kuaishou: "快手", channels: "视频号", wechat_mp: "微信公众号",
+    };
+    const platformLabel = PLATFORM_LABELS[platform] ?? platform;
     // BUGFIX: 用户关注领域是搜索和推荐的第一驱动力，不能被情绪模板覆盖
     const interestClause = interests.length
       ? [
@@ -175,6 +277,7 @@ function analyzeTrendsWithAgent(platform: string, rawData: string, interests: st
     const proc = spawn(cli, ["-p", prompt, "--output-format", "json", "--dangerously-skip-permissions", "--model", "sonnet"], {
       cwd: process.env.HOME ?? process.cwd(),
       env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: "cli" },
+      windowsHide: true, // Windows 下不弹出控制台窗口
     });
     // Close stdin immediately to prevent 3s wait
     try { proc.stdin?.end(); } catch { /* ignore */ }
@@ -223,7 +326,7 @@ function analyzeTrendsWithAgent(platform: string, rawData: string, interests: st
       console.error(`[trends] Claude CLI spawn error:`, err.message);
       resolve([]);
     });
-    setTimeout(() => { try { proc.kill(); } catch {} resolve([]); }, 180000);
+    setTimeout(() => { try { proc.kill(); } catch {} resolve([]); }, 480000); // 8 分钟：深度调研提示词要求多轮 WebSearch，3 分钟必被腰斩
   });
 }
 

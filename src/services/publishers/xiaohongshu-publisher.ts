@@ -9,7 +9,8 @@ export class XiaohongshuPublisher extends PlaywrightPublisher {
   readonly uploadUrl = "https://creator.xiaohongshu.com/publish/publish";
 
   protected override async checkLoggedIn(page: Page): Promise<boolean> {
-    await page.goto(this.uploadUrl, { waitUntil: "networkidle" });
+    await page.goto(this.uploadUrl, { waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(2000);
     return !page.url().includes("/login");
   }
 

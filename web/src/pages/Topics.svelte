@@ -12,6 +12,12 @@
   let researchStatus: "idle" | "collecting" | "streaming" | "done" | "error" = $state("idle");
   let researchMessage = $state("");
   let lastCollectedCount = $state(0);
+  /** 每平台调研进度（后端实时推送） */
+  interface PlatformProgress { platform: string; status: "pending" | "running" | "done" | "error"; count?: number; error?: string }
+  let researchPlatforms = $state<PlatformProgress[]>([]);
+  /** 每次调研最终入库的选题数量（TopN） */
+  let topicCount = $state(10);
+  const TOPIC_COUNT_OPTIONS = [1, 3, 5, 8, 10, 15, 20];
   let deleteConfirmId = $state<number | null>(null);
   // Batch automation state
   let selectedTopicIds = $state<Set<number>>(new Set());
@@ -63,6 +69,41 @@
   let batchJobId = $state<string | null>(null);
   let batchPollTimer: ReturnType<typeof setInterval> | null = null;
 
+  // 手动添加选题
+  let showManualAdd = $state(false);
+  let manualSaving = $state(false);
+  let manualForm = $state({ title: "", platform: "", description: "", tags: "", contentAngles: "", exampleHook: "" });
+
+  function openManualAdd() {
+    manualForm = { title: "", platform: platform || "", description: "", tags: "", contentAngles: "", exampleHook: "" };
+    showManualAdd = true;
+  }
+
+  async function saveManualTopic() {
+    if (!manualForm.title.trim()) return;
+    manualSaving = true;
+    try {
+      const res = await fetch("/api/topics", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: manualForm.title.trim(),
+          platform: manualForm.platform || undefined,
+          description: manualForm.description.trim(),
+          tags: manualForm.tags.split(/[,，]/).map(s => s.trim()).filter(Boolean),
+          content_angles: manualForm.contentAngles.split(/[,，\n]/).map(s => s.trim()).filter(Boolean),
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      showManualAdd = false;
+      await load();
+    } catch {
+      alert("保存失败，请重试");
+    } finally {
+      manualSaving = false;
+    }
+  }
+
   function tt(key: string): string { void lang; return t(key); }
 
   const platforms = [
@@ -72,6 +113,8 @@
     { value: "kuaishou", label: tt("kuaishouTab") || "快手" },
     { value: "bilibili", label: tt("bilibiliTab") || "B站" },
     { value: "zhihu", label: tt("zhihuTab") || "知乎" },
+    { value: "channels", label: "视频号" },
+    { value: "wechat_mp", label: "公众号" },
   ];
 
   // Pre-load config to show saved interests
@@ -82,8 +125,20 @@
       if (config.interests) {
         interests = Array.isArray(config.interests) ? config.interests.join(", ") : String(config.interests);
       }
+      if (Number(config.researchTopN) > 0) topicCount = Number(config.researchTopN);
     } catch {}
     await load();
+    // 恢复未完成的调研任务（切换页面/刷新浏览器后重新挂接进度）
+    try {
+      const res = await fetch("/api/trends/collect/active");
+      const data = await res.json();
+      if (data.job && data.job.status === "running") {
+        researchStatus = "collecting";
+        researchPlatforms = data.job.platformsProgress ?? [];
+        researchMessage = "调研仍在进行中（已恢复进度跟踪）…";
+        startPolling(data.job.jobId);
+      }
+    } catch {}
     return unsub;
   });
 
@@ -107,42 +162,53 @@
 
   let pollTimer: ReturnType<typeof setInterval> | null = null;
 
+  /** 平台键 → 中文名（进度显示用） */
+  function progressLabel(key: string): string {
+    return platforms.find(p => p.value === key)?.label ?? key;
+  }
+
+  /** 轮询任务状态（启动后与页面恢复共用） */
+  function startPolling(jobId: string) {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    pollTimer = setInterval(async () => {
+      try {
+        const statusRes = await fetch("/api/trends/collect/status/" + jobId);
+        const statusData = await statusRes.json();
+        if (statusData.platformsProgress) researchPlatforms = statusData.platformsProgress;
+        if (statusData.status === "done") {
+          if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+          lastCollectedCount = statusData.collected;
+          await load();
+          researchStatus = "done";
+          researchMessage = tt("topicsCollected").replace("{count}", String(statusData.collected));
+        } else if (statusData.status === "error") {
+          if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+          researchStatus = "error";
+          researchMessage = statusData.error || tt("topicsResearchFailed");
+        }
+      } catch {}
+    }, 5000);
+  }
+
   async function startAITrendResearch() {
     researchStatus = "collecting";
+    researchPlatforms = [];
     const targetPlatform = platform || "";
     const platformLabel = targetPlatform
-      ? (targetPlatform === "douyin" ? "抖音" : targetPlatform === "xiaohongshu" ? "小红书" : targetPlatform === "bilibili" ? "B站" : targetPlatform === "zhihu" ? "知乎" : targetPlatform === "kuaishou" ? "快手" : targetPlatform)
+      ? (platforms.find(p => p.value === targetPlatform)?.label ?? targetPlatform)
       : "全平台";
     researchMessage = tt("topicsCollecting").replace("{platform}", platformLabel);
     try {
       const interestArr = interests.split(",").map(s => s.trim()).filter(Boolean);
-      await updateConfig({ interests: interestArr } as any);
+      await updateConfig({ interests: interestArr, researchTopN: topicCount } as any);
       const res = await fetch("/api/trends/collect", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ platform: targetPlatform || undefined, interests: interestArr }),
+        body: JSON.stringify({ platform: targetPlatform || undefined, interests: interestArr, topN: topicCount }),
       });
       const data = await res.json();
       if (!data.jobId) throw new Error("No jobId returned");
-      pollTimer = setInterval(async () => {
-        try {
-          const statusRes = await fetch("/api/trends/collect/status/" + data.jobId);
-          const statusData = await statusRes.json();
-          if (statusData.status === "done") {
-            if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-            lastCollectedCount = statusData.collected;
-            await load();
-            researchStatus = "done";
-            researchMessage = tt("topicsCollected").replace("{count}", String(statusData.collected));
-            setTimeout(() => { if (researchStatus === "done") researchStatus = "idle"; }, 5000);
-          } else if (statusData.status === "error") {
-            if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-            researchStatus = "error";
-            researchMessage = statusData.error || tt("topicsResearchFailed");
-            setTimeout(() => { if (researchStatus === "error") researchStatus = "idle"; }, 8000);
-          }
-        } catch {}
-      }, 5000);
+      startPolling(data.jobId);
     } catch {
       researchStatus = "error";
       researchMessage = tt("topicsResearchFailed");
@@ -158,6 +224,7 @@
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
     researchStatus = "idle";
     researchMessage = "";
+    researchPlatforms = [];
   }
 
   async function convert(topic: Topic) {
@@ -365,6 +432,14 @@
           onchange={saveInterests}
         />
       </div>
+      <div class="research-field">
+        <label class="field-label">选题数量</label>
+        <select bind:value={topicCount} class="platform-select" title="每次调研最终入库的选题卡片数量（按综合评分取前 N 名）">
+          {#each TOPIC_COUNT_OPTIONS as n}
+            <option value={n}>{n} 个</option>
+          {/each}
+        </select>
+      </div>
       <div class="research-actions">
         {#if researchStatus === "streaming" || researchStatus === "collecting"}
           <button class="btn-cancel-research" onclick={cancelResearch}>
@@ -376,7 +451,7 @@
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
             {tt("topicsStartResearch")}
           </button>
-          <button class="btn-manual-add" disabled={loading}>
+          <button class="btn-manual-add" disabled={loading} onclick={openManualAdd}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
             {tt("topicsManualAdd")}
           </button>
@@ -399,6 +474,22 @@
         {/if}
         <span class="status-text">{researchMessage}</span>
       </div>
+      {#if researchPlatforms.length > 0}
+        <div class="research-progress">
+          {#each researchPlatforms as pp}
+            <div class="rp-item" data-status={pp.status} title={pp.error ?? ""}>
+              <span class="rp-dot"></span>
+              <span class="rp-name">{progressLabel(pp.platform)}</span>
+              <span class="rp-state">
+                {#if pp.status === "running"}调研中…
+                {:else if pp.status === "done"}✓ {pp.count ?? 0} 条候选
+                {:else if pp.status === "error"}✗ 失败
+                {:else}等待中{/if}
+              </span>
+            </div>
+          {/each}
+        </div>
+      {/if}
     {/if}
   </div>
 
@@ -407,9 +498,9 @@
     <div class="results-summary">
       <span class="summary-count">{topics.length} topics</span>
       <span class="summary-divider">·</span>
-      <button class="summary-filter" class:active={platform === ""} onclick={() => { platform = ""; load(); }}>All</button>
-      <button class="summary-filter" class:active={platform === "douyin"} onclick={() => { platform = "douyin"; load(); }}>{tt("douyinTab")}</button>
-      <button class="summary-filter" class:active={platform === "xiaohongshu"} onclick={() => { platform = "xiaohongshu"; load(); }}>{tt("xiaohongshuTab")}</button>
+      {#each platforms as p}
+        <button class="summary-filter" class:active={platform === p.value} onclick={() => { platform = p.value; load(); }}>{p.label}</button>
+      {/each}
     </div>
   {/if}
 
@@ -543,6 +634,47 @@
     </div>
   {/if}
 </div>
+
+{#if showManualAdd}
+  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+  <div class="batch-overlay" onclick={(e) => { if ((e.target as HTMLElement).classList.contains("batch-overlay")) showManualAdd = false; }}>
+    <div class="batch-modal">
+      <div class="batch-modal-header">
+        <h2>手动添加选题</h2>
+        <button class="batch-close" onclick={() => showManualAdd = false}>✕</button>
+      </div>
+      <div class="batch-modal-body">
+        <div class="batch-field">
+          <label>标题 *</label>
+          <input class="manual-input" bind:value={manualForm.title} placeholder="选题标题（必填）" />
+        </div>
+        <div class="batch-field">
+          <label>平台</label>
+          <select bind:value={manualForm.platform}>
+            {#each platforms as p}
+              <option value={p.value}>{p.label}</option>
+            {/each}
+          </select>
+        </div>
+        <div class="batch-field">
+          <label>描述</label>
+          <textarea class="manual-input" rows="3" bind:value={manualForm.description} placeholder="为什么值得做、趋势背景（可选）"></textarea>
+        </div>
+        <div class="batch-field">
+          <label>标签（逗号分隔）</label>
+          <input class="manual-input" bind:value={manualForm.tags} placeholder="如：AI, 教程, 中考" />
+        </div>
+        <div class="batch-field">
+          <label>切入角度（逗号或换行分隔）</label>
+          <textarea class="manual-input" rows="2" bind:value={manualForm.contentAngles} placeholder="每条角度一行或用逗号分隔（可选）"></textarea>
+        </div>
+        <button class="btn-batch-start" disabled={manualSaving || !manualForm.title.trim()} onclick={saveManualTopic}>
+          {manualSaving ? "保存中..." : "保存选题"}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
 
 {#if showBatchModal}
   <div class="batch-overlay" onclick={(e) => { if (e.target.classList.contains("batch-overlay")) showBatchModal = false; }}>
@@ -929,6 +1061,32 @@
   .status-text {
     line-height: 1.3;
   }
+
+  /* ── Research Progress（每平台进度） ────────── */
+  .research-progress {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin-top: 0.5rem;
+  }
+  .rp-item {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.25rem 0.6rem;
+    background: var(--bg-inset);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    font-size: 0.72rem;
+  }
+  .rp-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-dim); flex-shrink: 0; }
+  .rp-item[data-status="running"] .rp-dot { background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
+  .rp-item[data-status="done"] .rp-dot { background: var(--success); }
+  .rp-item[data-status="error"] .rp-dot { background: var(--error); }
+  .rp-name { font-weight: 600; color: var(--text-secondary); }
+  .rp-state { color: var(--text-dim); }
+  .rp-item[data-status="done"] .rp-state { color: var(--success); }
+  .rp-item[data-status="error"] .rp-state { color: var(--error); }
 
   /* ── Results Summary ──────────────────────── */
   .results-summary {
@@ -1362,6 +1520,19 @@
     left: 0.5rem;
     z-index: 5;
   }
+  .manual-input {
+    background: var(--bg-inset);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.45rem 0.6rem;
+    font-size: 0.82rem;
+    font-family: var(--font-body);
+    width: 100%;
+    box-sizing: border-box;
+    resize: vertical;
+  }
+  .manual-input:focus { outline: none; border-color: var(--text-muted); }
 
   /* ── Responsive ────────────────────────────── */
   @media (max-width: 768px) {

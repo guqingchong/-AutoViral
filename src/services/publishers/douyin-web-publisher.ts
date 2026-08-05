@@ -9,7 +9,9 @@ export class DouyinWebPublisher extends PlaywrightPublisher {
   readonly uploadUrl = "https://creator.douyin.com/creator-micro/content/upload";
 
   protected override async checkLoggedIn(page: Page): Promise<boolean> {
-    await page.goto(this.uploadUrl, { waitUntil: "networkidle" });
+    // domcontentloaded + 短等待：创作者页有长轮询，networkidle 不可靠
+    await page.goto(this.uploadUrl, { waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(2000);
     return !page.url().includes("/login");
   }
 

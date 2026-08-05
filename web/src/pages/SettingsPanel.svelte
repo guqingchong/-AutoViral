@@ -21,12 +21,14 @@
   let chanjingSecretKey = $state("");
   let bailianApiKey = $state("");
   let minimaxKey = $state("");
+  let zhihuDataSecret = $state("");
   let pexelsApiKey = $state("");
   let pixabayApiKey = $state("");
   let unsplashAccessKey = $state("");
   let showChjSecret = $state(false);
   let showBailian = $state(false);
   let showMinimax = $state(false);
+  let showZhihuData = $state(false);
   let showPexels = $state(false);
   let showPixabay = $state(false);
   let showUnsplash = $state(false);
@@ -60,6 +62,7 @@
         chanjingSecretKey = data.chanjingSecretKey ?? ""
         bailianApiKey = data.bailianApiKey ?? ""
         minimaxKey = data.minimaxKey ?? ""
+        zhihuDataSecret = data.zhihuDataSecret ?? ""
         pexelsApiKey = data.pexelsApiKey ?? ""
         pixabayApiKey = data.pixabayApiKey ?? ""
         unsplashAccessKey = data.unsplashAccessKey ?? ""
@@ -90,6 +93,7 @@
           chanjingSecretKey,
           bailianApiKey,
           minimaxKey,
+          zhihuDataSecret,
           pexelsApiKey,
           pixabayApiKey,
           unsplashAccessKey,
@@ -355,6 +359,21 @@
                   <button class="toggle-vis" onclick={() => showMinimax = !showMinimax} aria-label="切换可见">{showMinimax ? "隐藏" : "显示"}</button>
                 </div>
               </label>
+            </div>
+          </section>
+
+          <!-- 知乎数据开放平台 -->
+          <section class="config-section">
+            <h3 class="section-label">知乎数据开放平台（选题调研/文章素材）</h3>
+            <div class="field-group">
+              <label class="field-label">
+                Access Secret
+                <div class="input-row">
+                  <input type={showZhihuData ? "text" : "password"} class="field-input" bind:value={zhihuDataSecret} placeholder="developer.zhihu.com 个人中心获取" />
+                  <button class="toggle-vis" onclick={() => showZhihuData = !showZhihuData} aria-label="切换可见">{showZhihuData ? "隐藏" : "显示"}</button>
+                </div>
+              </label>
+              <p class="field-hint">注册免费 5000 次/天，用于知乎热榜调研与搜索素材。获取方式：developer.zhihu.com → 个人中心。</p>
             </div>
           </section>
 
