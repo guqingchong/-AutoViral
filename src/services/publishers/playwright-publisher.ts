@@ -86,15 +86,26 @@ export abstract class PlaywrightPublisher implements Publisher {
   }
 
   async login(): Promise<boolean> {
+    // 登录必须打开可见浏览器（用户要扫码/输密码），强制有头模式
+    this.options = { ...this.options, headless: false };
     const { context, page } = await this.ensureBrowser();
     try {
-      await page.goto(this.loginUrl, { waitUntil: "networkidle" });
-      const deadline = Date.now() + 120000;
+      // 用 domcontentloaded 而非 networkidle：扫码登录页有长轮询，networkidle 永远不触发
+      await page.goto(this.loginUrl, { waitUntil: "domcontentloaded" });
+      const deadline = Date.now() + 180000;
       while (Date.now() < deadline) {
-        const loggedIn = await this.checkLoggedIn(page).catch(() => false);
-        if (loggedIn) {
-          await this.saveCookies(context);
-          return true;
+        // 原地判断 URL，不主动跳转：扫码成功后登录页会自己跳转到控制台，
+        // 若此时 goto 上传页会打断登录握手（ticket 换 cookie 发生在跳转过程中），
+        // 导致永远被弹回二维码页（"不停刷新"现象）。
+        const url = page.url();
+        const stillOnLogin = /login|signin|passport/i.test(url);
+        if (!stillOnLogin) {
+          // URL 已离开登录页，再跳上传页二次确认登录态真实有效
+          const loggedIn = await this.checkLoggedIn(page).catch(() => false);
+          if (loggedIn) {
+            await this.saveCookies(context);
+            return true;
+          }
         }
         await page.waitForTimeout(2000);
       }

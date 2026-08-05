@@ -33,8 +33,8 @@ describe("publishers factory (real publishers)", () => {
     );
   });
 
-  it("resolves the 4 official-API publishers (GAP-1)", () => {
-    for (const plat of ["kuaishou", "bilibili", "zhihu", "wechat"]) {
+  it("resolves the 3 official-API publishers (GAP-1)", () => {
+    for (const plat of ["kuaishou", "bilibili", "wechat"]) {
       const p = getPublisher(plat);
       expect(p.platform).toBe(plat);
       expect(typeof p.publish).toBe("function");
@@ -43,7 +43,7 @@ describe("publishers factory (real publishers)", () => {
   });
 
   it("resolves Playwright / RPA publishers", () => {
-    for (const plat of ["douyin", "xiaohongshu", "channels"]) {
+    for (const plat of ["douyin", "xiaohongshu", "channels", "zhihu"]) {
       const p = getPublisher(plat);
       expect(p.platform).toBe(plat);
     }

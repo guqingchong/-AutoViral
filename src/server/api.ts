@@ -207,8 +207,10 @@ apiRoutes.get("/api/config", async (c) => {
     jimengSecretKey: config.jimeng?.secretKey ?? "",
     openrouterKey: config.openrouter?.apiKey ?? "",
     minimaxKey: config.minimax?.apiKey ?? "",
+    zhihuDataSecret: config.zhihuData?.accessSecret ?? "",
     researchEnabled: config.research?.enabled ?? false,
     researchCron: config.research?.schedule ?? "0 9 * * *",
+    researchTopN: config.research?.topN ?? 10,
     memorySyncEnabled: config.memory?.syncEnabled ?? false,
     heygemBaseUrl: config.heygem?.baseUrl ?? "",
     heygemApiToken: config.heygem?.apiToken ?? "",
@@ -244,6 +246,13 @@ apiRoutes.put("/api/config", async (c) => {
     // 保留 groupId 等其他 minimax 字段，避免保存 key 时被覆盖丢失
     config.minimax = { ...config.minimax, apiKey: body.minimaxKey as string };
   }
+  if (body.zhihuDataSecret !== undefined) {
+    config.zhihuData = { ...config.zhihuData, accessSecret: body.zhihuDataSecret as string };
+  }
+  if (body.interests !== undefined) {
+    // 关注领域：选题中心 updateConfig 走本接口，此前未映射导致保存被静默丢弃
+    config.interests = Array.isArray(body.interests) ? body.interests.map(String) : [];
+  }
   if (body.researchEnabled !== undefined) {
     if (!config.research) config.research = { enabled: false, schedule: "0 9 * * *", platforms: ["douyin", "xiaohongshu"] };
     config.research.enabled = body.researchEnabled as boolean;
@@ -251,6 +260,10 @@ apiRoutes.put("/api/config", async (c) => {
   if (body.researchCron !== undefined) {
     if (!config.research) config.research = { enabled: false, schedule: "0 9 * * *", platforms: ["douyin", "xiaohongshu"] };
     config.research.schedule = body.researchCron as string;
+  }
+  if (body.researchTopN !== undefined) {
+    if (!config.research) config.research = { enabled: false, schedule: "0 9 * * *", platforms: ["douyin", "xiaohongshu"] };
+    config.research.topN = Math.max(0, Number(body.researchTopN) || 0);
   }
   if (body.model !== undefined) {
     config.model = body.model as string;
@@ -290,6 +303,11 @@ apiRoutes.put("/api/config", async (c) => {
   config.analytics = parseAnalytics(body);
 
   await saveConfig(config);
+  // 调研开关/频率变更后立即重排 cron，无需重启服务
+  if (body.researchEnabled !== undefined || body.researchCron !== undefined) {
+    const { startTrendScheduler } = await import("../services/scheduler.js");
+    startTrendScheduler().catch((err) => console.error("[scheduler] restart failed:", err));
+  }
   // 字段级保存日志（脱敏，只记长度）——诊断"用户以为已保存但 key 为空"类问题
   log("info", "api", "config_saved", "-", {
     pexelsApiKey: (config.pexels?.apiKey ?? "").length,
@@ -1063,6 +1081,7 @@ function runCliBrief(prompt: string, timeoutMs = 60000): Promise<string> {
       cwd: homedir(),
       stdio: ["ignore", "pipe", "pipe"],
       shell: false,
+      windowsHide: true,
       env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: "cli" },
     });
 
@@ -3082,16 +3101,29 @@ apiRoutes.get("/api/topics/batch-status/:jobId", (c) => {
 // ---------------------------------------------------------------------------
 
 // In-memory tracking for async trend collection jobs
-const trendJobs = new Map<string, { status: string; platform: string; interests: string[]; collected: number; error?: string; startedAt: number }>();
+interface TrendJobPlatform { platform: string; status: "pending" | "running" | "done" | "error"; count?: number; error?: string }
+interface TrendJob {
+  status: string;
+  platform: string;
+  interests: string[];
+  collected: number;
+  error?: string;
+  startedAt: number;
+  topN?: number;
+  platformsProgress?: TrendJobPlatform[];
+}
+const trendJobs = new Map<string, TrendJob>();
+/** 最近一次任务 ID（供 /active 恢复查询，页面刷新/切换后不丢状态） */
+let lastTrendJobId: string | null = null;
 
 // POST /api/trends/collect - start async trend collection (returns job immediately)
 apiRoutes.post("/api/trends/collect", async (c) => {
   const config = await loadConfig();
-  const body = await c.req.json<{ platform?: string; interests?: string[]; accountId?: string }>().catch(() => ({}));
+  const body = await c.req.json<{ platform?: string; interests?: string[]; accountId?: string; topN?: number }>().catch(() => ({}));
   // Collect across ALL configured platforms, not just one
   const allPlatforms = config.research?.platforms?.length
     ? config.research.platforms
-    : ["douyin", "xiaohongshu", "bilibili", "zhihu", "kuaishou"];
+    : ["douyin", "xiaohongshu", "bilibili", "zhihu", "kuaishou", "channels", "wechat_mp"];
   // If user specified a single platform in the request, use just that one
   const platforms = (body as any).platform
     ? [(body as any).platform]
@@ -3100,12 +3132,21 @@ apiRoutes.post("/api/trends/collect", async (c) => {
   const interests = Array.isArray(reqInterests) ? reqInterests : [];
   const accountId = (body as any).accountId as string | undefined;
   const account = accountId ? getAccount(accountId) : undefined;
+  // TopN：请求优先，其次配置里的 research.topN
+  const topN = Number((body as any).topN) > 0 ? Number((body as any).topN) : (config.research?.topN ?? 0);
 
   const jobId = "trend_" + Date.now();
-  trendJobs.set(jobId, { status: "running", platform: platforms.join(","), interests, collected: 0, startedAt: Date.now() });
+  trendJobs.set(jobId, { status: "running", platform: platforms.join(","), interests, collected: 0, startedAt: Date.now(), topN });
+  lastTrendJobId = jobId;
 
   // Run collection asynchronously (fire and forget)
-  collectTrends(platforms, interests, account?.tone_profile)
+  collectTrends(platforms, interests, account?.tone_profile, {
+    topN,
+    onProgress: (progress) => {
+      const job = trendJobs.get(jobId);
+      if (job) job.platformsProgress = progress;
+    },
+  })
     .then((results) => {
       const total = results.reduce((sum, r) => sum + r.topics.length, 0);
       const job = trendJobs.get(jobId);
@@ -3119,14 +3160,22 @@ apiRoutes.post("/api/trends/collect", async (c) => {
   return c.json({ jobId, status: "running", platform: platforms.join(","), message: "调研已启动，请稍后查看结果" });
 });
 
+// GET /api/trends/collect/active - 最近一次的调研任务（页面切换/刷新后恢复状态用）
+apiRoutes.get("/api/trends/collect/active", (c) => {
+  const job = lastTrendJobId ? trendJobs.get(lastTrendJobId) : undefined;
+  if (!job || !lastTrendJobId) return c.json({ job: null });
+  if (Date.now() - job.startedAt > 3600000) return c.json({ job: null }); // 1 小时后不再恢复
+  return c.json({ job: { jobId: lastTrendJobId, ...job } });
+});
+
 // GET /api/trends/collect/status/:jobId - poll async collection status
 apiRoutes.get("/api/trends/collect/status/:jobId", async (c) => {
   const jobId = c.req.param("jobId");
   const job = trendJobs.get(jobId);
   if (!job) return c.json({ error: "Job not found" }, 404);
-  // Auto-cleanup jobs older than 10 minutes
-  if (Date.now() - job.startedAt > 600000) { trendJobs.delete(jobId); return c.json({ error: "Job expired" }, 404); }
-  return c.json({ jobId, status: job.status, platform: job.platform, collected: job.collected, error: job.error });
+  // Auto-cleanup jobs older than 60 minutes（全平台调研可能跑 10~20 分钟，10 分钟会误判过期）
+  if (Date.now() - job.startedAt > 3600000) { trendJobs.delete(jobId); return c.json({ error: "Job expired" }, 404); }
+  return c.json({ jobId, status: job.status, platform: job.platform, collected: job.collected, error: job.error, platformsProgress: job.platformsProgress ?? [] });
 });
 
 // ---------------------------------------------------------------------------

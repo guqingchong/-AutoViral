@@ -64,6 +64,7 @@ function runResearchCli(prompt: string, timeoutMs: number): Promise<string> {
     ], {
       cwd: process.env["HOME"] ?? process.cwd(),
       env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: "cli" },
+      windowsHide: true,
     });
     try { proc.stdin?.end(); } catch { /* ignore */ }
 

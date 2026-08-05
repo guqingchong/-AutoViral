@@ -92,6 +92,7 @@ function runJsonPromptOnce<T>(prompt: string, opts: LlmJsonOptions = {}): Promis
     ], {
       cwd: process.env["HOME"] ?? process.cwd(),
       env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: "cli" },
+      windowsHide: true,
     });
 
     // Close stdin immediately to prevent 3s wait for stdin data

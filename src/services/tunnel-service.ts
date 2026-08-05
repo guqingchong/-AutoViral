@@ -68,7 +68,7 @@ export async function ensureTunnel(): Promise<boolean> {
 
   let proc: ChildProcess;
   try {
-    proc = spawn("ssh", args, { stdio: "ignore", detached: false });
+    proc = spawn("ssh", args, { stdio: "ignore", detached: false, windowsHide: true });
   } catch {
     return false;
   }

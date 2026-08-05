@@ -32,6 +32,7 @@ export interface Config {
   jimeng: { accessKey: string; secretKey: string };
   openrouter?: { apiKey: string };
   minimax?: { apiKey: string; groupId?: string };
+  zhihuData?: { accessSecret: string };  // 知乎数据开放平台 Access Secret（developer.zhihu.com 个人中心）
   heygem?: {
     apiToken: string;
     baseUrl: string;              // 实例 API 地址（SSH 隧道模式默认 http://localhost:6006）
@@ -42,7 +43,7 @@ export interface Config {
   pexels?: { apiKey: string };
   pixabay?: { apiKey: string };
   unsplash?: { accessKey: string };
-  research: { enabled: boolean; schedule: string; platforms: string[] };
+  research: { enabled: boolean; schedule: string; platforms: string[]; topN?: number };
   interests?: string[];
   memory?: { apiKey: string; userId: string; syncEnabled: boolean };
   analytics: {
@@ -80,7 +81,7 @@ export function getDefaultConfig(): Config {
     port: 3271,
     model: "opus",
     jimeng: { accessKey: "", secretKey: "" },
-    research: { enabled: true, schedule: "0 9,21 * * *", platforms: ["douyin", "xiaohongshu", "weibo", "zhihu", "bilibili"] },
+    research: { enabled: true, schedule: "0 9,21 * * *", platforms: ["douyin", "xiaohongshu", "bilibili", "zhihu", "kuaishou", "channels", "wechat_mp"], topN: 10 },
     interests: [],
     analytics: { enabled: false, collectInterval: 60, sources: [] },
     budget: { monthlyLimitYuan: 2500, dailyLimitYuan: 200, warningThresholdPercent: 80 },

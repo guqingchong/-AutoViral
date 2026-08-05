@@ -46,10 +46,10 @@
   const CRED_GUIDES: Record<string, { mode: "rpa" | "api"; fields: { username?: string; cookie: string }; note: string; loginBtn?: boolean }> = {
     douyin: { mode: "rpa", fields: { cookie: "登录 Cookie（JSON 数组）" }, note: "发布方式：Playwright 浏览器自动化。点击「浏览器登录」人工登录一次，Cookie 自动入库；或手动粘贴浏览器导出的 Cookie JSON。", loginBtn: true },
     xiaohongshu: { mode: "rpa", fields: { cookie: "登录 Cookie（JSON 数组）" }, note: "发布方式：Playwright 浏览器自动化。点击「浏览器登录」人工登录一次，Cookie 自动入库；或手动粘贴 Cookie JSON。", loginBtn: true },
-    channels: { mode: "rpa", fields: { cookie: "登录 Cookie" }, note: "发布方式：影刀 RPA。粘贴视频号助手登录 Cookie。" },
+    channels: { mode: "rpa", fields: { cookie: "登录 Cookie（JSON 数组）" }, note: "发布方式：Playwright 浏览器自动化（视频号助手网页版）。点击「浏览器登录」扫码登录一次，Cookie 自动入库；或手动粘贴 Cookie JSON。", loginBtn: true },
     wechat_mp: { mode: "api", fields: { username: "AppID", cookie: "AppSecret" }, note: "发布方式：公众号官方 API。「用户名」填 AppID，下方填 AppSecret（公众平台 → 设置与开发 → 基本配置）。" },
     kuaishou: { mode: "api", fields: { username: "app_id", cookie: "app_secret" }, note: "发布方式：快手开放平台 API。「用户名」填 app_id，下方填 app_secret。" },
-    zhihu: { mode: "api", fields: { cookie: "access_token" }, note: "发布方式：知乎官方 API。下方填 OAuth access_token。" },
+    zhihu: { mode: "rpa", fields: { cookie: "登录 Cookie（JSON 数组）" }, note: "发布方式：Playwright 浏览器自动化（知乎官方 API 已关闭个人申请）。点击「浏览器登录」人工登录一次，Cookie 自动入库；或手动粘贴 Cookie JSON。发布产物为知乎专栏文章。", loginBtn: true },
     bilibili: { mode: "api", fields: { cookie: "完整 Cookie（含 SESSDATA 与 bili_jct）" }, note: "发布方式：B站官方 API。粘贴浏览器完整 Cookie，系统自动解析 SESSDATA / bili_jct。" },
   };
   const credGuide = $derived(CRED_GUIDES[acctForm.platform]);
@@ -96,6 +96,38 @@
     } catch {}
   }
 
+  /** 登录态健康检查（实测凭证有效性，区分"已配置"与"仍有效"） */
+  interface PlatformHealth { configured: boolean; valid: boolean | null; detail: string }
+  let loginHealth = $state<Record<string, PlatformHealth>>({});
+  let healthLoading = $state(false);
+  let precheckDone = $state(false);
+
+  async function loadLoginHealth(force = false) {
+    healthLoading = true;
+    try {
+      const res = await fetch(`/api/accounts/login-health${force ? "?force=1" : ""}`);
+      const data = await res.json();
+      loginHealth = data.health ?? {};
+    } catch {} finally { healthLoading = false; }
+  }
+
+  /** 健康检查接口的平台键（wechat）→ 显示名 */
+  function healthLabel(key: string): string {
+    return key === "wechat" ? "公众号" : platformLabel(key);
+  }
+
+  /** 发布预检：强制实测全部平台，失效平台标红提示 */
+  async function handlePrecheck() {
+    precheckDone = true;
+    await loadLoginHealth(true);
+    const bad = Object.entries(loginHealth).filter(([, h]) => h.configured && h.valid === false);
+    if (bad.length === 0) {
+      showMessage("success", "发布预检通过：所有已配置平台登录态有效");
+    } else {
+      showMessage("error", `预检发现 ${bad.length} 个平台登录态失效：${bad.map(([k]) => healthLabel(k)).join("、")}，请重新登录`);
+    }
+  }
+
   /** RPA 平台：触发浏览器人工登录，成功后 cookie 自动存入 platform_credentials */
   async function handleBrowserLogin(platform: string) {
     loginBusy = { ...loginBusy, [platform]: true };
@@ -113,6 +145,7 @@
     } finally {
       loginBusy = { ...loginBusy, [platform]: false };
       await loadCredentialStatus();
+      loadLoginHealth(true); // 登录成功后强制重测登录态
     }
   }
 
@@ -281,6 +314,8 @@
   onMount(async () => {
     await Promise.all([loadWorks(), loadAccounts(), loadCredentialStatus()]);
     if (!destroyed) loading = false;
+    // 登录态健康检查后台静默执行（实测各平台 Cookie/凭证有效性），不阻塞页面
+    loadLoginHealth();
     // 轮询刷新：打回重做的作品完成后（状态回 reviewing）自动回到待审核列表
     const timer = setInterval(() => {
       if (!destroyed && !selectedWorkId) loadWorks();
@@ -407,7 +442,25 @@
 
         <!-- Publishing -->
         <div class="publish-section">
-          <h3>选择发布平台</h3>
+          <div class="publish-header">
+            <h3>选择发布平台</h3>
+            <button class="btn-precheck" disabled={healthLoading} onclick={handlePrecheck}
+              title="实测各平台登录态是否有效，失效平台会在下方标红">
+              {healthLoading ? "预检中…（约 10~20 秒）" : "🔍 发布预检"}
+            </button>
+          </div>
+          {#if precheckDone && !healthLoading}
+            <div class="precheck-results">
+              {#each Object.entries(loginHealth).filter(([, h]) => h.configured) as [key, h]}
+                <div class="precheck-row">
+                  <span class="pc-name">{healthLabel(key)}</span>
+                  <span class:pc-ok={h.valid === true} class:pc-fail={h.valid === false} class:pc-unknown={h.valid === null}>
+                    {h.valid === true ? "✓" : h.valid === false ? "✗" : "?"} {h.detail}
+                  </span>
+                </div>
+              {/each}
+            </div>
+          {/if}
           {#if selectedWork?.type === "image-text"}
             <p class="publish-hint">⚠ 图文格式仅支持小红书平台发布</p>
           {/if}
@@ -533,6 +586,7 @@
       <div class="accounts-grid">
         {#each PLATFORMS as p}
           {@const cred = credentialStatus[credKeyOf(p.key)]}
+          {@const health = loginHealth[credKeyOf(p.key)]}
           <div class="platform-group">
             <h3 class="platform-title">
               {p.label}
@@ -541,6 +595,13 @@
                   title={cred.configured ? `发布凭证已就绪（${cred.keys.join("、")}）` : "发布凭证未配置，发布将失败"}>
                   {cred.configured ? "✓ 发布就绪" : "⚠ 未配置凭证"}
                 </span>
+              {/if}
+              {#if healthLoading && !health}
+                <span class="cred-badge cred-checking">登录态检测中…</span>
+              {:else if health?.configured && health.valid === false}
+                <span class="cred-badge cred-missing" title={health.detail}>✗ 需重新登录</span>
+              {:else if health?.valid === true}
+                <span class="cred-badge cred-verified" title={health.detail}>✓ 已验证</span>
               {/if}
               {#if CRED_GUIDES[p.key]?.loginBtn}
                 <button class="btn-login-sm" disabled={loginBusy[p.key]} onclick={() => handleBrowserLogin(p.key)}>
@@ -632,6 +693,17 @@
 
   .publish-section { margin-bottom: 1rem; }
   .publish-section h3 { font-size: 0.95rem; margin: 0 0 0.75rem; }
+  .publish-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.75rem; }
+  .publish-header h3 { margin: 0; }
+  .btn-precheck { padding: 0.35rem 0.8rem; border-radius: 4px; border: 1px solid var(--accent); background: transparent; color: var(--accent); font-size: 0.78rem; font-weight: 600; cursor: pointer; }
+  .btn-precheck:hover { background: var(--accent); color: var(--accent-text); }
+  .btn-precheck:disabled { opacity: 0.5; cursor: not-allowed; }
+  .precheck-results { background: var(--bg-inset); border: 1px solid var(--border); border-radius: 4px; padding: 0.6rem 0.8rem; margin-bottom: 0.75rem; font-size: 0.78rem; }
+  .precheck-row { display: flex; gap: 0.75rem; padding: 0.15rem 0; }
+  .precheck-row .pc-name { min-width: 4rem; font-weight: 600; color: var(--text-secondary); }
+  .precheck-row .pc-ok { color: var(--success, #22c55e); }
+  .precheck-row .pc-fail { color: var(--error, #ef4444); }
+  .precheck-row .pc-unknown { color: var(--text-dim); }
   .publish-hint { font-size: 0.8rem; color: var(--spark-red); background: rgba(254,44,85,0.06); padding: 0.5rem 0.75rem; border-radius: 4px; margin-bottom: 0.75rem; }
   .platform-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 0.75rem; }
   .platform-card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: var(--card-radius); padding: 0.75rem; display: flex; flex-direction: column; gap: 0.4rem; align-items: center; }
@@ -672,6 +744,8 @@
   .cred-badge { font-size: 0.62rem; font-weight: 600; padding: 0.1rem 0.4rem; border-radius: 3px; }
   .cred-badge.cred-ok { background: rgba(34, 197, 94, 0.12); color: var(--success, #22c55e); }
   .cred-badge.cred-missing { background: rgba(239, 68, 68, 0.1); color: var(--error, #ef4444); }
+  .cred-badge.cred-verified { background: rgba(34, 197, 94, 0.12); color: var(--success, #22c55e); }
+  .cred-badge.cred-checking { background: var(--bg-inset); color: var(--text-dim); }
   .btn-login-sm { font-size: 0.68rem; padding: 0.15rem 0.5rem; border-radius: 3px; border: 1px solid var(--border); background: var(--bg-inset); color: var(--text-secondary); cursor: pointer; }
   .btn-login-sm:hover { border-color: var(--accent); color: var(--accent); }
   .btn-login-sm:disabled { opacity: 0.5; cursor: not-allowed; }
