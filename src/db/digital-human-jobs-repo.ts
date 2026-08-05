@@ -17,6 +17,7 @@ function rowToJob(row: Record<string, unknown>): DbDigitalHumanJob {
     estimated_cost: (row.estimated_cost as number) ?? 0,
     actual_cost: (row.actual_cost as number) ?? 0,
     provider_job_id: (row.provider_job_id as string) || undefined,
+    queue_position: (row.queue_position as number | null) ?? null,
     created_at: row.created_at as string,
     updated_at: row.updated_at as string,
   };
@@ -25,8 +26,8 @@ function rowToJob(row: Record<string, unknown>): DbDigitalHumanJob {
 export function createJob(job: DbDigitalHumanJob): DbDigitalHumanJob {
   const db = getDb();
   db.prepare(
-    `INSERT INTO digital_human_jobs (id, work_id, avatar_id, audio_path, script_id, provider, status, progress, result_url, result_local_path, error, estimated_cost, actual_cost, provider_job_id, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO digital_human_jobs (id, work_id, avatar_id, audio_path, script_id, provider, status, progress, result_url, result_local_path, error, estimated_cost, actual_cost, provider_job_id, queue_position, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     job.id,
     job.work_id ?? null,
@@ -42,6 +43,7 @@ export function createJob(job: DbDigitalHumanJob): DbDigitalHumanJob {
     job.estimated_cost,
     job.actual_cost,
     job.provider_job_id ?? null,
+    job.queue_position ?? null,
     job.created_at,
     job.updated_at
   );
@@ -69,7 +71,7 @@ export function updateJob(id: string, updates: Partial<DbDigitalHumanJob>): DbDi
   if (!existing) return undefined;
   const job = { ...existing, ...updates, id, updated_at: new Date().toISOString() };
   db.prepare(
-    `UPDATE digital_human_jobs SET work_id = ?, avatar_id = ?, audio_path = ?, script_id = ?, provider = ?, status = ?, progress = ?, result_url = ?, result_local_path = ?, error = ?, estimated_cost = ?, actual_cost = ?, provider_job_id = ?, updated_at = ?
+    `UPDATE digital_human_jobs SET work_id = ?, avatar_id = ?, audio_path = ?, script_id = ?, provider = ?, status = ?, progress = ?, result_url = ?, result_local_path = ?, error = ?, estimated_cost = ?, actual_cost = ?, provider_job_id = ?, queue_position = ?, updated_at = ?
      WHERE id = ?`
   ).run(
     job.work_id ?? null,
@@ -85,10 +87,23 @@ export function updateJob(id: string, updates: Partial<DbDigitalHumanJob>): DbDi
     job.estimated_cost,
     job.actual_cost,
     job.provider_job_id ?? null,
+    job.queue_position ?? null,
     job.updated_at,
     id
   );
   return job;
+}
+
+/** 渲染池：queued 任务按 queue_position 升序（NULL 排最后），同位次按创建时间 */
+export function listQueuedJobsByPosition(): DbDigitalHumanJob[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT * FROM digital_human_jobs WHERE status = 'queued'
+       ORDER BY queue_position IS NULL, queue_position, created_at`
+    )
+    .all() as Record<string, unknown>[];
+  return rows.map(rowToJob);
 }
 
 export function countActiveJobs(): number {

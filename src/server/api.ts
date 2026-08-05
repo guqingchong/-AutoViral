@@ -44,6 +44,9 @@ import {
   runBatchDigitalHuman,
   getBatchState,
   listPendingWorks,
+  triggerRenderNow,
+  getRenderPool,
+  getPendingBoot,
 } from "../services/digital-human-pipeline.js";
 import {
   uploadAsset as uploadLibraryAsset,
@@ -209,6 +212,7 @@ apiRoutes.get("/api/config", async (c) => {
     jimengSecretKey: config.jimeng?.secretKey ?? "",
     openrouterKey: config.openrouter?.apiKey ?? "",
     minimaxKey: config.minimax?.apiKey ?? "",
+    digitalHumanBatchThreshold: config.digitalHuman?.batchThreshold ?? 3,
     zhihuDataSecret: config.zhihuData?.accessSecret ?? "",
     researchEnabled: config.research?.enabled ?? false,
     researchCron: config.research?.schedule ?? "0 9 * * *",
@@ -247,6 +251,11 @@ apiRoutes.put("/api/config", async (c) => {
   if (body.minimaxKey !== undefined) {
     // 保留 groupId 等其他 minimax 字段，避免保存 key 时被覆盖丢失
     config.minimax = { ...config.minimax, apiKey: body.minimaxKey as string };
+  }
+  if (body.digitalHumanBatchThreshold !== undefined) {
+    // 渲染池攒批阈值：>=1 的整数，非法值回落默认 3
+    const n = Math.floor(Number(body.digitalHumanBatchThreshold));
+    config.digitalHuman = { ...config.digitalHuman, batchThreshold: Number.isFinite(n) && n > 0 ? n : 3 };
   }
   if (body.zhihuDataSecret !== undefined) {
     config.zhihuData = { ...config.zhihuData, accessSecret: body.zhihuDataSecret as string };
@@ -3369,6 +3378,26 @@ apiRoutes.post("/api/digital-humans/batch/run", async (c) => {
 // GET /api/digital-humans/batch/status — 批量渲染进度
 apiRoutes.get("/api/digital-humans/batch/status", async (c) => {
   return c.json(getBatchState());
+});
+
+// POST /api/digital-humans/render-now — 手动立即渲染（触发条件 c）：集中提交渲染池内 queued 任务。
+// 实例离线时不提交（任务保持 queued），响应中 pendingBoot=true 供前端引导开机。
+apiRoutes.post("/api/digital-humans/render-now", async (c) => {
+  triggerRenderNow().catch((err) => {
+    log("error", "api", "digital_human_render_now_error", "-", { error: err instanceof Error ? err.message : String(err) });
+  });
+  return c.json({ ...getBatchState(), pendingBoot: getPendingBoot() }, 202);
+});
+
+// GET /api/digital-humans/render-pool — 渲染池现状：queued 任务（按队列顺序）+ pendingBoot + 实例在线状态
+apiRoutes.get("/api/digital-humans/render-pool", async (c) => {
+  const instance = await getInstanceView();
+  return c.json({
+    items: getRenderPool(),
+    pendingBoot: getPendingBoot(),
+    instance: { state: instance.state, consoleUrl: instance.consoleUrl },
+    batch: getBatchState(),
+  });
 });
 
 // ---------------------------------------------------------------------------

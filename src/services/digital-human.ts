@@ -112,6 +112,30 @@ export async function submitJob(input: {
   return job;
 }
 
+/**
+ * 提交渲染池中已存在的 queued 任务到 HeyGem（渲染池攒批触发时调用）。
+ * 与 submitJob 的区别：不新建记录，把既有 queued job 转为 running 并回填 provider_job_id。
+ */
+export async function submitQueuedJob(jobId: string): Promise<DbDigitalHumanJob> {
+  const job = jobsRepo.getJob(jobId);
+  if (!job) throw new Error("Job not found");
+  if (job.status !== "queued") throw new Error(`任务状态非 queued：${job.status}`);
+  const avatar = avatarsRepo.getAvatar(job.avatar_id);
+  if (!avatar) throw new Error("Avatar not found");
+  if (!avatar.reference_video_path) throw new Error("形象缺少源视频文件");
+  assertWithinBudget(job.estimated_cost ?? 0);
+  await assertReady();
+  const audioPath = toLocalMediaPath(job.audio_path);
+  const providerJobId = await heygem.submitJob(audioPath, avatar.reference_video_path, "pingpong");
+  const updated = jobsRepo.updateJob(jobId, {
+    status: "running",
+    progress: 10,
+    provider_job_id: providerJobId,
+  });
+  recordActivity();
+  return updated!;
+}
+
 export async function refreshJob(jobId: string): Promise<DbDigitalHumanJob | undefined> {
   const job = jobsRepo.getJob(jobId);
   if (!job || !job.provider_job_id) return job;
