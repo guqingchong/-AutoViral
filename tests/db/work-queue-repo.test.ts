@@ -29,4 +29,12 @@ describe("work-queue-repo", () => {
     repo.enqueue("w1"); repo.enqueue("w1");
     expect(repo.listQueue().filter(i => i.workId === "w1")).toHaveLength(1);
   });
+
+  it("终态任务重新入队分配到队尾", () => {
+    repo.enqueue("w1");
+    repo.setStatus("w1", "done");
+    repo.enqueue("w2");
+    repo.enqueue("w1");
+    expect(repo.dequeueNext()?.workId).toBe("w2");
+  });
 });
