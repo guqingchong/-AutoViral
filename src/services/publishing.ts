@@ -1,5 +1,5 @@
-import { join } from "node:path";
-import { stat } from "node:fs/promises";
+import { join, extname, resolve } from "node:path";
+import { stat, readdir } from "node:fs/promises";
 import { dataDir } from "../config.js";
 import { getPublisher } from "./publishers/factory.js";
 import { DouyinPublisher } from "./publishers/douyin-publisher.js";
@@ -138,6 +138,34 @@ export async function getPublishingStatus(workId: string): Promise<PublishRecord
   return records.map((r) => toPublishRecord(r));
 }
 
+/** 正文配图支持的图片扩展名 */
+const CONTENT_IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif"]);
+
+/**
+ * 收集作品素材图（公众号/知乎正文插图用）：
+ * 扫描 works/<id>/assets/images/ 与 works/<id>/output/ 下的图片，排除封面，按路径排序。
+ */
+async function collectContentImages(workDir: string, coverPath: string): Promise<string[]> {
+  const results: string[] = [];
+  async function walk(dir: string): Promise<void> {
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return; // 目录不存在（如纯文本作品没有 assets/images）
+    }
+    for (const entry of entries) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) await walk(full);
+      else if (CONTENT_IMAGE_EXTS.has(extname(entry.name).toLowerCase())) results.push(full);
+    }
+  }
+  await walk(join(workDir, "assets", "images"));
+  await walk(join(workDir, "output"));
+  const coverResolved = resolve(coverPath);
+  return results.filter((p) => resolve(p) !== coverResolved).sort();
+}
+
 export async function triggerLogin(platform: string): Promise<boolean> {
   const publisher = resolvePublisher(platform);
   if (publisher.login) return publisher.login();
@@ -173,6 +201,8 @@ export async function buildPublishInput(work: DbWork, platform: string): Promise
       options.content = article.content;
       options.articleTitle = article.title;
     }
+    // 正文配图：作品素材图（排除封面），发布器按段落插图；无图时为空数组，维持纯文本
+    options.contentImages = await collectContentImages(workDir, coverPath);
   }
 
   return {

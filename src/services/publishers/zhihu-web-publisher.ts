@@ -1,4 +1,5 @@
 import { PlaywrightPublisher } from "./playwright-publisher.js";
+import { planImageInsertions } from "./wechat-official-publisher.js";
 import type { PublishInput, PublishOutput } from "./types.js";
 import type { Page } from "playwright";
 
@@ -26,6 +27,25 @@ export class ZhihuWebPublisher extends PlaywrightPublisher {
     return loginModal === 0;
   }
 
+  /**
+   * 在编辑器当前光标处上传一张插图。
+   * 定位不到上传入口或上传失败时返回 false（降级纯文本，不中断发布）。
+   */
+  private async insertImage(page: Page, imagePath: string): Promise<boolean> {
+    try {
+      const fileInput = page
+        .locator('input[type="file"][accept*="image"], input[type="file"]')
+        .first();
+      if ((await fileInput.count()) === 0) return false;
+      await fileInput.setInputFiles(imagePath);
+      // 等待知乎完成图片上传并插入编辑器
+      await page.waitForTimeout(3000);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   protected override async doUpload(page: Page, input: PublishInput): Promise<PublishOutput> {
     await page.goto(this.uploadUrl, { waitUntil: "domcontentloaded" });
     await page.waitForTimeout(3000);
@@ -35,6 +55,11 @@ export class ZhihuWebPublisher extends PlaywrightPublisher {
       (input.options?.description as string) ??
       "";
     const title = (input.options?.articleTitle as string) ?? input.title;
+    const contentImages = Array.isArray(input.options?.contentImages)
+      ? (input.options.contentImages as unknown[]).filter(
+          (p): p is string => typeof p === "string" && p.length > 0
+        )
+      : [];
 
     // 填写标题（知乎编辑器标题是 textarea）
     const titleBox = page.locator('textarea[placeholder*="标题"], input[placeholder*="标题"]').first();
@@ -44,11 +69,32 @@ export class ZhihuWebPublisher extends PlaywrightPublisher {
     // 填写正文（知乎编辑器正文是 contenteditable 区域）
     const contentBox = page.locator('.public-DraftEditor-content, div[contenteditable="true"]').first();
     await contentBox.click();
-    // 逐行输入，换行转成编辑器内段落
+    // 逐行输入，换行转成编辑器内段落；按插图计划在段落间上传素材图
     const lines = content.split(/\r?\n/);
+    const insertAfter = planImageInsertions(lines.length, contentImages.length);
+    let imgIdx = 0;
     for (let i = 0; i < lines.length; i++) {
       if (lines[i]) await page.keyboard.type(lines[i], { delay: 5 });
-      if (i < lines.length - 1) await page.keyboard.press("Enter");
+      const wantImage = insertAfter.includes(i) && imgIdx < contentImages.length;
+      let paragraphBreakPending = i < lines.length - 1;
+      if (wantImage) {
+        // 先换出一个空段落承接图片，上传成功后再换行继续输入后续文字
+        await page.keyboard.press("Enter");
+        const inserted = await this.insertImage(page, contentImages[imgIdx]);
+        if (inserted) {
+          imgIdx++;
+          await contentBox.click();
+          if (paragraphBreakPending) {
+            await page.keyboard.press("Enter");
+            paragraphBreakPending = false;
+          }
+        }
+        // 上传入口不可用/失败：已换行一次，保持纯文本流程继续
+        else {
+          paragraphBreakPending = false;
+        }
+      }
+      if (paragraphBreakPending) await page.keyboard.press("Enter");
     }
 
     // 点击「发布」弹出确认面板
