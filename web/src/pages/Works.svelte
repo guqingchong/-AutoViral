@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { t, getLanguage, subscribe } from "../lib/i18n";
-  import { fetchWorks, deleteWorkApi, type WorkSummary } from "../lib/api";
+  import { fetchWorks, deleteWorkApi, fetchQueue, queueAction, deleteQueueWork, type WorkSummary, type QueueItemInfo } from "../lib/api";
   import InterestTags from "../components/InterestTags.svelte";
   import AssetLibrary from "../components/AssetLibrary.svelte";
 
@@ -53,6 +53,64 @@
   let loadError = $state(false);
   let filter: "all" | "draft" | "published" = $state("all");
 
+  // ── 任务队列（作品流水线队列面板，8s 静默轮询，与 loadWorks 同节奏） ──
+  let queueItems: QueueItemInfo[] = $state([]);
+  let queueActionBusy: Record<string, boolean> = $state({});
+
+  /** 面板只展示活跃项（queued/running/paused），按 position 排序 */
+  let activeQueueItems = $derived(
+    queueItems
+      .filter((q) => q.status === "queued" || q.status === "running" || q.status === "paused")
+      .sort((a, b) => a.position - b.position)
+  );
+
+  async function loadQueue() {
+    try {
+      queueItems = await fetchQueue();
+    } catch { /* 静默失败，下轮重试 */ }
+  }
+
+  /** 作品在队列中的位次（仅 queued 项参与排位，1 起）；不在队列返回 null */
+  function queuePositionOf(workId: string): { pos: number; status: "queued" | "running" | "paused" } | null {
+    const item = queueItems.find((q) => q.workId === workId);
+    if (!item || item.status === "done" || item.status === "failed") return null;
+    const queued = queueItems
+      .filter((q) => q.status === "queued" || q.status === "paused")
+      .sort((a, b) => a.position - b.position);
+    const pos = item.status === "running" ? 0 : queued.findIndex((q) => q.workId === workId) + 1;
+    return { pos, status: item.status };
+  }
+
+  async function handleQueueAction(workId: string, action: "prioritize" | "pause" | "resume" | "remove") {
+    if (queueActionBusy[workId]) return;
+    queueActionBusy = { ...queueActionBusy, [workId]: true };
+    try {
+      await queueAction(workId, action);
+      await Promise.all([loadQueue(), loadWorks(true)]);
+    } catch { /* ignore */ } finally {
+      queueActionBusy = { ...queueActionBusy, [workId]: false };
+    }
+  }
+
+  async function handleQueueDelete(workId: string, title: string) {
+    if (queueActionBusy[workId]) return;
+    if (!confirm(lang === "zh" ? `确定出队并删除「${title}」？作品将被一并删除。` : `Dequeue and delete "${title}"? The work will be deleted.`)) return;
+    queueActionBusy = { ...queueActionBusy, [workId]: true };
+    try {
+      await deleteQueueWork(workId);
+      works = works.filter((w) => w.id !== workId);
+      await loadQueue();
+    } catch { /* ignore */ } finally {
+      queueActionBusy = { ...queueActionBusy, [workId]: false };
+    }
+  }
+
+  function queueStatusLabel(status: string): string {
+    if (status === "running") return lang === "zh" ? "运行中" : "Running";
+    if (status === "paused") return lang === "zh" ? "已暂停" : "Paused";
+    return lang === "zh" ? "排队中" : "Queued";
+  }
+
   let filteredWorks = $derived.by(() => {
     if (filter === "all") return works;
     if (filter === "draft") return works.filter(w => w.status !== "published" && w.status !== "failed");
@@ -101,6 +159,30 @@
 
   function isPublished(status: string): boolean {
     return status === "published";
+  }
+
+  /** 进度三态：排队中（第 N 位）/ 进行中 · 步骤 / 停滞 · 自动恢复中（lastActivityAt ≥10 分钟无动静） */
+  const STALL_THRESHOLD_MS = 10 * 60 * 1000;
+  function progressLabel(w: WorkSummary): { text: string; stalled: boolean; queued: boolean } {
+    const qp = queuePositionOf(w.id);
+    if (qp && qp.status === "paused") {
+      return { text: `已暂停（第 ${qp.pos} 位）`, stalled: true, queued: true };
+    }
+    if (qp && qp.status === "queued") {
+      return { text: `排队中（第 ${qp.pos} 位）`, stalled: false, queued: true };
+    }
+    const activeStep = w.pipeline?.find((s) => s.status === "active" || s.status === "evaluating" || s.status === "eval_blocked");
+    if (activeStep) {
+      const stalled = !!w.lastActivityAt && Date.now() - new Date(w.lastActivityAt).getTime() >= STALL_THRESHOLD_MS;
+      if (activeStep.status === "eval_blocked") {
+        return { text: `评审受阻 · ${activeStep.name}`, stalled: true, queued: false };
+      }
+      if (stalled) {
+        return { text: "停滞 · 自动恢复中", stalled: true, queued: false };
+      }
+      return { text: `进行中 · ${activeStep.name}`, stalled: false, queued: false };
+    }
+    return { text: "等待启动", stalled: false, queued: false };
   }
 
   // Mock stats for published works (in real app, fetched from analytics API)
@@ -344,12 +426,13 @@
   onMount(() => {
     const unsub = subscribe(() => { lang = getLanguage(); });
     loadWorks();
+    loadQueue();
     loadInsightData();
     loadInspirationDirections();
     loadInterests();
     loadConfig();
-    // 静默轮询：流水线进展（agent 后台执行）每 8 秒刷新到卡片上
-    worksPollTimer = setInterval(() => loadWorks(true), 8000);
+    // 静默轮询：流水线进展（agent 后台执行）每 8 秒刷新到卡片上；任务队列同节奏
+    worksPollTimer = setInterval(() => { loadWorks(true); loadQueue(); }, 8000);
     return () => {
       unsub();
       if (researchTimer) clearInterval(researchTimer);
@@ -360,6 +443,59 @@
 
 <div class="works-page">
   <AssetLibrary />
+
+  <!-- ═══ 任务队列面板（仅在有活跃队列项时显示） ═══ -->
+  {#if activeQueueItems.length > 0}
+    <div class="queue-panel">
+      <div class="queue-panel-head">
+        <h2 class="section-title">{lang === "zh" ? "任务队列" : "Task Queue"}</h2>
+        <span class="queue-count">{activeQueueItems.length}</span>
+      </div>
+      <div class="queue-list">
+        {#each activeQueueItems as q (q.workId)}
+          <div class="queue-row">
+            <span class="queue-status queue-status-{q.status}">{queueStatusLabel(q.status)}</span>
+            <span class="queue-title" title={q.title}>{q.title || q.workId}</span>
+            <span class="queue-actions">
+              <button
+                class="queue-btn"
+                disabled={q.status === "running" || !!queueActionBusy[q.workId]}
+                title={lang === "zh" ? "优先：插队到运行中之后" : "Prioritize"}
+                onclick={() => handleQueueAction(q.workId, "prioritize")}
+              >⬆</button>
+              {#if q.status === "paused"}
+                <button
+                  class="queue-btn"
+                  disabled={!!queueActionBusy[q.workId]}
+                  title={lang === "zh" ? "恢复排队" : "Resume"}
+                  onclick={() => handleQueueAction(q.workId, "resume")}
+                >▶</button>
+              {:else}
+                <button
+                  class="queue-btn"
+                  disabled={!!queueActionBusy[q.workId]}
+                  title={lang === "zh" ? "暂停" : "Pause"}
+                  onclick={() => handleQueueAction(q.workId, "pause")}
+                >⏸</button>
+              {/if}
+              <button
+                class="queue-btn"
+                disabled={!!queueActionBusy[q.workId]}
+                title={lang === "zh" ? "移出队列，转为手动制作" : "Remove from queue (manual mode)"}
+                onclick={() => handleQueueAction(q.workId, "remove")}
+              >↗</button>
+              <button
+                class="queue-btn queue-btn-danger"
+                disabled={!!queueActionBusy[q.workId]}
+                title={lang === "zh" ? "出队并删除作品" : "Dequeue and delete"}
+                onclick={() => handleQueueDelete(q.workId, q.title)}
+              >🗑</button>
+            </span>
+          </div>
+        {/each}
+      </div>
+    </div>
+  {/if}
 
   <!-- ═══ Zone 1: Greeting + Viral Ideas ═══ -->
   <div class="hero-zone">
@@ -546,27 +682,21 @@
                 <span class="card-tag">{platformLabel(p)}</span>
               {/each}
             </div>
-            {#if w.pipeline && w.pipeline.length > 0 && w.pipeline.some((s) => s.status !== "done" && s.status !== "skipped")}
-              {@const activeStep = w.pipeline.find((s) => s.status === "active" || s.status === "evaluating" || s.status === "eval_blocked")}
+            {#if queuePositionOf(w.id) || (w.pipeline && w.pipeline.length > 0 && w.pipeline.some((s) => s.status !== "done" && s.status !== "skipped"))}
+              {@const prog = progressLabel(w)}
               <div class="pipeline-progress" title="流水线实时进度">
                 <div class="pp-bar">
-                  {#each w.pipeline as s}
+                  {#each w.pipeline ?? [] as s}
                     <span
                       class="pp-seg"
                       class:pp-done={s.status === "done" || s.status === "skipped"}
-                      class:pp-active={s.status === "active" || s.status === "evaluating"}
+                      class:pp-active={!prog.stalled && !prog.queued && (s.status === "active" || s.status === "evaluating")}
                       class:pp-blocked={s.status === "eval_blocked"}
                       title={`${s.name}: ${s.status}`}
                     ></span>
                   {/each}
                 </div>
-                <span class="pp-label">
-                  {#if activeStep}
-                    {activeStep.status === "eval_blocked" ? "评审受阻" : "进行中"} · {activeStep.name}
-                  {:else}
-                    等待启动
-                  {/if}
-                </span>
+                <span class="pp-label" class:pp-stalled={prog.stalled}>{prog.text}</span>
               </div>
             {/if}
             {#if isPublished(w.status)}
@@ -1101,6 +1231,114 @@
   .pp-seg.pp-blocked { background: var(--error, #ef4444); }
   @keyframes pp-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
   .pp-label { font-size: 9px; color: var(--text-dim); white-space: nowrap; }
+  .pp-label.pp-stalled { color: var(--warning, #f59e0b); font-weight: 600; }
+
+  /* ── 任务队列面板 ────────────────────────────────── */
+  .queue-panel {
+    margin-top: 1rem;
+    padding: 0.75rem 0.9rem;
+    border: 1px solid var(--border);
+    border-radius: var(--card-radius);
+    background: var(--bg-surface);
+  }
+
+  .queue-panel-head {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .queue-count {
+    font-size: var(--size-xs);
+    font-weight: 600;
+    color: var(--text-dim);
+    background: var(--bg-elevated);
+    padding: 0.05rem 0.45rem;
+    border-radius: 99px;
+  }
+
+  .queue-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+
+  .queue-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.3rem 0.35rem;
+    border-radius: 4px;
+    transition: background 0.12s;
+  }
+
+  .queue-row:hover {
+    background: var(--accent-soft, rgba(254, 44, 85, 0.05));
+  }
+
+  .queue-status {
+    flex-shrink: 0;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 0.1rem 0.45rem;
+    border-radius: 3px;
+    white-space: nowrap;
+  }
+
+  .queue-status-running { background: var(--state-running, var(--accent)); color: #fff; }
+  .queue-status-queued { background: var(--bg-elevated); color: var(--text-muted); }
+  .queue-status-paused { background: var(--warning, #f59e0b); color: #fff; }
+
+  .queue-title {
+    flex: 1;
+    min-width: 0;
+    font-family: var(--font-display);
+    font-size: var(--size-sm);
+    font-weight: 500;
+    color: var(--text);
+    letter-spacing: -0.02em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .queue-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.15rem;
+    flex-shrink: 0;
+  }
+
+  .queue-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border: none;
+    border-radius: 4px;
+    background: none;
+    color: var(--text-dim);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.12s;
+    padding: 0;
+  }
+
+  .queue-btn:hover:not(:disabled) {
+    background: var(--bg-elevated);
+    color: var(--text);
+  }
+
+  .queue-btn:disabled {
+    opacity: 0.35;
+    cursor: default;
+  }
+
+  .queue-btn-danger:hover:not(:disabled) {
+    color: var(--error);
+  }
 
   .card-meta {
     display: flex;

@@ -192,6 +192,8 @@ export interface WorkSummary {
   digitalHumanId?: string;
   /** 流水线各阶段状态（作品卡片实时进度条） */
   pipeline?: Array<{ key: string; name: string; status: string }>;
+  /** 最近活动时间（步骤 started/completed 与 updatedAt 的最大值），进度三态数据源 */
+  lastActivityAt?: string | null;
   updatedAt: string;
 }
 
@@ -245,7 +247,7 @@ export async function rejectWork(
   id: string,
   stage: string,
   comment: string,
-): Promise<{ ok: boolean; status: WorkStatus; delivery: "message" | "session" | "none" }> {
+): Promise<{ ok: boolean; status: WorkStatus; delivery: "message" | "session" | "queued" | "none" }> {
   return request(`/api/works/${encodeURIComponent(id)}/reject`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -283,6 +285,37 @@ export async function updateWorkApi(id: string, updates: Partial<Work>): Promise
 
 export async function startWorkSession(id: string): Promise<{ status: string; workId: string; step?: string }> {
   return request(`/api/works/${encodeURIComponent(id)}/session`, { method: "POST" });
+}
+
+// ---------------------------------------------------------------------------
+// Work Queue API（作品流水线任务队列）
+// ---------------------------------------------------------------------------
+
+export type QueueStatus = "queued" | "running" | "paused" | "done" | "failed";
+
+export interface QueueItemInfo {
+  workId: string;
+  position: number;
+  status: QueueStatus;
+  title: string;
+  workStatus: string;
+}
+
+export async function fetchQueue(): Promise<QueueItemInfo[]> {
+  const data = await request<{ items: QueueItemInfo[] }>("/api/queue");
+  return data.items;
+}
+
+export async function queueAction(
+  workId: string,
+  action: "prioritize" | "pause" | "resume" | "remove",
+): Promise<unknown> {
+  return post(`/api/queue/${encodeURIComponent(workId)}/${action}`, {});
+}
+
+/** 出队并删除作品（二次确认由调用方做） */
+export async function deleteQueueWork(workId: string): Promise<void> {
+  await request<{ deleted: boolean }>(`/api/queue/${encodeURIComponent(workId)}`, { method: "DELETE" });
 }
 
 // ---------------------------------------------------------------------------
