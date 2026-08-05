@@ -76,6 +76,7 @@ import type { Timeline } from "../video/types.js";
 import { publishRoutes } from "./publish-api.js";
 import { publishWorkRoutes } from "./routes/publish.js";
 import { accountsRoutes } from "./routes/accounts.js";
+import { queueRoutes } from "./routes/queue.js";
 import { calendarRoutes } from "./routes/calendar.js";
 import { budgetRoutes } from "./routes/budget.js";
 import { dataSourceRoutes } from "./routes/data-sources.js";
@@ -4065,6 +4066,7 @@ apiRoutes.route("/api/publish", publishRoutes);
 // Phase 4b: Work-scoped publish routes (RPA: douyin/xiaohongshu/channels)
 apiRoutes.route("/api/works/:id/publish", publishWorkRoutes);
 apiRoutes.route("/api/accounts", accountsRoutes);
+apiRoutes.route("/api/queue", queueRoutes);
 apiRoutes.route("/api/calendar", calendarRoutes);
 apiRoutes.route("/api/budget", budgetRoutes);
 apiRoutes.route("/api/data-sources", dataSourceRoutes);
