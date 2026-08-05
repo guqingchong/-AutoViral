@@ -1,4 +1,5 @@
 ﻿import { readFile } from "node:fs/promises";
+import { basename } from "node:path";
 import type { Publisher, PublishInput, PublishOutput } from "./types.js";
 import { getCredential } from "../../db/platform-credentials-repo.js";
 
@@ -26,6 +27,28 @@ interface WxPublishResponse {
   publish_id?: string;
   errcode?: number;
   errmsg?: string;
+}
+
+interface WxUploadImgResponse {
+  url?: string;
+  errcode?: number;
+  errmsg?: string;
+}
+
+/**
+ * 计算正文插图位置：返回「在该段落（0 起索引）之后插图」的段落索引列表。
+ * 约束：约每 2~3 个段落插一张；图片多于段落承载量时取前 N 张均匀分布。
+ */
+export function planImageInsertions(paragraphCount: number, imageCount: number): number[] {
+  if (paragraphCount <= 0 || imageCount <= 0) return [];
+  const maxUsable = Math.max(1, Math.floor(paragraphCount / 2));
+  const n = Math.min(imageCount, maxUsable);
+  const positions: number[] = [];
+  for (let k = 1; k <= n; k++) {
+    const idx = Math.min(paragraphCount - 1, Math.floor((k * paragraphCount) / (n + 1)));
+    if (!positions.includes(idx)) positions.push(idx);
+  }
+  return positions;
 }
 
 /**
@@ -68,8 +91,8 @@ export class WechatOfficialPublisher implements Publisher {
     return this.cachedToken;
   }
 
-  /** 纯文本/Markdown 转公众号 HTML（按段落换行包装 <p>，转义 HTML 特殊字符） */
-  private toHtml(raw: string): string {
+  /** 纯文本切分为转义后的段落数组 */
+  private splitParagraphs(raw: string): string[] {
     const escaped = raw
       .replace(/&/g, "&amp;")
       .replace(/</g, "&lt;")
@@ -77,9 +100,31 @@ export class WechatOfficialPublisher implements Publisher {
     return escaped
       .split(/\n{2,}|\r?\n/)
       .map((p) => p.trim())
-      .filter((p) => p.length > 0)
+      .filter((p) => p.length > 0);
+  }
+
+  /** 纯文本/Markdown 转公众号 HTML（按段落换行包装 <p>，转义 HTML 特殊字符） */
+  private toHtml(raw: string): string {
+    return this.splitParagraphs(raw)
       .map((p) => `<p>${p}</p>`)
       .join("");
+  }
+
+  /** 段落间插入正文图片（imageUrls 为 uploadimg 返回的微信正文图 URL） */
+  private toHtmlWithImages(raw: string, imageUrls: string[]): string {
+    const paragraphs = this.splitParagraphs(raw);
+    if (paragraphs.length === 0 || imageUrls.length === 0) return this.toHtml(raw);
+    const positions = planImageInsertions(paragraphs.length, imageUrls.length);
+    const parts: string[] = [];
+    let imgIdx = 0;
+    paragraphs.forEach((p, i) => {
+      parts.push(`<p>${p}</p>`);
+      if (positions.includes(i) && imgIdx < imageUrls.length) {
+        parts.push(`<p><img src="${imageUrls[imgIdx]}" /></p>`);
+        imgIdx++;
+      }
+    });
+    return parts.join("");
   }
 
   /** 上传封面图作为永久图片素材，返回 thumb 用 media_id */
@@ -94,6 +139,27 @@ export class WechatOfficialPublisher implements Publisher {
       });
       const data = (await res.json()) as WxMediaResponse;
       return data.media_id;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * 上传正文图片（POST /cgi-bin/media/uploadimg）。
+   * 返回的正文图 URL 可直接用于草稿 content，不占用素材库配额；
+   * 失败返回 undefined（该图跳过，不中断发布）。
+   */
+  private async uploadContentImage(token: string, imagePath: string): Promise<string | undefined> {
+    try {
+      const imgBuffer = await readFile(imagePath);
+      const form = new FormData();
+      form.append("media", new Blob([imgBuffer]), basename(imagePath) || "image.jpg");
+      const res = await fetch(`${BASE}/media/uploadimg?access_token=${encodeURIComponent(token)}`, {
+        method: "POST",
+        body: form,
+      });
+      const data = (await res.json()) as WxUploadImgResponse;
+      return data.url;
     } catch {
       return undefined;
     }
@@ -115,12 +181,32 @@ export class WechatOfficialPublisher implements Publisher {
         };
       }
 
-      // 2. 草稿正文：优先文章内容（options.content），退回标题
+      // 2. 草稿正文：优先文章内容（options.content），退回标题；
+      //    options.contentImages 存在时逐张走 uploadimg 换正文图 URL，按段落插图
       const rawContent =
         (input.options?.content as string) ??
         (input.options?.description as string) ??
         input.title;
-      const htmlContent = this.toHtml(rawContent) || `<p>${input.title}</p>`;
+      const contentImages = Array.isArray(input.options?.contentImages)
+        ? (input.options.contentImages as unknown[]).filter(
+            (p): p is string => typeof p === "string" && p.length > 0
+          )
+        : [];
+      let htmlContent: string;
+      if (contentImages.length > 0) {
+        const imageUrls: string[] = [];
+        for (const imgPath of contentImages) {
+          const url = await this.uploadContentImage(token, imgPath);
+          if (url) imageUrls.push(url);
+        }
+        htmlContent =
+          imageUrls.length > 0
+            ? this.toHtmlWithImages(rawContent, imageUrls)
+            : this.toHtml(rawContent);
+      } else {
+        htmlContent = this.toHtml(rawContent);
+      }
+      htmlContent = htmlContent || `<p>${input.title}</p>`;
 
       // 3. Create a draft article
       const draftRes = await fetch(`${BASE}/draft/add?access_token=${encodeURIComponent(token)}`, {
