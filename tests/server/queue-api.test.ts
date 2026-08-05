@@ -8,6 +8,8 @@ import { resetInMemoryDb, closeDb } from "../../src/db/connection.js";
 import { migrate } from "../../src/db/migrate.js";
 import { createWork, getWork as dbGetWork } from "../../src/db/works-repo.js";
 import * as queueRepo from "../../src/db/work-queue-repo.js";
+import * as avatarsRepo from "../../src/db/avatars-repo.js";
+import * as dhJobsRepo from "../../src/db/digital-human-jobs-repo.js";
 
 const ORIGINAL_ENV = process.env.AUTOVIRAL_DATA_DIR;
 
@@ -185,6 +187,67 @@ describe("queue API", () => {
   it("POST /api/queue/:workId/remove returns 404 for unknown work", async () => {
     const res = await app.request("/api/queue/nope/remove", { method: "POST" });
     expect(res.status).toBe(404);
+  });
+
+  it("POST /api/queue/:workId/prioritize returns 409 for running item (I5)", async () => {
+    seedWork("w1", "A");
+    queueRepo.enqueue("w1");
+    queueRepo.setStatus("w1", "running");
+    const res = await app.request("/api/queue/w1/prioritize", { method: "POST" });
+    expect(res.status).toBe(409);
+    // 状态未被改动
+    expect(queueRepo.getItem("w1")?.status).toBe("running");
+  });
+
+  it("POST /api/queue/:workId/resume returns 409 for running item (I5)", async () => {
+    seedWork("w1", "A");
+    queueRepo.enqueue("w1");
+    queueRepo.setStatus("w1", "running");
+    const res = await app.request("/api/queue/w1/resume", { method: "POST" });
+    expect(res.status).toBe(409);
+    expect(queueRepo.getItem("w1")?.status).toBe("running");
+  });
+
+  it("DELETE /api/works/:id 级联清理队列与渲染池（I4）", async () => {
+    const now = new Date().toISOString();
+    avatarsRepo.createAvatar({
+      id: "av1", name: "Avatar", status: "ready", source: "heygem",
+      reference_video_path: "C:/fake/media.mp4", config: {},
+      created_at: now, updated_at: now,
+    });
+    seedWork("w1", "删掉我");
+    seedWork("w2", "保留我");
+    queueRepo.enqueue("w1");
+    queueRepo.enqueue("w2");
+    // w1 在渲染池有 queued 任务，w2 也有一个（验证不误伤）
+    dhJobsRepo.createJob({
+      id: "dhjob_del1", work_id: "w1", avatar_id: "av1",
+      audio_path: "C:/fake/a.mp3", provider: "heygem",
+      status: "queued", progress: 0, estimated_cost: 0.01, actual_cost: 0,
+      queue_position: 1, created_at: now, updated_at: now,
+    });
+    dhJobsRepo.createJob({
+      id: "dhjob_keep1", work_id: "w2", avatar_id: "av1",
+      audio_path: "C:/fake/b.mp3", provider: "heygem",
+      status: "queued", progress: 0, estimated_cost: 0.01, actual_cost: 0,
+      queue_position: 2, created_at: now, updated_at: now,
+    });
+
+    const res = await app.request("/api/works/w1", { method: "DELETE" });
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.deleted).toBe(true);
+
+    // 出队 + 作品删除
+    expect(queueRepo.getItem("w1")).toBeUndefined();
+    expect(dbGetWork("w1")).toBeUndefined();
+    // 该作品 queued 渲染任务已取消
+    const cancelled = dhJobsRepo.getJob("dhjob_del1")!;
+    expect(cancelled.status).toBe("failed");
+    expect(cancelled.error).toContain("取消");
+    // 其他作品的渲染任务不受影响
+    expect(dhJobsRepo.getJob("dhjob_keep1")?.status).toBe("queued");
+    expect(queueRepo.getItem("w2")?.status).toBe("queued");
   });
 
   it("DELETE /api/queue/:workId dequeues and deletes the work", async () => {

@@ -30,6 +30,8 @@ import { migrate } from "../../src/db/migrate.js";
 import { createWork, getWork as dbGetWork } from "../../src/db/works-repo.js";
 import { createTopic } from "../../src/db/topics-repo.js";
 import * as queueRepo from "../../src/db/work-queue-repo.js";
+import * as avatarsRepo from "../../src/db/avatars-repo.js";
+import * as dhJobsRepo from "../../src/db/digital-human-jobs-repo.js";
 import { _resetRunner } from "../../src/services/work-queue.js";
 import { _resetWatchdog } from "../../src/services/work-watchdog.js";
 import type { DbWork, DbPipelineStep } from "../../src/db/types.js";
@@ -169,5 +171,37 @@ describe("Task5 接线：reject / batch-convert 入队", () => {
     // 两个作品按顺序入队
     const order = queueRepo.listQueue().map((i) => i.workId);
     expect(order).toEqual([job.items[0].workId, job.items[1].workId]);
+  });
+
+  it("I2: reject 取消该作品未提交的渲染任务（防重做后复用旧口播/重复计费）", async () => {
+    const now = new Date().toISOString();
+    avatarsRepo.createAvatar({
+      id: "av1", name: "Avatar", status: "ready", source: "heygem",
+      reference_video_path: "C:/fake/media.mp4", config: {},
+      created_at: now, updated_at: now,
+    });
+    createWork(makeWork("w_dh", "reviewing"), doneSteps("w_dh"));
+    // 渲染池里有一个该作品的 queued 任务（等待攒批）
+    dhJobsRepo.createJob({
+      id: "dhjob_rej1", work_id: "w_dh", avatar_id: "av1",
+      audio_path: "C:/fake/narration.mp3", provider: "heygem",
+      status: "queued", progress: 0, estimated_cost: 0.01, actual_cost: 0,
+      queue_position: 1, created_at: now, updated_at: now,
+    });
+
+    const res = await app.request("/api/works/w_dh/reject", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ stage: "assets", comment: "口播重写" }),
+    });
+    expect(res.status).toBe(200);
+
+    // 旧渲染任务已取消（Task 6 语义：failed + 取消文案），不会被攒批提交
+    const job = dhJobsRepo.getJob("dhjob_rej1")!;
+    expect(job.status).toBe("failed");
+    expect(job.error).toContain("取消");
+
+    // 作品正常入队等待重做
+    expect(queueRepo.getItem("w_dh")?.status).toBe("queued");
   });
 });

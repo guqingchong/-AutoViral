@@ -228,13 +228,14 @@ describe("work-watchdog", () => {
       expect(w2?.lastActivityAt).toBe(minutesAgo(6));
     });
 
-    it("混合格式步骤时间也参与比较（空格格式的新时间胜出）", async () => {
+    it("混合格式步骤时间也参与比较（空格格式的新时间胜出，输出归一化为 ISO 带 Z）", async () => {
       createWork(makeWork("w3", "planning", minutesAgo(30)), [
         makeStep("w3", "plan", { status: "active", started_at: spaceFormat(minutesAgo(2)) }),
       ]);
       const works = await listWorks();
       const w3 = works.find((w) => w.id === "w3");
-      expect(w3?.lastActivityAt).toBe(spaceFormat(minutesAgo(2)));
+      // I6: 下发前归一化为 ISO 8601 带 Z（Safari 可解析、Chrome 无时区偏差）
+      expect(w3?.lastActivityAt).toBe(new Date(minutesAgo(2)).toISOString());
     });
   });
 });

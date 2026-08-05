@@ -112,6 +112,15 @@ export function countActiveJobs(): number {
   return row.n;
 }
 
+/** 重启接管：已提交到 HeyGem（有 provider_job_id）但进程死亡时仍在 running 的任务 */
+export function listRunningProviderJobs(): DbDigitalHumanJob[] {
+  const db = getDb();
+  const rows = db
+    .prepare("SELECT * FROM digital_human_jobs WHERE status = 'running' AND provider_job_id IS NOT NULL ORDER BY created_at")
+    .all() as Record<string, unknown>[];
+  return rows.map(rowToJob);
+}
+
 export function countActiveJobsByAvatar(avatarId: string): number {
   const db = getDb();
   const row = db.prepare("SELECT COUNT(*) AS n FROM digital_human_jobs WHERE avatar_id = ? AND status IN ('pending','queued','running')").get(avatarId) as { n: number };

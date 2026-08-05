@@ -47,6 +47,8 @@ import {
   triggerRenderNow,
   getRenderPool,
   getPendingBoot,
+  cancelQueuedJobsForWork,
+  syncRenderPool,
 } from "../services/digital-human-pipeline.js";
 import {
   uploadAsset as uploadLibraryAsset,
@@ -57,6 +59,7 @@ import {
 } from "../services/asset-library.js";
 import { syncStepConversation } from "../memory-sync.js";
 import { enqueueWork, notifyWorkSettled } from "../services/work-queue.js";
+import * as workQueueRepo from "../db/work-queue-repo.js";
 import { log, readLogs } from "../logger.js";
 import { runPipeline, getRunStatus, listRuns, getRunReport, type RunConfig } from "../test-runner.js";
 import { evaluateWork } from "../test-evaluator.js";
@@ -436,11 +439,16 @@ apiRoutes.put("/api/works/:id", async (c) => {
 });
 
 // DELETE /api/works/:id
+// I4: 级联清理 —— 取消该作品未提交的渲染任务（防孤儿任务占用渲染池/重复计费）、
+// 出队、删作品，最后同步渲染池顺序。
 apiRoutes.delete("/api/works/:id", async (c) => {
   const id = c.req.param("id");
   try {
+    cancelQueuedJobsForWork(id, "作品已删除，渲染取消");
+    workQueueRepo.removeItem(id);
     const deleted = await storeDeleteWork(id);
     if (!deleted) return c.json({ error: "Work not found" }, 404);
+    syncRenderPool();
     return c.json({ deleted: true });
   } catch {
     return c.json({ error: "Work not found" }, 404);
@@ -493,10 +501,17 @@ apiRoutes.post("/api/works/:id/reject", async (c) => {
     broadcastPipelineUpdate(id, work.pipeline);
     log("info", "api", "work_rejected", id, { stage, status: newStatus });
 
-    // 3. 入队等待串行 runner 驱动重做（afterRunning：排在当前运行中作品之后、
+    // 3. 渲染池清理：取消该作品未提交的旧渲染任务（重做会重新合成口播，
+    //    旧任务留着会被攒批提交 → 复用旧口播/重复计费）
+    const cancelled = cancelQueuedJobsForWork(id);
+    if (cancelled > 0) log("info", "api", "render_jobs_cancelled", id, { cancelled });
+
+    // 4. 入队等待串行 runner 驱动重做（afterRunning：排在当前运行中作品之后、
     // 其余排队作品之前）。即使该作品此刻有活跃会话也不直接 sendMessage ——
     // 会话跑完当前阶段后自然停滞，runner 健康检查会重建会话并注入审核意见。
     enqueueWork(id, { afterRunning: true });
+    // 入队位置变化后同步渲染池位次
+    syncRenderPool();
 
     return c.json({ ok: true, status: newStatus, pipeline: work.pipeline, delivery: "queued" });
   } catch (err) {

@@ -48,11 +48,15 @@ queueRoutes.get("/", async (c) => {
 // POST /:workId/prioritize — 插队到 queued 队首（running 之后）。
 // 注：paused 项允许 prioritize —— 语义为"插队到运行中之后并恢复排队"
 // （repo.prioritize 内部会把状态置回 queued）；终态（done/failed）禁止，
-// 否则 runner 会重跑一个已完结的作品。
+// 否则 runner 会重跑一个已完结的作品；running 项禁止（I5：重排正在执行的
+// 任务无意义且会让渲染池位次与执行序脱节，UI 已禁用，此处补 API 守卫）。
 queueRoutes.post("/:workId/prioritize", async (c) => {
   const workId = c.req.param("workId");
   const item = queueRepo.getItem(workId);
   if (!item) return c.json({ error: "Queue item not found" }, 404);
+  if (item.status === "running") {
+    return c.json({ error: "cannot prioritize a running item" }, 409);
+  }
   if (item.status === "done" || item.status === "failed") {
     return c.json({ error: `cannot prioritize item in terminal status: ${item.status}` }, 409);
   }
@@ -78,11 +82,15 @@ queueRoutes.post("/:workId/pause", async (c) => {
 });
 
 // POST /:workId/resume — 恢复排队（→ queued，保留原 position）。
-// 终态（done/failed）禁止：否则 runner 会重跑一个已完结的作品。
+// 终态（done/failed）禁止：否则 runner 会重跑一个已完结的作品；
+// running 项禁止（I5：语义上重复操作，UI 已禁用，此处补 API 守卫）。
 queueRoutes.post("/:workId/resume", async (c) => {
   const workId = c.req.param("workId");
   const item = queueRepo.getItem(workId);
   if (!item) return c.json({ error: "Queue item not found" }, 404);
+  if (item.status === "running") {
+    return c.json({ error: "cannot resume a running item" }, 409);
+  }
   if (item.status === "done" || item.status === "failed") {
     return c.json({ error: `cannot resume item in terminal status: ${item.status}` }, 409);
   }

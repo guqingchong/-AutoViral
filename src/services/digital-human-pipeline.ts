@@ -11,6 +11,7 @@ import { assertWithinBudget } from "./budget-service.js";
 import { getDefaultProvider } from "../providers/registry.js";
 import { MiniMaxTTSProvider } from "../providers/minimax-tts.js";
 import { loadConfig, getConfig } from "../config.js";
+import { parseTsMs } from "../db/time.js";
 import type { GenerateProvider } from "../providers/base.js";
 import type { DbAvatar, DbDigitalHumanJob } from "../db/types.js";
 
@@ -43,7 +44,7 @@ export function getBatchState(): BatchState {
 // ---------------------------------------------------------------------------
 
 const DEFAULT_BATCH_THRESHOLD = 3;
-/** 作品队列已空闲时，池内最久等待超过该时长即触发（避免零星任务永远等不够阈值） */
+/** 池内最久等待超过该时长即触发（无需等够阈值，也无论作品队列是否还有任务在跑） */
 const IDLE_QUEUE_TRIGGER_MS = 10 * 60 * 1000;
 
 /** 实例离线且池内有积压时置位，GET render-pool 返回给前端提示"去开机" */
@@ -151,13 +152,18 @@ export function estimateRenderCostYuan(narration: string): number {
 /**
  * 口播 TTS + 建 queued 渲染任务（不提交 HeyGem）。
  * 已有 done 任务时直接取现成产物（流水线兜底，不重复渲染）。
+ * I2: 同作品已有 queued 任务时复用（skipped=false 返回既有任务），
+ * 防止重复入池导致同一口播被渲染两次、重复计费。
  */
 async function prepareQueuedJobForWork(
   workId: string,
   opts?: { voice?: string }
 ): Promise<{ job: DbDigitalHumanJob; skipped: boolean }> {
-  const existingDone = jobsRepo.listJobs(workId).find((j) => j.status === "done");
+  const existing = jobsRepo.listJobs(workId);
+  const existingDone = existing.find((j) => j.status === "done");
   if (existingDone) return { job: existingDone, skipped: true };
+  const existingQueued = existing.find((j) => j.status === "queued");
+  if (existingQueued) return { job: existingQueued, skipped: false };
 
   const work = worksRepo.getWork(workId);
   if (!work) throw new Error("作品不存在");
@@ -213,7 +219,9 @@ export async function runDigitalHumanForWork(workId: string, opts?: { voice?: st
 /**
  * 攒批触发检查（先到先触发）：
  *   a) 池内 queued ≥ config.digitalHuman.batchThreshold（默认 3）
- *   b) 作品队列已无 queued/running 且池内最久等待 > 10 分钟
+ *   b) 池内有 queued 任务且最久等待 > 10 分钟（与作品队列忙闲无关 ——
+ *      串行架构下"等渲染的 running 作品"本身就是队列任务，把队列忙碌作为前置
+ *      会让超时条件永远不成立，数字人作品死锁）
  * 手动触发走 triggerRenderNow()。
  * 返回触发的批次状态；未触发返回 null。已有批次在跑时不重复触发。
  */
@@ -222,14 +230,58 @@ export async function maybeTriggerRenderBatch(): Promise<BatchState | null> {
   const pool = jobsRepo.listQueuedJobsByPosition();
   if (pool.length === 0) return null;
 
-  const queueBusy = queueRepo.listQueue().some((i) => i.status === "queued" || i.status === "running");
   const oldest = pool.reduce((a, b) => (a.created_at <= b.created_at ? a : b));
-  const waitedMs = Date.now() - Date.parse(oldest.created_at);
+  const waitedMs = Date.now() - (parseTsMs(oldest.created_at) ?? Date.now());
 
-  if (pool.length >= getBatchThreshold() || (!queueBusy && waitedMs > IDLE_QUEUE_TRIGGER_MS)) {
+  if (pool.length >= getBatchThreshold() || waitedMs > IDLE_QUEUE_TRIGGER_MS) {
     return triggerRenderNow();
   }
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// C1: 周期性攒批评估 —— 入池/实例上线两个钩子不足以驱动"超时触发"（无人入池时
+// 条件 b 永远没机会求值）。server 启动时接线，60s 评估一次。
+// ---------------------------------------------------------------------------
+
+const RENDER_POOL_SCHEDULER_MS = 60_000;
+let renderPoolTimer: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * 启动渲染池周期调度。tick 可注入以便测试隔离真实 interval；
+ * 重复调用幂等（已启动则忽略）。
+ */
+export function startRenderPoolScheduler(opts?: { intervalMs?: number; tick?: () => unknown }): void {
+  if (renderPoolTimer) return;
+  const tick =
+    opts?.tick ??
+    (() => {
+      void maybeTriggerRenderBatch().catch((err) => {
+        console.error("[render-pool] scheduled maybeTriggerRenderBatch error:", err);
+      });
+    });
+  renderPoolTimer = setInterval(tick, opts?.intervalMs ?? RENDER_POOL_SCHEDULER_MS);
+}
+
+export function stopRenderPoolScheduler(): void {
+  if (renderPoolTimer) {
+    clearInterval(renderPoolTimer);
+    renderPoolTimer = null;
+  }
+}
+
+/**
+ * I3: 服务重启接管 —— 对 status=running 且有 provider_job_id 的任务重建轮询，
+ * 恢复 refresh → finalize → registerWorkAsset 链路（渲染结果已付费，不能丢）。
+ * 返回接管的任务数；无遗留任务时立即返回 0。
+ */
+export async function recoverRunningRenderJobs(opts?: { intervalMs?: number; timeoutMs?: number }): Promise<number> {
+  const jobs = jobsRepo.listRunningProviderJobs();
+  if (jobs.length === 0) return 0;
+  console.log(`[render-pool] recovering ${jobs.length} running job(s) from previous process`);
+  const pending = new Map<string, string>(jobs.map((j) => [j.id, j.work_id ?? ""]));
+  await pollPendingJobs(pending, opts?.intervalMs ?? 10_000, opts?.timeoutMs ?? 3_600_000);
+  return jobs.length;
 }
 
 /**
@@ -271,6 +323,20 @@ export function syncRenderPool(): void {
       jobsRepo.updateJob(job.id, { queue_position: item.position });
     }
   }
+}
+
+/**
+ * I2: 取消某作品所有未提交（queued）的渲染任务。
+ * 沿用 Task 6 的取消语义：status=failed + 注明取消文案（表无 cancelled 状态值）。
+ * 用于 reject 打回重做（防复用旧口播/重复计费）与作品删除级联清理。
+ * 返回取消的任务数。
+ */
+export function cancelQueuedJobsForWork(workId: string, reason = "作品打回重做，旧渲染任务取消"): number {
+  const queued = jobsRepo.listJobs(workId).filter((j) => j.status === "queued");
+  for (const job of queued) {
+    jobsRepo.updateJob(job.id, { status: "failed", error: reason });
+  }
+  return queued.length;
 }
 
 export interface RenderPoolItem {
