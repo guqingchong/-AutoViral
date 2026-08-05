@@ -15,9 +15,10 @@ export function enqueue(workId: string, opts: { afterRunning?: boolean } = {}): 
   const db = getDb();
   const existing = db.prepare("SELECT * FROM work_queue WHERE work_id = ?").get(workId) as any;
   if (existing) {
-    // 已存在：若是终态（done/failed/移除后再入队）则重置为 queued
+    // 已存在：若是终态（done/failed/移除后再入队）则重置为 queued，并分配新的队尾 position
     if (["done", "failed"].includes(existing.status)) {
-      db.prepare("UPDATE work_queue SET status='queued', started_at=NULL, finished_at=NULL, resume_attempts=0 WHERE work_id=?").run(workId);
+      const tail = (db.prepare("SELECT COALESCE(MAX(position),0)+1 as p FROM work_queue").get() as any).p;
+      db.prepare("UPDATE work_queue SET status='queued', position=?, started_at=NULL, finished_at=NULL, resume_attempts=0 WHERE work_id=?").run(tail, workId);
     }
     return rowToItem(db.prepare("SELECT * FROM work_queue WHERE work_id = ?").get(workId));
   }
