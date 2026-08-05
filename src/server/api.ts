@@ -73,6 +73,7 @@ import { generateArticleFromTopic, generateScriptFromArticle } from "../services
 import { randomUUID } from "node:crypto";
 import { createTemplate, getTemplate, listTemplates, updateTemplate, deleteTemplate, type DbTemplate } from "../db/templates-repo.js";
 import { generateTemplates } from "../services/template-generator.js";
+import { generateImageTextTemplates } from "../services/image-text-template-generator.js";
 import { createRenderJob, getRenderJob, listRenderJobs, updateRenderJob, type DbRenderJob } from "../db/render-jobs-repo.js";
 import { startRender } from "../services/video-factory.js";
 import { renderTimeline } from "../video/renderer.js";
@@ -3524,6 +3525,7 @@ function templateToApi(t: DbTemplate) {
     previewUrl: t.preview_url,
     posterUrl,
     status: t.status,
+    kind: t.kind ?? "video",
     usageCount: t.usage_count ?? 0,
     createdAt: t.created_at,
     updatedAt: t.updated_at,
@@ -3531,10 +3533,12 @@ function templateToApi(t: DbTemplate) {
 }
 
 // POST /api/templates/generate - start async AI template generation (DB-backed, survives page switches)
+// kind=image-text 走图文版式生成器，默认 video 走视频时间线生成器
 apiRoutes.post("/api/templates/generate", async (c) => {
-  const body = await c.req.json<{ reference?: string; count?: number; contentForm?: string; elements?: TemplateElements }>().catch(() => ({ reference: undefined, count: undefined, contentForm: undefined, elements: undefined }));
+  const body = await c.req.json<{ reference?: string; count?: number; contentForm?: string; elements?: TemplateElements; kind?: string }>().catch(() => ({ reference: undefined, count: undefined, contentForm: undefined, elements: undefined, kind: undefined }));
   const jobId = "tplgen_" + Date.now();
   const count = body.count ?? 5;
+  const isImageText = body.kind === "image-text";
 
   // Persist job to DB so it survives page switches / component unmounts
   try {
@@ -3545,12 +3549,15 @@ apiRoutes.post("/api/templates/generate", async (c) => {
   }
 
   // Run generation asynchronously (fire and forget)
-  generateTemplates({
-    reference: body.reference,
-    count: body.count,
-    contentForm: body.contentForm as "hot_comment" | "knowledge" | "industry" | "insight" | undefined,
-    elements: body.elements,
-  })
+  const generation: Promise<DbTemplate[]> = isImageText
+    ? generateImageTextTemplates({ count: body.count })
+    : generateTemplates({
+        reference: body.reference,
+        count: body.count,
+        contentForm: body.contentForm as "hot_comment" | "knowledge" | "industry" | "insight" | undefined,
+        elements: body.elements,
+      });
+  generation
     .then((templates) => {
       try {
         const db = getDb();
@@ -3682,7 +3689,8 @@ apiRoutes.get("/api/templates/:id/preview-file", async (c) => {
 apiRoutes.get("/api/templates", async (c) => {
   const status = c.req.query("status") as DbTemplate["status"] | undefined;
   const contentForm = c.req.query("contentForm") || undefined;
-  const templates = listTemplates(status, contentForm);
+  const kind = c.req.query("kind") as DbTemplate["kind"] | undefined;
+  const templates = listTemplates(status, contentForm, kind);
   return c.json({ templates: templates.map(templateToApi) });
 });
 
