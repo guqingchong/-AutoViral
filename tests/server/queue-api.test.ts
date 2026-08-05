@@ -97,6 +97,30 @@ describe("queue API", () => {
     expect(res.status).toBe(404);
   });
 
+  it("POST /api/queue/:workId/prioritize returns 409 for terminal status", async () => {
+    seedWork("w1", "A");
+    queueRepo.enqueue("w1");
+    queueRepo.setStatus("w1", "failed");
+    const res = await app.request("/api/queue/w1/prioritize", { method: "POST" });
+    expect(res.status).toBe(409);
+    // 状态未被改动
+    expect(queueRepo.getItem("w1")?.status).toBe("failed");
+  });
+
+  it("POST /api/queue/:workId/prioritize on paused item re-queues it at front", async () => {
+    seedWork("w1", "A");
+    seedWork("w2", "B");
+    queueRepo.enqueue("w1");
+    queueRepo.enqueue("w2");
+    queueRepo.setStatus("w2", "paused");
+    const res = await app.request("/api/queue/w2/prioritize", { method: "POST" });
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    // paused 项 prioritize = 插队到运行中之后并恢复排队
+    expect(data.item.status).toBe("queued");
+    expect(queueRepo.listQueue()[0].workId).toBe("w2");
+  });
+
   it("POST /api/queue/:workId/pause sets status to paused", async () => {
     seedWork("w1", "A");
     queueRepo.enqueue("w1");
@@ -133,6 +157,16 @@ describe("queue API", () => {
   it("POST /api/queue/:workId/resume returns 404 for unknown work", async () => {
     const res = await app.request("/api/queue/nope/resume", { method: "POST" });
     expect(res.status).toBe(404);
+  });
+
+  it("POST /api/queue/:workId/resume returns 409 for terminal status", async () => {
+    seedWork("w1", "A");
+    queueRepo.enqueue("w1");
+    queueRepo.setStatus("w1", "done");
+    const res = await app.request("/api/queue/w1/resume", { method: "POST" });
+    expect(res.status).toBe(409);
+    // 状态未被改动，runner 不会重跑已完结作品
+    expect(queueRepo.getItem("w1")?.status).toBe("done");
   });
 
   it("POST /api/queue/:workId/remove dequeues but keeps the work", async () => {
