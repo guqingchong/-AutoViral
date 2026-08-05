@@ -11,26 +11,35 @@ function rowToItem(r: any): QueueItem {
     enqueuedAt: r.enqueued_at, startedAt: r.started_at, finishedAt: r.finished_at, resumeAttempts: r.resume_attempts };
 }
 
+/** 队尾 position */
+function tailPosition(db: ReturnType<typeof getDb>): number {
+  return (db.prepare("SELECT COALESCE(MAX(position),0)+1 as p FROM work_queue").get() as any).p;
+}
+
+/**
+ * afterRunning position：插在 running 之后、其余 queued 之前（取二者中点）。
+ * 无 running 或无 queued 时退化为队尾。
+ */
+function afterRunningPosition(db: ReturnType<typeof getDb>): number {
+  const running = db.prepare("SELECT MIN(position) as p FROM work_queue WHERE status='running'").get() as any;
+  const minQueued = db.prepare("SELECT MIN(position) as p FROM work_queue WHERE status='queued'").get() as any;
+  return running?.p != null && minQueued?.p != null ? (running.p + minQueued.p) / 2 : tailPosition(db);
+}
+
 export function enqueue(workId: string, opts: { afterRunning?: boolean } = {}): QueueItem {
   const db = getDb();
   const existing = db.prepare("SELECT * FROM work_queue WHERE work_id = ?").get(workId) as any;
   if (existing) {
-    // 已存在：若是终态（done/failed/移除后再入队）则重置为 queued，并分配新的队尾 position
+    // 已存在：若是终态（done/failed/移除后再入队）则重置为 queued。
+    // position 同样尊重 opts.afterRunning —— 真实打回流程（入队→执行→settle done
+    // →人工打回）必走此分支，打回重做应排在 running 之后第一位而非队尾。
     if (["done", "failed"].includes(existing.status)) {
-      const tail = (db.prepare("SELECT COALESCE(MAX(position),0)+1 as p FROM work_queue").get() as any).p;
-      db.prepare("UPDATE work_queue SET status='queued', position=?, started_at=NULL, finished_at=NULL, resume_attempts=0 WHERE work_id=?").run(tail, workId);
+      const position = opts.afterRunning ? afterRunningPosition(db) : tailPosition(db);
+      db.prepare("UPDATE work_queue SET status='queued', position=?, started_at=NULL, finished_at=NULL, resume_attempts=0 WHERE work_id=?").run(position, workId);
     }
     return rowToItem(db.prepare("SELECT * FROM work_queue WHERE work_id = ?").get(workId));
   }
-  let position: number;
-  if (opts.afterRunning) {
-    const running = db.prepare("SELECT MIN(position) as p FROM work_queue WHERE status='running'").get() as any;
-    const minQueued = db.prepare("SELECT MIN(position) as p FROM work_queue WHERE status='queued'").get() as any;
-    position = running?.p != null && minQueued?.p != null ? (running.p + minQueued.p) / 2
-      : (db.prepare("SELECT COALESCE(MAX(position),0)+1 as p FROM work_queue").get() as any).p;
-  } else {
-    position = (db.prepare("SELECT COALESCE(MAX(position),0)+1 as p FROM work_queue").get() as any).p;
-  }
+  const position = opts.afterRunning ? afterRunningPosition(db) : tailPosition(db);
   db.prepare("INSERT INTO work_queue (work_id, position, status, enqueued_at) VALUES (?,?,?,?)")
     .run(workId, position, "queued", new Date().toISOString());
   return rowToItem(db.prepare("SELECT * FROM work_queue WHERE work_id = ?").get(workId));

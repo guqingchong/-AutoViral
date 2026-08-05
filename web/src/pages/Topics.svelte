@@ -691,7 +691,7 @@
               <div class="batch-progress-header">
                 <strong>批量制作进行中</strong>
                 <span class="batch-progress-count">
-                  {batchJob.items.filter((i: any) => i.stage === "done" || i.stage === "running").length} / {batchJob.items.length} 已进入流水线
+                  {batchJob.items.filter((i: any) => i.stage === "done" || i.stage === "running" || (i.stage === "queued" && i.workId)).length} / {batchJob.items.length} 已进入流水线
                 </span>
               </div>
               <div class="batch-items">

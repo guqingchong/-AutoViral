@@ -2234,6 +2234,10 @@ async function runEvaluation(workId: string, completedStep: string, nextStep?: s
           await storeUpdateWork(workId, { pipeline: freshWork.pipeline });
           broadcastPipelineUpdate(workId, freshWork.pipeline);
         }
+        // 队列闭环：评审 3 轮不过即卡死，显式出队标 failed 交人工处置 ——
+        // 否则队列项停在 running，runner 健康检查会反复恢复（且 startWorkSession
+        // 只认 pending/active 步骤，恢复后会跳过被卡的 eval_blocked 步骤）。
+        notifyWorkSettled(workId, "failed");
         wsBridge.broadcastToBrowsers(workId, {
           event: "eval_blocked",
           data: { workId, step: completedStep, attempt, result: evalResult },
