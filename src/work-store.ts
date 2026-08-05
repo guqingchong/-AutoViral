@@ -16,6 +16,7 @@ import {
   updateStep,
 } from "./db/works-repo.js";
 import type { DbWork, DbPipelineStep } from "./db/types.js";
+import { latestTimestamp } from "./db/time.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -91,6 +92,8 @@ export interface WorkSummary {
   previewUrl?: string;
   /** 最近一次发布中心打回的审核意见 */
   reviewComment?: string;
+  /** 最近活动时间（步骤 started/completed 与作品 updated_at 的最大值），Works 页进度三态数据源 */
+  lastActivityAt: string | null;
   updatedAt: string;
 }
 
@@ -115,7 +118,8 @@ function outputDir(id: string): string {
 }
 
 function toSummary(w: Work): WorkSummary {
-  return { id: w.id, title: w.title, type: w.type, contentCategory: w.contentCategory, platforms: w.platforms, status: w.status, updatedAt: w.updatedAt };
+  const stepTimes = Object.values(w.pipeline).flatMap((s) => [s.startedAt, s.completedAt]);
+  return { id: w.id, title: w.title, type: w.type, contentCategory: w.contentCategory, platforms: w.platforms, status: w.status, lastActivityAt: latestTimestamp([w.updatedAt, ...stepTimes]), updatedAt: w.updatedAt };
 }
 
 // ── Pipeline templates ───────────────────────────────────────────────────────
@@ -205,21 +209,28 @@ async function maybeMigrateLegacy(): Promise<void> {
 export async function listWorks(): Promise<WorkSummary[]> {
   await maybeMigrateLegacy();
   const rows = dbListWorks();
-  return rows.map((w) => ({
-    id: w.id,
-    title: w.title,
-    type: w.type,
-    contentCategory: w.content_category as ContentCategory | undefined,
-    contentForm: w.content_form,
-    platforms: w.platforms,
-    status: w.status,
-    topicId: w.topic_id,
-    templateId: w.template_id,
-    digitalHumanId: w.digital_human_id,
-    pipeline: getWorkSteps(w.id).map((s) => ({ key: s.step_key, name: s.name, status: s.status as string })),
-    reviewComment: w.review_comment,
-    updatedAt: w.updated_at,
-  }));
+  return rows.map((w) => {
+    const steps = getWorkSteps(w.id);
+    return {
+      id: w.id,
+      title: w.title,
+      type: w.type,
+      contentCategory: w.content_category as ContentCategory | undefined,
+      contentForm: w.content_form,
+      platforms: w.platforms,
+      status: w.status,
+      topicId: w.topic_id,
+      templateId: w.template_id,
+      digitalHumanId: w.digital_human_id,
+      pipeline: steps.map((s) => ({ key: s.step_key, name: s.name, status: s.status as string })),
+      reviewComment: w.review_comment,
+      lastActivityAt: latestTimestamp([
+        w.updated_at,
+        ...steps.flatMap((s) => [s.started_at, s.completed_at]),
+      ]),
+      updatedAt: w.updated_at,
+    };
+  });
 }
 
 export async function getWork(id: string): Promise<Work | undefined> {
