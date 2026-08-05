@@ -629,6 +629,15 @@ CREATE INDEX IF NOT EXISTS idx_work_queue_status_pos ON work_queue(status, posit
 ALTER TABLE digital_human_jobs ADD COLUMN queue_position INTEGER;
 `,
   },
+  {
+    version: 18,
+    name: "template_kind",
+    sql: `
+-- 模板类别：video（默认，视频时间线模板）/ image-text（图文版式模板）
+ALTER TABLE templates ADD COLUMN kind TEXT NOT NULL DEFAULT 'video';
+CREATE INDEX IF NOT EXISTS idx_templates_kind ON templates(kind);
+`,
+  },
 ];
 
 export function migrate(): void {

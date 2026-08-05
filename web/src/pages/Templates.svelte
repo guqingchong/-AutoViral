@@ -1,14 +1,17 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { fetchTemplates, deleteTemplateApi, renderPreview, updateTemplateApi, type Template } from "../lib/api.js";
+  import { deleteTemplateApi, renderPreview, updateTemplateApi, type Template } from "../lib/api.js";
   import { t } from "../lib/i18n.js";
   import TemplateEditor from "./TemplateEditor.svelte";
 
-  let templates = $state<Template[]>([]);
+  type TemplateWithKind = Template & { kind?: string };
+
+  let templates = $state<TemplateWithKind[]>([]);
   let loading = $state(true);
   let editingId = $state<string | undefined>(undefined);
   let statusFilter = $state<string>("");
   let contentFormFilter = $state<string>("");
+  let kindFilter = $state<string>("");
   let renderingId = $state<string | null>(null);
   let generating = $state(false);
   let genCount = $state(5);
@@ -160,8 +163,45 @@
 
   async function load() {
     loading = true;
-    templates = await fetchTemplates(statusFilter || undefined, contentFormFilter || undefined);
+    // 直接 fetch 以支持 kind 筛选（lib/api.ts 的 fetchTemplates 暂无 kind 参数）
+    const qs = new URLSearchParams();
+    if (statusFilter) qs.set("status", statusFilter);
+    if (contentFormFilter) qs.set("contentForm", contentFormFilter);
+    if (kindFilter) qs.set("kind", kindFilter);
+    try {
+      const res = await fetch(`/api/templates?${qs.toString()}`);
+      const data = await res.json();
+      templates = data.templates ?? [];
+    } catch {
+      templates = [];
+    }
     loading = false;
+  }
+
+  /** 生成图文模板：走同一 /api/templates/generate 端点（kind=image-text）+ 同一轮询 */
+  async function generateImageTextTemplates() {
+    generating = true;
+    genMessage = "图文模板生成中... 可以切换页面，生成完成后会自动刷新";
+    try {
+      const res = await fetch("/api/templates/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ count: genCount, kind: "image-text" }),
+      });
+      const data = await res.json();
+      if (!data.jobId) {
+        alert(data.error ?? "生成失败");
+        generating = false;
+        return;
+      }
+      genJobId = data.jobId;
+      // 切到图文分类，生成完成后能直接看到新模板
+      kindFilter = "image-text";
+      startPolling(data.jobId);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
+      generating = false;
+    }
   }
 
   async function remove(id: string) {
@@ -305,6 +345,11 @@
     <header class="page-header">
       <h1>{t("templatesTitle")}</h1>
       <div class="filters">
+        <select bind:value={kindFilter} onchange={load}>
+          <option value="">全部类别</option>
+          <option value="video">视频模板</option>
+          <option value="image-text">图文模板</option>
+        </select>
         <select bind:value={statusFilter} onchange={load}>
           <option value="">{t("filterAll")}</option>
           <option value="draft">{t("templateDraft")}</option>
@@ -370,6 +415,9 @@
         <div class="gen-row">
           <input type="text" bind:value={genReference} placeholder="还有别的想法？用自然语言补充（可留空），如「要像 Apple 发布会那种极简感」" class="gen-input" />
           <button class="btn-primary gen-btn" disabled={generating} onclick={generateTemplates}>{generating ? "生成中..." : "AI 生成模板"}</button>
+          <button class="btn-research" disabled={generating} onclick={generateImageTextTemplates} title="AI 生成图文版式方案（封面 + 内容页布局/字体/配色），用于图文内容">
+            {generating ? "生成中..." : "生成图文模板"}
+          </button>
           <button class="btn-research" disabled={researching} onclick={researchTemplates} title="按当前要素选择调研全网优秀模板，沉淀为设计技能，之后生成自动吸收">
             {researching ? "调研中..." : `🔍 调研学习${skillCount > 0 ? `（已存 ${skillCount} 技能）` : ""}`}
           </button>
@@ -404,6 +452,9 @@
             </div>
             <div class="meta">
               <span class="status-badge" data-status={tpl.status}>{t(`template${tpl.status.charAt(0).toUpperCase() + tpl.status.slice(1)}`)}</span>
+              {#if tpl.kind === "image-text"}
+                <span class="kind-badge">图文</span>
+              {/if}
               <span class="form">{tpl.contentForm ?? t("formGeneric")}</span>
             </div>
             <h3>{tpl.name}</h3>
@@ -442,6 +493,7 @@
   .preview-placeholder { color: var(--text-muted); font-size: var(--size-sm); }
   .meta { display: flex; gap: 0.5rem; align-items: center; }
   .status-badge { font-size: var(--size-xs); padding: 0.15rem 0.4rem; border-radius: 3px; background: var(--bg-inset); color: var(--text-muted); text-transform: capitalize; }
+  .kind-badge { font-size: var(--size-xs); padding: 0.15rem 0.4rem; border-radius: 3px; background: var(--accent); color: var(--accent-text); }
   .form { font-size: var(--size-xs); color: var(--text-muted); }
   .template-card h3 { font-size: var(--size-base); margin: 0; }
   .dims { font-size: var(--size-xs); color: var(--text-dim); margin: 0; }

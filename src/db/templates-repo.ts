@@ -3,6 +3,9 @@ import { fromJson, toJson } from "./json.js";
 
 export type TemplateStatus = "draft" | "candidate" | "approved" | "archived";
 
+/** 模板类别：video = 视频时间线模板（默认）；image-text = 图文版式模板 */
+export type TemplateKind = "video" | "image-text";
+
 export interface TemplateVariable {
   name: string;
   type: "text" | "image" | "video" | "audio" | "number" | "color";
@@ -29,6 +32,7 @@ export interface DbTemplate {
   transitions: Record<string, unknown>[];
   preview_url?: string;
   status: TemplateStatus;
+  kind: TemplateKind;
   usage_count: number;
   created_at: string;
   updated_at: string;
@@ -94,18 +98,19 @@ function rowToTemplate(row: Record<string, unknown>): DbTemplate {
     transitions: fromJson(row.transitions as string) as Record<string, unknown>[],
     preview_url: (row.preview_url as string) || undefined,
     status: row.status as TemplateStatus,
+    kind: (row.kind as TemplateKind) || "video",
     usage_count: (row.usage_count as number) ?? 0,
     created_at: row.created_at as string,
     updated_at: row.updated_at as string,
   };
 }
 
-export function createTemplate(template: Omit<DbTemplate, "created_at" | "updated_at" | "usage_count"> & { usage_count?: number }): DbTemplate {
+export function createTemplate(template: Omit<DbTemplate, "created_at" | "updated_at" | "usage_count" | "kind"> & { usage_count?: number; kind?: TemplateKind }): DbTemplate {
   const db = getDb();
   const now = new Date().toISOString();
   db.prepare(
-    `INSERT INTO templates (id, name, content_form, canvas, variables, layers, audio, subtitles, transitions, preview_url, status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO templates (id, name, content_form, canvas, variables, layers, audio, subtitles, transitions, preview_url, status, kind, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     template.id,
     template.name,
@@ -118,10 +123,11 @@ export function createTemplate(template: Omit<DbTemplate, "created_at" | "update
     toJson(template.transitions),
     template.preview_url ?? null,
     template.status,
+    template.kind ?? "video",
     now,
     now
   );
-  return { ...template, usage_count: template.usage_count ?? 0, created_at: now, updated_at: now };
+  return { ...template, kind: template.kind ?? "video", usage_count: template.usage_count ?? 0, created_at: now, updated_at: now };
 }
 
 export function getTemplate(id: string): DbTemplate | undefined {
@@ -130,12 +136,13 @@ export function getTemplate(id: string): DbTemplate | undefined {
   return row ? rowToTemplate(row) : undefined;
 }
 
-export function listTemplates(status?: TemplateStatus, contentForm?: string, limit = 100): DbTemplate[] {
+export function listTemplates(status?: TemplateStatus, contentForm?: string, kind?: TemplateKind, limit = 100): DbTemplate[] {
   const db = getDb();
   const clauses: string[] = [];
   const params: unknown[] = [];
   if (status) { clauses.push("status = ?"); params.push(status); }
   if (contentForm) { clauses.push("content_form = ?"); params.push(contentForm); }
+  if (kind) { clauses.push("kind = ?"); params.push(kind); }
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
   const sql = `SELECT * FROM templates ${where} ORDER BY updated_at DESC LIMIT ?`;
   const rows = db.prepare(sql).all(...params, limit) as Record<string, unknown>[];
@@ -151,7 +158,7 @@ export function updateTemplate(id: string, updates: Partial<DbTemplate>): DbTemp
     db.prepare(
       `UPDATE templates SET
         name = ?, content_form = ?, canvas = ?, variables = ?, layers = ?, audio = ?, subtitles = ?,
-        transitions = ?, preview_url = ?, status = ?, updated_at = ?
+        transitions = ?, preview_url = ?, status = ?, kind = ?, updated_at = ?
        WHERE id = ?`
     ).run(
       template.name,
@@ -164,6 +171,7 @@ export function updateTemplate(id: string, updates: Partial<DbTemplate>): DbTemp
       toJson(template.transitions),
       template.preview_url ?? null,
       template.status,
+      template.kind ?? "video",
       template.updated_at,
       id
     );

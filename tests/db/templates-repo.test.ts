@@ -37,6 +37,21 @@ describe("templates-repo", () => {
     expect(listTemplates(undefined, "knowledge").length).toBe(1);
   });
 
+  it("defaults kind to video and filters by kind", () => {
+    createTemplate(makeTemplate({ id: "vid" }));
+    createTemplate(makeTemplate({ id: "it1", kind: "image-text" }));
+    createTemplate(makeTemplate({ id: "it2", kind: "image-text" }));
+    // 未显式传 kind 的模板默认 video
+    expect(getTemplate("vid")?.kind).toBe("video");
+    expect(getTemplate("it1")?.kind).toBe("image-text");
+    // kind 过滤
+    expect(listTemplates(undefined, undefined, "video").length).toBe(1);
+    expect(listTemplates(undefined, undefined, "image-text").length).toBe(2);
+    expect(listTemplates(undefined, undefined, undefined).length).toBe(3);
+    // kind 与 status 组合过滤
+    expect(listTemplates("draft", undefined, "image-text").length).toBe(2);
+  });
+
   it("updates template status", () => {
     createTemplate(makeTemplate());
     const updated = updateTemplate("tpl_knowledge_001", { status: "approved" });
