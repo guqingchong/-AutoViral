@@ -134,6 +134,51 @@ describe("render-pool（渲染池攒批 + 队列对齐）", () => {
     expect(heygem.submitJob).not.toHaveBeenCalled();
   });
 
+  it("入池时按口播时长估算成本写入 estimated_cost（非 0）", async () => {
+    makeAvatar();
+    makeWork("w1"); // cfg.heygem.gpuHourlyRateYuan = 2.18，口播文案短 → 10 秒起步
+    queueRepo.enqueue("w1");
+
+    const result = await svc.runDigitalHumanForWork("w1");
+    const job = jobsRepo.getJob(result.jobId)!;
+    // 10s × 2.18 元/h ÷ 3600 ≈ 0.0061
+    expect(job.estimated_cost).toBeGreaterThan(0);
+    expect(job.estimated_cost).toBeCloseTo((10 * 2.18) / 3600, 4);
+  });
+
+  it("并发触发只提交一次，无任务被错标 failed", async () => {
+    cfg.digitalHuman = { batchThreshold: 1 };
+    makeAvatar();
+    makeWork("w1");
+    queueRepo.enqueue("w1");
+    mockHeygemSuccess();
+
+    await svc.runDigitalHumanForWork("w1");
+    // 两个并发触发（阈值已满 + 手动）：共享同一 in-flight 批次
+    const [s1, s2] = await Promise.all([svc.maybeTriggerRenderBatch(), svc.triggerRenderNow()]);
+    expect(heygem.submitJob).toHaveBeenCalledTimes(1);
+    const job = jobsOf("w1")[0];
+    expect(job.status).toBe("done");
+    const states = [s1, s2].filter(Boolean) as Array<{ failed: number }>;
+    expect(states.length).toBeGreaterThan(0);
+    for (const s of states) expect(s.failed).toBe(0);
+  });
+
+  it("实例上线通知无条件清 pendingBoot（阈值未满不渲染也不残留开机提示）", async () => {
+    makeAvatar();
+    makeWork("w1");
+    queueRepo.enqueue("w1"); // 队列有 queued → 条件 b 不满足；池内 1 个 < 阈值 3 → 不触发
+    instance.getInstanceView.mockResolvedValue(INSTANCE_OFFLINE);
+
+    await svc.runDigitalHumanForWork("w1");
+    await svc.triggerRenderNow(); // 离线：置 pendingBoot
+    expect(svc.getPendingBoot()).toBe(true);
+
+    await svc.onInstanceReady(); // 上线但未到触发条件
+    expect(svc.getPendingBoot()).toBe(false);
+    expect(heygem.submitJob).not.toHaveBeenCalled();
+  });
+
   it("不在作品队列的作品排在池尾", async () => {
     makeAvatar();
     makeWork("w-inq");
@@ -235,7 +280,7 @@ describe("render-pool（渲染池攒批 + 队列对齐）", () => {
     expect(svc.getPendingBoot()).toBe(false);
   });
 
-  it("syncRenderPool 按作品队列 position 重排（prioritize 后顺序一致）", async () => {
+  it("syncRenderPool 按作品队列 position 重排（prioritize 后顺序一致，paused 作品同样重排）", async () => {
     cfg.digitalHuman = { batchThreshold: 99 }; // 禁止自动触发
     makeAvatar();
     for (const id of ["w1", "w2", "w3"]) {
@@ -245,7 +290,9 @@ describe("render-pool（渲染池攒批 + 队列对齐）", () => {
     }
     expect(svc.getRenderPool().map((i) => i.workId)).toEqual(["w1", "w2", "w3"]);
 
-    queueRepo.prioritize("w3");
+    queueRepo.setStatus("w3", "paused"); // paused 只影响提交，不影响重排
+    queueRepo.prioritize("w3");          // prioritize 会把状态置回 queued，先 pause 再插队的位次仍应同步
+    queueRepo.setStatus("w3", "paused");
     svc.syncRenderPool();
 
     const pool = svc.getRenderPool();
@@ -254,7 +301,7 @@ describe("render-pool（渲染池攒批 + 队列对齐）", () => {
     expect(heygem.submitJob).not.toHaveBeenCalled();
   });
 
-  it("已 paused 的作品跳过不提交，任务保持 queued", async () => {
+  it("已 paused 的作品跳过不提交，任务保持 queued 且不计入 total", async () => {
     makeAvatar();
     makeWork("w1");
     makeWork("w2");
@@ -267,11 +314,13 @@ describe("render-pool（渲染池攒批 + 队列对齐）", () => {
     queueRepo.setStatus("w2", "paused");
     svc.syncRenderPool();
 
-    await svc.triggerRenderNow();
+    const state = await svc.triggerRenderNow();
     expect(heygem.submitJob).toHaveBeenCalledTimes(1);
     expect(jobsOf("w1")[0].status).toBe("done");
     expect(jobsOf("w2")[0].status).toBe("queued");
     expect(jobsOf("w2")[0].provider_job_id).toBeUndefined();
+    expect(state.total).toBe(1); // paused 不计入 total，进度 submitted+failed 能对上 total
+    expect(state.submitted + state.failed).toBe(state.total);
   });
 
   it("作品移出队列后 syncRenderPool 取消其未提交的渲染任务", async () => {
