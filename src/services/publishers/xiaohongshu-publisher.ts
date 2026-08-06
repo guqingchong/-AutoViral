@@ -70,8 +70,15 @@ export class XiaohongshuPublisher extends PlaywrightPublisher {
       }
     }
 
-    // 发布
-    await page.locator('button:has-text("发布")').first().click();
+    // 发布：视频上传后平台要转码处理,期间发布按钮置灰不可点
+    // (旧逻辑固定等 3 秒就点,大视频必超时 —— 2026-08-06 实证)
+    const publishBtn = page.locator('button:has-text("发布")').first();
+    const enableDeadline = Date.now() + 180_000;
+    while (Date.now() < enableDeadline) {
+      if (await publishBtn.isEnabled().catch(() => false)) break;
+      await page.waitForTimeout(2000);
+    }
+    await publishBtn.click();
     await page.waitForTimeout(1500);
 
     // 可能的二次确认弹窗，出现则确认

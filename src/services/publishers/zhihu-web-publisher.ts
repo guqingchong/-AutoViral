@@ -66,6 +66,16 @@ export class ZhihuWebPublisher extends PlaywrightPublisher {
     }
   }
 
+  /** 受控点击编辑器:普通点击被浮层拦截时降级 force click(编辑器聚焦不需要通过命中测试) */
+  private async clickEditor(box: ReturnType<Page["locator"]>): Promise<void> {
+    try {
+      await box.click({ timeout: 8000 });
+    } catch {
+      await this.dismissOverlays(box.page());
+      await box.click({ force: true });
+    }
+  }
+
   protected override async doUpload(page: Page, input: PublishInput): Promise<PublishOutput> {
     await page.goto(this.uploadUrl, { waitUntil: "domcontentloaded" });
     await page.waitForTimeout(3000);
@@ -89,13 +99,7 @@ export class ZhihuWebPublisher extends PlaywrightPublisher {
 
     // 填写正文（知乎编辑器正文是 contenteditable 区域）
     const contentBox = page.locator('.public-DraftEditor-content, div[contenteditable="true"]').first();
-    try {
-      await contentBox.click({ timeout: 8000 });
-    } catch {
-      // 仍有浮层拦截时强制点击(元素本身可交互,只是被气泡遮挡)
-      await this.dismissOverlays(page);
-      await contentBox.click({ force: true });
-    }
+    await this.clickEditor(contentBox);
     // 逐行输入，换行转成编辑器内段落；按插图计划在段落间上传素材图
     const lines = content.split(/\r?\n/);
     const insertAfter = planImageInsertions(lines.length, contentImages.length);
@@ -110,7 +114,7 @@ export class ZhihuWebPublisher extends PlaywrightPublisher {
         const inserted = await this.insertImage(page, contentImages[imgIdx]);
         if (inserted) {
           imgIdx++;
-          await contentBox.click();
+          await this.clickEditor(contentBox);
           if (paragraphBreakPending) {
             await page.keyboard.press("Enter");
             paragraphBreakPending = false;

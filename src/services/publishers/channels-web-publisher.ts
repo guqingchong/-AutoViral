@@ -52,11 +52,23 @@ export class ChannelsWebPublisher extends PlaywrightPublisher {
   protected override async doUpload(page: Page, input: PublishInput): Promise<PublishOutput> {
     await page.goto(this.uploadUrl, { waitUntil: "domcontentloaded" });
 
-    const frame = await this.waitMicroFrame(page);
-    if (!frame) {
-      return { success: false, error: "视频号发表页微前端加载超时（90 秒内 /micro/ frame 未出现）" };
+    // 微前端偶发"页面初始化中"挂起:文件输入 90 秒不出现时重载页面重试一次(2026-08-06 实证)
+    let frame = await this.waitMicroFrame(page);
+    let attached = false;
+    if (frame) {
+      attached = await frame
+        .waitForSelector('input[type="file"]', { state: "attached", timeout: 90000 })
+        .then(() => true)
+        .catch(() => false);
     }
-    await frame.waitForSelector('input[type="file"]', { state: "attached", timeout: 90000 });
+    if (!frame || !attached) {
+      await page.reload({ waitUntil: "domcontentloaded" });
+      frame = await this.waitMicroFrame(page);
+      if (!frame) {
+        return { success: false, error: "视频号发表页微前端加载超时（重载后 /micro/ frame 仍未出现）" };
+      }
+      await frame.waitForSelector('input[type="file"]', { state: "attached", timeout: 90000 });
+    }
     await this.dismissDialogs(frame);
 
     // 上传视频

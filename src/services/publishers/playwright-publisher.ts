@@ -1,6 +1,9 @@
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { type Publisher, type PublishInput, type PublishOutput } from "./types.js";
 import { getCredential, setCredential } from "../../db/platform-credentials-repo.js";
+import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
+import { dataDir } from "../../config.js";
 
 export interface PlaywrightOptions {
   headless?: boolean;
@@ -76,12 +79,33 @@ export abstract class PlaywrightPublisher implements Publisher {
       }
       const result = await this.doUpload(page, input);
       if (result.success) await this.saveCookies(context);
+      // 失败或结果无法确认时留现场截图,否则平台改版类问题无法定位
+      if (!result.success) {
+        const shot = await this.captureDebugSnapshot(page, input.workId);
+        if (shot) result.error = `${result.error ?? "发布失败"}（现场截图: ${shot}）`;
+      }
       return result;
     } catch (err) {
-      return { success: false, error: err instanceof Error ? err.message : String(err) };
+      let msg = err instanceof Error ? err.message : String(err);
+      const shot = await this.captureDebugSnapshot(page, input.workId);
+      if (shot) msg += `（现场截图: ${shot}）`;
+      return { success: false, error: msg };
     } finally {
       await page.close();
       await this.close();
+    }
+  }
+
+  /** 发布失败现场截图,存到作品 output 目录;失败返回 null 不影响主流程 */
+  protected async captureDebugSnapshot(page: Page, workId: string): Promise<string | null> {
+    try {
+      const dir = join(dataDir, "works", workId, "output");
+      await mkdir(dir, { recursive: true });
+      const path = join(dir, `publish-debug-${this.platform}.png`);
+      await page.screenshot({ path, timeout: 10000 });
+      return path;
+    } catch {
+      return null;
     }
   }
 

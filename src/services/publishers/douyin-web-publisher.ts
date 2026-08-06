@@ -58,11 +58,11 @@ export class DouyinWebPublisher extends PlaywrightPublisher {
 
     // 真实校验发布结果 —— 此前点击"发布"后无条件返回成功，导致
     // 平台显示已发布而实际未发布（2026-08-06 用户实测复现）。
-    // 成功信号：跳转内容管理页 / 出现成功提示；失败信号：错误提示；超时一律按失败处理。
-    const SUCCESS_TEXT = "text=/发布成功|提交成功|已发布|审核中/";
+    // 成功信号：跳转内容管理页 / 出现成功提示；失败信号：错误提示；超时按失败处理并留现场截图。
+    const SUCCESS_TEXT = "text=/发布成功|提交成功|已发布|审核中|作品已发布|发布至抖音|已提交审核/";
     const FAILURE_TEXT = "text=/发布失败|上传失败|审核不通过|包含违规|不符合社区|暂不支持/";
     const outcome = await Promise.race([
-      page.waitForURL(/content\/manage|content\/post/, { timeout: 60000 }).then(() => "success" as const),
+      page.waitForURL(/content\/manage|content\/post|creator-micro\/home/, { timeout: 60000 }).then(() => "success" as const),
       page.locator(SUCCESS_TEXT).first().waitFor({ state: "visible", timeout: 60000 }).then(() => "success" as const),
       page.locator(FAILURE_TEXT).first().waitFor({ state: "visible", timeout: 60000 }).then(() => "failed" as const),
     ]).catch(() => "timeout" as const);
@@ -76,7 +76,7 @@ export class DouyinWebPublisher extends PlaywrightPublisher {
     }
     return {
       success: false,
-      error: "抖音发布结果无法确认（60 秒内未跳转内容管理页、也未出现成功提示），已按失败处理。请到抖音创作者中心人工确认后重试。",
+      error: `抖音发布结果无法确认（60 秒内未跳转内容管理页、也未出现成功提示，最后停留在 ${page.url()}），已按失败处理。请到抖音创作者中心人工确认后重试。`,
     };
   }
 }

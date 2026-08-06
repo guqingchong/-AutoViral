@@ -14,6 +14,7 @@ class MockLocator {
   async fill(v: string) { this.fills.push(v); }
   async click() { this.clicks.push(this.label); }
   async count() { return 1; }
+  async isEnabled() { return true; }
   async setInputFiles(p: string | string[]) { this.uploads.push(p); }
   async press() {}
   async waitFor() { if (this.waitFails) throw new Error("locator waitFor timeout"); }
