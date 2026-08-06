@@ -92,13 +92,19 @@ export abstract class PlaywrightPublisher implements Publisher {
     try {
       // 用 domcontentloaded 而非 networkidle：扫码登录页有长轮询，networkidle 永远不触发
       await page.goto(this.loginUrl, { waitUntil: "domcontentloaded" });
+      const loginStartUrl = page.url();
       const deadline = Date.now() + 180000;
       while (Date.now() < deadline) {
         // 原地判断 URL，不主动跳转：扫码成功后登录页会自己跳转到控制台，
         // 若此时 goto 上传页会打断登录握手（ticket 换 cookie 发生在跳转过程中），
         // 导致永远被弹回二维码页（"不停刷新"现象）。
+        // 注意：loginUrl 本身不一定含 login 字样（如抖音是 creator.douyin.com/），
+        // 必须把起始登录页 URL 也视为"仍在登录页"——否则第一轮循环就会
+        // checkLoggedIn→goto(上传页),每 2 秒刷新一次页面,用户根本扫不了码
+        // (2026-08-06 实测复现)。
         const url = page.url();
-        const stillOnLogin = /login|signin|passport/i.test(url);
+        const stillOnLogin =
+          url === loginStartUrl || /login|signin|passport/i.test(url);
         if (!stillOnLogin) {
           // URL 已离开登录页，再跳上传页二次确认登录态真实有效
           const loggedIn = await this.checkLoggedIn(page).catch(() => false);
@@ -106,6 +112,8 @@ export abstract class PlaywrightPublisher implements Publisher {
             await this.saveCookies(context);
             return true;
           }
+          // 验证失败:回到登录页继续等用户扫码,绝不能留在上传页反复刷新
+          await page.goto(this.loginUrl, { waitUntil: "domcontentloaded" }).catch(() => {});
         }
         await page.waitForTimeout(2000);
       }
