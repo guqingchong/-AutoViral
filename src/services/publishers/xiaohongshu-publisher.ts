@@ -27,8 +27,9 @@ export class XiaohongshuPublisher extends PlaywrightPublisher {
       : [];
 
     if (imagePaths.length > 0) {
-      // 选择「上传图文」
-      await page.locator("text=上传图文").first().click();
+      // 选择「上传图文」Tab（新版创作页 Tab 为 .creator-tab 结构;
+      // 旧 text=上传图文 会匹配到隐藏的侧边栏重复元素导致 click 超时 —— 2026-08-06 实证）
+      await page.locator('.creator-tab:has-text("上传图文")').first().click();
       await page.waitForTimeout(1000);
 
       // 上传图片卡片（多图一次传入，顺序即展示顺序）
@@ -36,11 +37,15 @@ export class XiaohongshuPublisher extends PlaywrightPublisher {
       await fileInput.setInputFiles(imagePaths);
       await page.waitForTimeout(3000);
     } else {
-      // 选择「发布视频」
-      await page.locator("text=发布视频").first().click();
-
-      // 上传视频
-      const fileInput = page.locator('input[type="file"]').first();
+      // 视频:/publish/publish 默认就是「上传视频」Tab,无需点击
+      // (旧流程点 text=发布视频,该入口在新版页面不存在 —— 2026-08-06 实证)。
+      // 若默认 Tab 失效,兜底点击上传视频 Tab。
+      let fileInput = page.locator('input[type="file"]').first();
+      if ((await fileInput.count()) === 0) {
+        await page.locator('.creator-tab:has-text("上传视频")').first().click();
+        await page.waitForTimeout(1000);
+        fileInput = page.locator('input[type="file"]').first();
+      }
       await fileInput.setInputFiles(input.videoPath);
       await page.waitForTimeout(3000);
     }

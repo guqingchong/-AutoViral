@@ -55,6 +55,30 @@ export class BilibiliOfficialPublisher implements Publisher {
     return `SESSDATA=${sess}; bili_jct=${csrf}`;
   }
 
+  /**
+   * 上传封面到 B站图床，返回可投稿引用的 URL。
+   * 实测（2026-08-06）：/x/vu/web/cover/up 只接受 base64 dataURL 字符串字段
+   * （multipart 文件字段返回 -400 请求错误）；投稿 add/v3 要求封面必须来自该接口。
+   */
+  private async uploadCover(coverPath: string, csrf: string): Promise<string | undefined> {
+    try {
+      const img = await readFile(coverPath);
+      const mime = /\.png$/i.test(coverPath) ? "image/png" : "image/jpeg";
+      const form = new FormData();
+      form.append("cover", `data:${mime};base64,${img.toString("base64")}`);
+      form.append("csrf", csrf);
+      const res = await fetch(`${MEMBER_BASE}/x/vu/web/cover/up`, {
+        method: "POST",
+        headers: { Cookie: this.cookieHeader(), "User-Agent": UA, Referer: `${MEMBER_BASE}/york/videoup` },
+        body: form,
+      });
+      const data = (await res.json().catch(() => null)) as { code?: number; data?: { url?: string } } | null;
+      return data?.code === 0 ? data.data?.url : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   async publish(input: PublishInput): Promise<PublishOutput> {
     const csrf = getCredential("bilibili", "csrf");
     if (!csrf) {
@@ -137,6 +161,11 @@ export class BilibiliOfficialPublisher implements Publisher {
       }
 
       // 5. submit（add/v3，v2 已下线 404；filename 用 upos key 去扩展名）
+      // 封面：add/v3 要求封面必须先经 /x/vu/web/cover/up 上传，拒绝外部链接/本地路径
+      let coverUrl = "";
+      if (input.coverPath) {
+        coverUrl = (await this.uploadCover(input.coverPath, csrf)) ?? "";
+      }
       const biliFilename = uposPath.split("/").pop()!.replace(/\.[^.]+$/, "");
       const addRes = await fetch(`${MEMBER_BASE}/x/vu/web/add/v3?csrf=${encodeURIComponent(csrf)}`, {
         method: "POST",
@@ -150,7 +179,7 @@ export class BilibiliOfficialPublisher implements Publisher {
           copyright: 1,
           source: "",
           tid: 122,
-          cover: input.coverPath ?? "",
+          cover: coverUrl,
           title: input.title,
           tag: "",
           desc: (input.options?.description as string) ?? "",

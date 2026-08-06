@@ -12,7 +12,10 @@ export class DouyinWebPublisher extends PlaywrightPublisher {
     // domcontentloaded + 短等待：创作者页有长轮询，networkidle 不可靠
     await page.goto(this.uploadUrl, { waitUntil: "domcontentloaded" });
     await page.waitForTimeout(2000);
-    return !page.url().includes("/login");
+    if (page.url().includes("/login")) return false;
+    // 抖音会在上传 URL 原地渲染登录表单(不跳转),仅查 URL 会误判已登录(2026-08-06 实证)
+    const loginForm = await page.locator("text=/扫码登录|验证码登录|我是创作者/").count().catch(() => 0);
+    return loginForm === 0;
   }
 
   protected override async doUpload(page: Page, input: PublishInput): Promise<PublishOutput> {

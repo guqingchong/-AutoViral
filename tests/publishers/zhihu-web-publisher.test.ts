@@ -22,6 +22,9 @@ class MockLocator {
   async count(): Promise<number> {
     return this.countValue;
   }
+  async isVisible(): Promise<boolean> {
+    return false; // 浮层关闭按钮默认不可见,dismissOverlays 应静默跳过
+  }
   async setInputFiles(p: string): Promise<void> {
     this.uploads.push(p);
   }

@@ -46,9 +46,30 @@ export class ZhihuWebPublisher extends PlaywrightPublisher {
     }
   }
 
+  /** 关掉编辑器上的浮层（新功能气泡/创作助手/弹窗）,否则遮挡点击导致 locator.click 超时(2026-08-06 实证) */
+  private async dismissOverlays(page: Page): Promise<void> {
+    await page.keyboard.press("Escape").catch(() => {});
+    const closers = page.locator(
+      '[aria-label="关闭"], .Modal-closeButton, .css-1b83hw0, button:has-text("我知道了"), .Popover [class*="close"], [class*="Guide"] [class*="close"], [class*="assistant"] [class*="close"], [class*="Assistant"] [class*="close"]',
+    );
+    for (let i = 0; i < 3; i++) {
+      const btn = closers.first();
+      if (await btn.isVisible().catch(() => false)) {
+        await btn.click().catch(() => {});
+        await page.waitForTimeout(400);
+      } else break;
+    }
+    // 创作助手面板右上 ✕
+    const assistantClose = page.locator('[class*="creator-assistant"] [class*="close"], div:has(> :text("创作助手")) [class*="close"]').first();
+    if (await assistantClose.isVisible().catch(() => false)) {
+      await assistantClose.click().catch(() => {});
+    }
+  }
+
   protected override async doUpload(page: Page, input: PublishInput): Promise<PublishOutput> {
     await page.goto(this.uploadUrl, { waitUntil: "domcontentloaded" });
     await page.waitForTimeout(3000);
+    await this.dismissOverlays(page);
 
     const content =
       (input.options?.content as string) ??
@@ -68,7 +89,13 @@ export class ZhihuWebPublisher extends PlaywrightPublisher {
 
     // 填写正文（知乎编辑器正文是 contenteditable 区域）
     const contentBox = page.locator('.public-DraftEditor-content, div[contenteditable="true"]').first();
-    await contentBox.click();
+    try {
+      await contentBox.click({ timeout: 8000 });
+    } catch {
+      // 仍有浮层拦截时强制点击(元素本身可交互,只是被气泡遮挡)
+      await this.dismissOverlays(page);
+      await contentBox.click({ force: true });
+    }
     // 逐行输入，换行转成编辑器内段落；按插图计划在段落间上传素材图
     const lines = content.split(/\r?\n/);
     const insertAfter = planImageInsertions(lines.length, contentImages.length);
