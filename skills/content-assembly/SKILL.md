@@ -7,24 +7,56 @@ description: Assemble generated assets into final publishable content using ffmp
 
 ## ⚠️ 字幕烧录规范（强制）
 
-字幕烧录**必须**调用 `scripts/subtitle_burn.py`，**禁止**自行使用 ffmpeg drawtext 或手写 Pillow 方案。
+**首选路径（默认，必须）：ffmpeg 原生 ass 滤镜。** caption_generate.py 生成的 ASS 字幕（含 `{\kf}` 逐词高亮 karaoke）**必须**用 ffmpeg libass 烧录：
 
 ```bash
-# 基本用法
-python3 ~/.claude/skills/content-assembly/scripts/subtitle_burn.py \
-  --video input.mp4 --subs subtitles.srt --output output.mp4
+# 字幕生成:caption_generate.py 输出 ASS(逐词 karaoke)
+python3 ~/.claude/skills/content-assembly/scripts/caption_generate.py --timestamps narration_words.json --output subs.ass
 
-# 指定风格
-python3 ~/.claude/skills/content-assembly/scripts/subtitle_burn.py \
-  --video input.mp4 --subs subtitles.srt --output output.mp4 --style cinematic
-
-# 可用风格: modern (默认), cinematic, bold, minimal, karaoke
+# 字幕烧录(强制默认路径):单次编码,音频直拷,353s 视频约 6 分钟
+ffmpeg -i composited.mp4 -vf "ass='subs.ass':fontsdir='C\:/Users/顾庆冲/.autoviral/fonts'" \
+  -c:v libx264 -preset veryfast -crf 20 -c:a copy -y output/final.mp4
 ```
+
+注意：
+- Windows 下 ass 滤镜路径需转义盘符冒号（`C\:/...`）；路径含中文/空格时用相对路径（先 cd 到作品目录再 `ass=subs.ass:fontsdir=...`）最稳妥
+- fontsdir 必须指向 `~/.autoviral/fonts/`；ASS 的 Fontname 由 font_manager 保证与字体文件家族名一致（Noto Sans CJK SC），若 libass 日志出现 fontselect 回退（如 MicrosoftYaHei），说明字体名不匹配，必须先修正 ASS 的 Fontname 再继续
+- **禁止** drawtext 方案（不支持 karaoke、无断行控制）
+
+**备用路径（仅以下两种情况）：`scripts/subtitle_burn.py`**
+1. 输入是 SRT 而非 ASS，且不需要逐词 karaoke；
+2. ffmpeg ass 滤镜实测不可用（如精简版 ffmpeg 无 libass）。
+
+⚠️ 已知缺陷：subtitle_burn.py 的 parse_ass 会**剥掉所有 `{\kf}` 标签**（karaoke 高亮丢失）、忽略 ASS 的 MarginV（改用自家预设比例）。用 ASS + karaoke 时走它会同时丢效果和错位——这就是首选 ffmpeg ass= 的原因。
 
 字体规则：
 - 强制使用 `~/.autoviral/fonts/` 下的字体（由 font_manager.py 管理）
-- 默认字体：Noto Sans CJK SC Regular
+- 默认字体：Noto Sans CJK SC Bold
 - **禁止使用系统字体**
+
+## ⚠️ 布局安全区（强制断言）
+
+字幕带与数字人/字卡 overlay 的坐标**必须由同一份布局常量计算，禁止分别拍脑袋写坐标**。
+
+固定布局预设（1080×1920 竖版）：
+
+| 元素 | 区域 | 说明 |
+|------|------|------|
+| 字幕带 | y ≈ 1390–1550（MarginV=430，Alignment=2） | 抖音底部 20% UI 遮挡区（y>1536）之上 |
+| 数字人分窗 | 右上角：`scale=420:-2,pad=428:754` → `overlay=616:200`（占 x616–1044, y200–954） | 与字幕带（y≥1390）不相交 ✅ |
+| 顶部标题/字卡 | y < 180 | 避开数字人窗口 |
+
+**合成前必须做碰撞断言**：字幕带 y 区间 ∩ overlay y 区间 = ∅。自定义布局时同样先算后写。
+**合成后必须抽帧复核**：10%/50%/90% 三个时间点抽帧，确认字幕与数字人/字卡无遮挡。
+
+## ⚠️ 合成效率原则（强制）
+
+多段合成（Ken Burns 分段 → xfade 拼接 → 卡片/数字人 overlay）**最多只允许一次全量编码**：
+
+- **正确做法**：单条 ffmpeg 命令、单个 filter_complex 完成 `zoompan 分段 → xfade 链 → overlay`，一次性输出。分段并行生成（4-6 个并发 ffmpeg 后台任务）后也可 concat demuxer 免重编码拼接
+- **禁止做法**：分段编码 → 拼接再编码 → overlay 第三次编码（三遍 1080×1920 全量编码 ≈ 40 分钟，合一后 ≈ 15 分钟）
+- 编码参数统一 `-preset veryfast -crf 20`（竖版短视频该参数下质量损失肉眼不可辨，禁止用 medium/slow）
+- 长命令必须写脚本文件执行（如 build.py / build.sh），禁止逐段手工敲命令；滤镜图用程序生成，不要手拼 34 级 xfade 字符串
 
 你是一名专业的视频剪辑师和内容组装专家，专注于抖音和小红书的短视频和图文内容制作。你的任务是将已生成的素材（视频片段、图片）通过 ffmpeg 组装成精美的、可直接发布的成品。
 

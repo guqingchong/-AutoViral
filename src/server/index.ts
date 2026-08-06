@@ -110,8 +110,9 @@ export async function startServer(port: number): Promise<{ server: Server }> {
   recoverStuckRenderJobs();
 
   // 0.6b. Reconcile work states (render_jobs/pipeline_steps → works.status).
-  // Fixes works stuck in "assembling" although the final video already exists,
-  // then re-run every 5 minutes as a safety net.
+  // Fixes works stuck in "assembling" although the final video already exists.
+  // 每 1 分钟跑一次(此前 5 分钟):必须显著快于 watchdog 的 10 分钟停滞阈值,
+  // 确保"已完成但未上报"先被对账修复,而不是被 watchdog/runner 重跑导致重复渲染。
   await reconcileWorkStates("startup").catch((err) =>
     console.error("[reconcile] startup run failed:", err),
   );
@@ -119,7 +120,7 @@ export async function startServer(port: number): Promise<{ server: Server }> {
     reconcileWorkStates("periodic").catch((err) =>
       console.error("[reconcile] periodic run failed:", err),
     );
-  }, 300_000);
+  }, 60_000);
 
   // 0.7. Start periodic stuck-job sweep (every 5 minutes)
   startPublishCron();
@@ -165,8 +166,11 @@ export async function startServer(port: number): Promise<{ server: Server }> {
   setWsBridge(wsBridge);
 
   // 4b. 作品队列：串行 runner + 反停滞看门狗。
-  // 必须在 WsBridge 构造之后初始化（isSessionAlive 依赖 wsBridge 会话表）。
-  const isSessionAlive = (id: string) => !!wsBridge.getSession(id)?.cliProcess;
+  // 必须在 WsBridge 构造之后初始化(isSessionAlive 依赖 wsBridge 会话表)。
+  // 存活判定用 isWorkActive(进程存活 OR 最近 120s 有 CLI 活动),而不是只看
+  // 内存 cliProcess:-p 单回合模式下进程每回合退出是常态,纯内存判定会把
+  // 回合间空窗误判为"假死"而重复 resume、产生孤儿会话(2026-08-06 根因)。
+  const isSessionAlive = (id: string) => wsBridge.isWorkActive(id);
   initWorkQueue({ startWork: (id) => startWorkSession(id), isSessionAlive });
   startRunner();
   startWatchdog({ isSessionAlive });

@@ -19,10 +19,10 @@ describe("stock-asset-service", () => {
     vi.clearAllMocks();
   });
 
-  it("always includes Openverse as a free keyless provider", async () => {
+  it("returns configured providers in priority order (Pexels first, no Openverse)", async () => {
     const providers = await getConfiguredStockProviders();
-    expect(providers).toContain("openverse");
-    expect(providers).toEqual(["openverse", "pexels", "pixabay", "unsplash"]);
+    expect(providers).toEqual(["pexels", "pixabay", "unsplash"]);
+    expect(providers).not.toContain("openverse");
   });
 
   it("downloadStockAsset calls uploadAsset with correct metadata", async () => {
@@ -31,19 +31,19 @@ describe("stock-asset-service", () => {
       new Response(new Uint8Array([1, 2, 3]), { status: 200 })
     );
     await downloadStockAsset({
-      url: "https://example.com/img.jpg",
-      provider: "openverse",
+      url: "https://images.pexels.com/photos/123/pexels-photo-123.jpeg",
+      provider: "pexels",
       category: "scenes",
       name: "test.jpg",
       description: "test",
       author: "tester",
-      license: "CC BY 4.0",
+      license: "Pexels License",
     });
     expect(uploadAsset).toHaveBeenCalledTimes(1);
     const callArg = (uploadAsset as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(callArg.source).toBe("openverse");
-    expect(callArg.license).toBe("cc0");
-    expect(callArg.metadata.license).toBe("CC BY 4.0");
+    expect(callArg.source).toBe("pexels");
+    expect(callArg.license).toBe("commercial");
+    expect(callArg.metadata.license).toBe("Pexels License");
     fetchMock.mockRestore();
   });
 
@@ -106,7 +106,7 @@ describe("stock-asset-service", () => {
       const url = String(input);
       if (url.includes("api.pexels.com/videos/search")) return new Response(JSON.stringify(pexelsVideoResponse), { status: 200 });
       if (url.includes("pixabay.com/api/videos")) return new Response(JSON.stringify({ hits: [] }), { status: 200 });
-      // openverse 图片搜索不应被调用（mediaType=video）
+      // 图片搜索不应被调用（mediaType=video）
       throw new Error(`unexpected fetch: ${url}`);
     });
     const results = await searchStockAssets("ocean waves", { mediaType: "video", providers: ["pexels", "pixabay"] });
@@ -130,10 +130,24 @@ describe("stock-asset-service", () => {
       if (url.includes("pixabay.com/api/videos")) return new Response(JSON.stringify({ hits: [] }), { status: 200 });
       throw new Error(`unexpected fetch: ${url}`);
     });
-    // openverse / unsplash 仅图片，mediaType=video 时不应发起任何请求、也不报错
+    // unsplash 仅图片，mediaType=video 时不应发起任何请求、也不报错
     const results = await searchStockAssets("city", { mediaType: "video" });
-    expect(results.find((r) => r.provider === "openverse")).toBeUndefined();
     expect(results.find((r) => r.provider === "unsplash")).toBeUndefined();
+    fetchMock.mockRestore();
+  });
+
+  it("searchStockAssets results are sorted with Pexels first regardless of completion order", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes("api.pexels.com/videos/search")) return new Response(JSON.stringify({ videos: [] }), { status: 200 });
+      if (url.includes("api.pexels.com/v1/search")) return new Response(JSON.stringify({ photos: [{ id: 1, src: { large2x: "https://images.pexels.com/1.jpg", medium: "https://images.pexels.com/1m.jpg" } }] }), { status: 200 });
+      if (url.includes("pixabay.com/api/videos")) return new Response(JSON.stringify({ hits: [] }), { status: 200 });
+      if (url.includes("pixabay.com/api/")) return new Response(JSON.stringify({ hits: [{ id: 2, largeImageURL: "https://cdn.pixabay.com/2.jpg", previewURL: "https://cdn.pixabay.com/2p.jpg" }] }), { status: 200 });
+      if (url.includes("api.unsplash.com")) return new Response(JSON.stringify({ results: [{ id: "3", urls: { full: "https://images.unsplash.com/3.jpg", small: "https://images.unsplash.com/3s.jpg" } }] }), { status: 200 });
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    const results = await searchStockAssets("city", { mediaType: "image" });
+    expect(results.map((r) => r.provider)).toEqual(["pexels", "pixabay", "unsplash"]);
     fetchMock.mockRestore();
   });
 

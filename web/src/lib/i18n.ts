@@ -52,6 +52,7 @@ const translations: Record<Language, Record<string, string>> = {
     workAssetting: "Assetting",
     workAssembling: "Assembling",
     workReviewing: "Reviewing",
+    workApproved: "To Publish",
     workPublished: "Published",
     workFailed: "Failed",
     monitoring: "Monitoring",
@@ -105,7 +106,7 @@ const translations: Record<Language, Record<string, string>> = {
     sessionCompleted: "Completed",
     nextStep: "Next Step",
     redoStep: "Redo",
-    publish: "Publish",
+    publish: "Video Publish",
     backToHome: "Back",
     chatMode: "Chat",
     canvasMode: "Canvas",
@@ -421,7 +422,7 @@ const translations: Record<Language, Record<string, string>> = {
 
     // Phase 7: Account Management
     navAccounts: "Accounts",
-    navArticles: "Articles",
+    navArticles: "Image-Text",
     accountsTitle: "Account Management",
     accountName: "Name",
     accountPlatform: "Platform",
@@ -523,6 +524,7 @@ const translations: Record<Language, Record<string, string>> = {
     workAssetting: "素材准备",
     workAssembling: "合成中",
     workReviewing: "评审中",
+    workApproved: "待发布",
     workPublished: "已发布",
     workFailed: "失败",
     monitoring: "监测中",
@@ -576,7 +578,7 @@ const translations: Record<Language, Record<string, string>> = {
     sessionCompleted: "已完成",
     nextStep: "下一步",
     redoStep: "重做",
-    publish: "发布",
+    publish: "视频发布",
     backToHome: "返回",
     chatMode: "对话",
     canvasMode: "画布",
@@ -892,7 +894,7 @@ const translations: Record<Language, Record<string, string>> = {
 
     // Phase 7: 账号管理
     navAccounts: "账号",
-    navArticles: "文章",
+    navArticles: "图文发布",
     accountsTitle: "账号管理",
     accountName: "账号名称",
     accountPlatform: "平台",

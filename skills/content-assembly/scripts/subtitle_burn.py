@@ -561,9 +561,9 @@ def make_subtitle_clip(
             return np.array(img)
 
         clip = VideoClip(frame_func, duration=duration)
-        clip = clip.set_start(start)
+        clip = clip.with_start(start)
         # Set position: centered horizontally, at y_pos vertically
-        clip = clip.set_position(("center", y_pos))
+        clip = clip.with_position(("center", y_pos))
 
         # VideoClip with RGBA needs mask
         def mask_func(t):
@@ -581,8 +581,8 @@ def make_subtitle_clip(
             alpha = np.array(img)[:, :, 3] / 255.0
             return alpha
 
-        mask_clip = VideoClip(mask_func, ismask=True, duration=duration)
-        clip = clip.set_mask(mask_clip)
+        mask_clip = VideoClip(mask_func, is_mask=True, duration=duration)
+        clip = clip.with_mask(mask_clip)
 
         return [clip]
 
@@ -608,10 +608,10 @@ def make_subtitle_clip(
         # Create ImageClip from RGBA
         clip = ImageClip(img_array[:, :, :3])
         # Create mask from alpha channel
-        mask = ImageClip(img_array[:, :, 3] / 255.0, ismask=True)
-        clip = clip.set_mask(mask)
-        clip = clip.set_start(start).set_duration(duration)
-        clip = clip.set_position(("center", y_pos))
+        mask = ImageClip(img_array[:, :, 3] / 255.0, is_mask=True)
+        clip = clip.with_mask(mask)
+        clip = clip.with_start(start).with_duration(duration)
+        clip = clip.with_position(("center", y_pos))
 
         return [clip]
 
@@ -757,6 +757,7 @@ def burn_subtitles(
             fps=fps,
             codec=codec,
             audio_codec="aac",
+            preset="veryfast",
             logger="bar",
         )
     except Exception as e:

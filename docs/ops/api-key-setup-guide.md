@@ -19,12 +19,9 @@
 
 ## 二、素材库（强烈推荐配置，全部免费）
 
-### Openverse（默认可用，无需注册）
-- **费用**：免费
-- **API Key**：不需要
-- **说明**：聚合 50+ 来源的 CC 授权素材，开箱即用，在素材库页面直接搜索即可。
+> 2026-08-06 起 Openverse 渠道已删除（国内网络普遍不可达），网上素材搜索**优先走 Pexels**。
 
-### Pexels（推荐）
+### Pexels（首选，优先检索）
 - **费用**：免费（每月 200 次请求/小时，足够日常使用）
 - **获取步骤**：
   1. 打开 https://www.pexels.com/api/
@@ -52,7 +49,7 @@
   6. 创建后在应用详情页获取 Access Key
   7. 填入 AutoViral 设置 → 素材库 → Unsplash Access Key
 
-> **提示**：即使只配置 Openverse（无需注册），也能搜索素材。配齐 Pexels/Pixabay/Unsplash 可获得更多高质量素材。
+> **提示**：素材搜索优先走 Pexels，建议至少配置 Pexels API Key；Pixabay/Unsplash 为可选补充源。
 
 ---
 

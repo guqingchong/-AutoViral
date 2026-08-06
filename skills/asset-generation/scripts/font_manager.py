@@ -28,7 +28,8 @@ FONTS_DIR = Path.home() / ".autoviral" / "fonts"
 
 FONT_REGISTRY = {
     "source-han-sans": {
-        "family": "Source Han Sans SC",
+        # 实际下载的是 Noto Sans CJK SC(与 Source Han Sans 同源异名),family 必须与 OTF 内部家族名一致,否则 libass/fontconfig 无法匹配会回退系统字体
+        "family": "Noto Sans CJK SC",
         "weights": {
             "regular": {
                 "filename": "NotoSansCJKsc-Regular.otf",
@@ -49,7 +50,7 @@ FONT_REGISTRY = {
         },
     },
     "source-han-serif": {
-        "family": "Source Han Serif SC",
+        "family": "Noto Serif CJK SC",
         "weights": {
             "regular": {
                 "filename": "NotoSerifCJKsc-Regular.otf",

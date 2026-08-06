@@ -6,25 +6,36 @@ import type { Page, Browser, BrowserContext } from "playwright";
 import type { PublishInput } from "../../src/services/publishers/types.js";
 
 class MockLocator {
-  constructor(private actions: { text?: string; visible?: boolean } = {}) {}
+  constructor(private actions: { text?: string; visible?: boolean; waitFails?: boolean } = {}) {}
   // first() must be synchronous — the real Playwright Locator.first() is sync
   first() { return new MockLocator(this.actions); }
   async fill(v: string) { this.actions.text = v; }
   async click() {}
   async setInputFiles(_files?: unknown) {}
   async press() {}
+  async waitFor() { if (this.actions.waitFails) throw new Error("locator waitFor timeout"); }
   async isVisible() { return this.actions.visible ?? true; }
 }
 
 class MockPage {
   currentUrl = "https://creator.douyin.com/creator-micro/content/upload";
   navigations: string[] = [];
+  /** false 时模拟"发布后无任何成功信号"（回归：不得假报成功） */
+  confirmSuccess = true;
   async goto(url: string) { this.navigations.push(url); }
   url() { return this.currentUrl; }
   async waitForTimeout() {}
   async waitForSelector() {}
+  async waitForURL() {
+    if (!this.confirmSuccess) throw new Error("waitForURL timeout");
+    this.currentUrl = "https://creator.douyin.com/creator-micro/content/manage";
+  }
   async close() {}
-  locator(_selector: string) { return new MockLocator(); }
+  locator(selector: string) {
+    // 结果校验只针对 text=/…/ 成功/失败提示；上传阶段的 waitFor 不受影响
+    const waitFails = !this.confirmSuccess && selector.startsWith("text=");
+    return new MockLocator({ waitFails });
+  }
 }
 
 class TestDouyinWeb extends DouyinWebPublisher {
@@ -68,5 +79,14 @@ describe("DouyinWebPublisher", () => {
     const res = await pub.publish(input);
     expect(res.success).toBe(false);
     expect(res.error).toBeTruthy();
+  });
+
+  it("发布结果无法确认时按失败处理（不假报成功）", async () => {
+    const pub = new TestDouyinWeb();
+    pub.getMockPage().confirmSuccess = false;
+    const input: PublishInput = { workId: "w1", videoPath: "/tmp/v.mp4", title: "T" };
+    const res = await pub.publish(input);
+    expect(res.success).toBe(false);
+    expect(res.error).toContain("无法确认");
   });
 });

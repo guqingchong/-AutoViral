@@ -142,6 +142,7 @@
     assetting: "workAssetting",
     assembling: "workAssembling",
     reviewing: "workReviewing",
+    approved: "workApproved",
     published: "workPublished",
     failed: "workFailed",
   };
@@ -152,13 +153,10 @@
 
   function statusClass(status: string): string {
     if (status === "published") return "status-published";
+    if (status === "approved") return "status-approved";
     if (status === "failed") return "status-failed";
     if (status === "draft") return "status-draft";
     return "status-in-progress";
-  }
-
-  function isPublished(status: string): boolean {
-    return status === "published";
   }
 
   /** 进度三态：排队中（第 N 位）/ 进行中 · 步骤 / 停滞 · 自动恢复中（lastActivityAt ≥10 分钟无动静） */
@@ -183,26 +181,6 @@
       return { text: `进行中 · ${activeStep.name}`, stalled: false, queued: false };
     }
     return { text: "等待启动", stalled: false, queued: false };
-  }
-
-  // Mock stats for published works (in real app, fetched from analytics API)
-  function getWorkStats(workId: string): { likes: number; comments: number; newFollowers: number } {
-    let hash = 0;
-    for (let i = 0; i < workId.length; i++) {
-      hash = workId.charCodeAt(i) + ((hash << 5) - hash);
-    }
-    const seed = Math.abs(hash);
-    return {
-      likes: (seed % 9000) + 1000,
-      comments: (seed % 500) + 50,
-      newFollowers: (seed % 200) + 10,
-    };
-  }
-
-  function formatNum(n: number): string {
-    if (n >= 10000) return (n / 10000).toFixed(1) + "w";
-    if (n >= 1000) return (n / 1000).toFixed(1) + "k";
-    return String(n);
   }
 
   function typeLabel(type: string): string {
@@ -699,24 +677,6 @@
                 <span class="pp-label" class:pp-stalled={prog.stalled}>{prog.text}</span>
               </div>
             {/if}
-            {#if isPublished(w.status)}
-              {@const stats = getWorkStats(w.id)}
-              <div class="card-stats">
-                <span class="monitor-dot"></span>
-                <span class="stat-item">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
-                  {formatNum(stats.likes)}
-                </span>
-                <span class="stat-item">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                  {formatNum(stats.comments)}
-                </span>
-                <span class="stat-item stat-followers">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/></svg>
-                  +{formatNum(stats.newFollowers)}
-                </span>
-              </div>
-            {/if}
             <span class="card-date">{new Date(w.updatedAt).toLocaleDateString()}</span>
           </div>
         </div>
@@ -1146,6 +1106,7 @@
   }
 
   .status-published { background: var(--success); color: #fff; }
+  .status-approved { background: var(--info); color: #fff; }
   .status-failed { background: var(--error); color: #fff; }
   .status-draft { background: rgba(255, 255, 255, 0.12); color: rgba(255, 255, 255, 0.7); }
   .status-in-progress { background: var(--state-running); color: #fff; }
@@ -1351,49 +1312,6 @@
     font-size: var(--size-xs);
     font-weight: 500;
     color: var(--text-muted);
-  }
-
-  /* Published stats row */
-  .card-stats {
-    display: flex;
-    align-items: center;
-    gap: 0.55rem;
-    margin-top: 0.2rem;
-  }
-
-  .monitor-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--success);
-    flex-shrink: 0;
-    animation: pulse 2s ease-in-out infinite;
-  }
-
-  @keyframes pulse {
-    0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.4); }
-    50% { opacity: 0.6; box-shadow: 0 0 0 4px rgba(34, 197, 94, 0); }
-  }
-
-  .stat-item {
-    display: flex;
-    align-items: center;
-    gap: 0.2rem;
-    font-size: var(--size-xs);
-    font-weight: 500;
-    color: var(--text-muted);
-  }
-
-  .stat-item svg {
-    opacity: 0.6;
-  }
-
-  .stat-followers {
-    color: var(--success);
-  }
-
-  .stat-followers svg {
-    opacity: 0.8;
   }
 
   .card-date {

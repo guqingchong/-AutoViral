@@ -28,6 +28,7 @@ export type WorkStatus =
   | "assetting"
   | "assembling"
   | "reviewing"
+  | "approved"
   | "published"
   | "failed";
 
@@ -273,6 +274,7 @@ export async function createWork(input: {
   assetSource?: AssetSource;
   assetBudget?: AssetBudget;
   dualOutput?: boolean;
+  evaluationMode?: boolean;
 }): Promise<Work> {
   await maybeMigrateLegacy();
   const now = new Date().toISOString();
@@ -287,7 +289,7 @@ export async function createWork(input: {
     video_search_query: input.videoSearchQuery,
     status: input.videoSource === "search" ? "researching" : "draft",
     platforms: input.platforms,
-    evaluation_mode: false,
+    evaluation_mode: input.evaluationMode ?? true,
     topic_hint: input.topicHint,
     topic_id: input.topicId,
     account_id: input.accountId,
@@ -499,8 +501,9 @@ const STATUS_ORDER: Record<WorkStatus, number> = {
   assetting: 3,
   assembling: 4,
   reviewing: 5,
-  published: 6,
-  failed: 6,
+  approved: 6,
+  published: 7,
+  failed: 7,
 };
 
 /** 流水线 step key → works.status（material-search 归入 researching） */
@@ -528,7 +531,8 @@ export function deriveStatusFromPipeline(
   pipeline: Record<string, PipelineStep>,
   current: WorkStatus,
 ): WorkStatus {
-  if (current === "published" || current === "failed") return current;
+  // approved（待发布）同样是用户确认态，流水线派生不得把它回退为 reviewing
+  if (current === "published" || current === "failed" || current === "approved") return current;
   const steps = Object.entries(pipeline);
   if (steps.length === 0) return current;
 

@@ -2,14 +2,12 @@
  * Stock asset search & download (PRD §4.2 合规素材中台).
  *
  * Integrates:
- *   - Openverse (https://api.openverse.org) — FREE, NO API KEY required. Default source. (图片)
- *   - Pexels (photos/videos) — free, requires API key (config.pexels.apiKey)（图片 + 视频）
+ *   - Pexels (photos/videos) — free, requires API key (config.pexels.apiKey)（图片 + 视频）【首选源】
  *   - Pixabay (photos/videos) — free, requires API key (config.pixabay.apiKey)（图片 + 视频）
  *   - Unsplash (photos) — free, requires API key (config.unsplash.accessKey)（仅图片）
  *
- * Openverse aggregates CC-licensed content from 50+ sources and works immediately
- * without any registration, so users can search right away. The key-based providers
- * are optional additions for higher quality / larger libraries.
+ * 所有网上素材搜索优先走 Pexels（2026-08-06 起 Openverse 渠道已删除：
+ * api.openverse.org 在国内网络下普遍不可达，每次搜索都产生一串超时错误）。
  *
  * 视频素材：Pexels/Pixabay 的视频 API 与图片共用同一个免费 Key。
  * 搜索结果带 mediaType/duration/宽高，供 LLM 在工作流"素材准备"步骤按
@@ -20,7 +18,7 @@ import { loadConfig } from "../config.js";
 import { uploadAsset } from "./asset-library.js";
 import type { DbAssetCategory } from "../db/types.js";
 
-export type StockProvider = "openverse" | "pexels" | "pixabay" | "unsplash";
+export type StockProvider = "pexels" | "pixabay" | "unsplash";
 export type StockMediaType = "image" | "video";
 
 export interface StockSearchItem {
@@ -49,42 +47,6 @@ export interface StockSearchResult {
 // 注意：本模块不得缓存 config。此前模块级 configCache 导致"设置页填入 API Key
 // 后必须重启服务器才生效"，用户看到"已填 key 但显示未连通"——2026-07-21 根因。
 // loadConfig() 每次调用都重新读取 yaml，直接用它即可。
-
-// ── Openverse (free, no API key) ───────────────────────────────────────────
-
-async function searchOpenverse(query: string, perPage: number): Promise<StockSearchItem[]> {
-  const url = `https://api.openverse.org/v1/images/?q=${encodeURIComponent(query)}&page_size=${perPage}&mature=false`;
-  // 6s 超时：api.openverse.org 在国内网络下普遍不可达，快速失败避免拖累整体搜索
-  const res = await fetch(url, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(6000) });
-  if (!res.ok) throw new Error(`Openverse 搜索失败 (HTTP ${res.status})`);
-  const data = (await res.json()) as {
-    results?: Array<{
-      id: string;
-      url?: string;
-      thumbnail?: string;
-      width?: number;
-      height?: number;
-      creator?: string;
-      title?: string;
-      license?: string;
-      license_version?: string;
-    }>;
-  };
-  return (data.results ?? [])
-    .filter((r) => r.url) // only items with a direct image URL
-    .map((r) => ({
-      provider: "openverse" as const,
-      id: r.id,
-      mediaType: "image" as const,
-      url: r.url!,
-      previewUrl: r.thumbnail,
-      width: r.width,
-      height: r.height,
-      author: r.creator,
-      description: r.title,
-      license: r.license ? `${r.license}${r.license_version ? " " + r.license_version : ""}` : "cc",
-    }));
-}
 
 // ── Pexels (free, requires API key) ────────────────────────────────────────
 
@@ -269,19 +231,22 @@ export interface MultiSearchOptions {
   perPage?: number;
   /**
    * 媒体类型过滤：image 只搜图片，video 只搜视频，all（默认）两者都搜。
-   * Openverse / Unsplash 没有视频库，mediaType=video 时自动跳过。
+   * Unsplash 没有视频库，mediaType=video 时自动跳过。
    */
   mediaType?: StockMediaType | "all";
 }
 
+/** 结果排序优先级：Pexels 优先（2026-08-06 用户指定），其后 Pixabay、Unsplash */
+const PROVIDER_PRIORITY: Record<StockProvider, number> = { pexels: 0, pixabay: 1, unsplash: 2 };
+
 /**
- * Search across stock providers. Openverse is always included (no key needed);
- * key-based providers are added when configured.
+ * Search across stock providers. Pexels 优先，Pixabay / Unsplash 作为补充源。
  * Pexels / Pixabay 的图片与视频 API 共用同一个 Key，mediaType 控制搜哪类。
  */
 export async function searchStockAssets(query: string, options: MultiSearchOptions = {}): Promise<StockSearchResult[]> {
-  const allProviders: StockProvider[] = ["openverse", "pexels", "pixabay", "unsplash"];
-  const providers = options.providers ?? allProviders;
+  const allProviders: StockProvider[] = ["pexels", "pixabay", "unsplash"];
+  // 忽略客户端传入的未知/已下线 provider（如已删除的 openverse），防止报错
+  const providers = (options.providers ?? allProviders).filter((p): p is StockProvider => allProviders.includes(p as StockProvider));
   const mediaType = options.mediaType ?? "all";
   const perPage = Math.min(options.perPage ?? 15, 50);
   const results: StockSearchResult[] = [];
@@ -291,9 +256,7 @@ export async function searchStockAssets(query: string, options: MultiSearchOptio
       let items: StockSearchItem[] = [];
       const wantImage = mediaType !== "video";
       const wantVideo = mediaType !== "image";
-      if (provider === "openverse") {
-        if (wantImage) items = await searchOpenverse(query, perPage);
-      } else if (provider === "pexels") {
+      if (provider === "pexels") {
         const [images, videos] = await Promise.all([
           wantImage ? searchPexels(query, perPage) : Promise.resolve([]),
           wantVideo ? searchPexelsVideos(query, perPage) : Promise.resolve([]),
@@ -312,11 +275,13 @@ export async function searchStockAssets(query: string, options: MultiSearchOptio
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error(`[stock-asset] ${provider} search error:`, message);
-      // 错误随结果返回，前端按源展示（如 Openverse 网络不可达 / API Key 无效）
+      // 错误随结果返回，前端按源展示（如网络不可达 / API Key 无效）
       results.push({ provider, items: [], total: 0, error: message });
     }
   });
   await Promise.all(tasks);
+  // 并行完成的 push 顺序是随机的，按优先级排序保证 Pexels 永远在最前
+  results.sort((a, b) => (PROVIDER_PRIORITY[a.provider as StockProvider] ?? 9) - (PROVIDER_PRIORITY[b.provider as StockProvider] ?? 9));
   return results;
 }
 
@@ -351,7 +316,6 @@ function extFromUrl(url: string): string | undefined {
 export async function downloadStockAsset(input: StockDownloadInput) {
   const category = input.category ?? "scenes";
   const licenseMap: Record<string, "cc0" | "commercial"> = {
-    openverse: "cc0",
     pexels: "commercial",
     pixabay: "cc0",
     unsplash: "commercial",
@@ -381,10 +345,10 @@ export async function downloadStockAsset(input: StockDownloadInput) {
   return asset;
 }
 
-/** Returns which stock providers are configured (Openverse is always available). */
+/** Returns which stock providers are configured (按优先级：Pexels 优先). */
 export async function getConfiguredStockProviders(): Promise<StockProvider[]> {
   const config = await loadConfig();
-  const out: StockProvider[] = ["openverse"]; // always available, no key
+  const out: StockProvider[] = [];
   if (config.pexels?.apiKey) out.push("pexels");
   if (config.pixabay?.apiKey) out.push("pixabay");
   if (config.unsplash?.accessKey) out.push("unsplash");

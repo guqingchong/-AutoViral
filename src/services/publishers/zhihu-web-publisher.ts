@@ -108,11 +108,22 @@ export class ZhihuWebPublisher extends PlaywrightPublisher {
     } else {
       await page.locator('.Modal button:has-text("发布"), [role="dialog"] button:has-text("发布")').first().click();
     }
-    await page.waitForTimeout(5000);
+    await page.waitForTimeout(2000);
 
-    // 发布后知乎跳转到文章页
+    // 发布后知乎跳转到文章页（zhuanlan.zhihu.com/p/<id>）。
+    // 真实校验：拿不到文章 ID 一律按失败处理 —— 此前无条件 success 属于假成功。
+    await page.waitForURL(/zhuanlan\.zhihu\.com\/p\/\d+/, { timeout: 30000 }).catch(() => {});
     const url = page.url();
     const articleId = url.match(/zhuanlan\.zhihu\.com\/p\/(\d+)/)?.[1];
+    if (!articleId) {
+      const errText = await page.locator("text=/发布失败|审核不通过|包含违规|不符合/").first().textContent().catch(() => null);
+      return {
+        success: false,
+        error: errText
+          ? `知乎发布被平台拒绝：${errText.trim()}`
+          : "知乎发布结果无法确认（未跳转到文章页），已按失败处理。请到知乎创作中心人工确认后重试。",
+      };
+    }
     return { success: true, platformPostId: articleId, postUrl: url };
   }
 }
