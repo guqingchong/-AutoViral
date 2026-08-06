@@ -48,6 +48,8 @@ export interface WsSession {
   idle: boolean;
   messageHistory: ChatBlock[];
   model?: string;
+  /** 最近一次 CLI 活动（spawn/stdout 输出）的时间戳；用于区分"回合间静默"与"真死" */
+  lastActivityAt?: number;
 }
 
 interface NdjsonMessage {
@@ -94,11 +96,42 @@ export function resolveClaudeCommand(): string {
 
 // ── WsBridge ─────────────────────────────────────────────────────────────────
 
+/** 活性宽限期：回合结束后 advance 续命/评审 spawn 有数十秒空窗,
+ *  在此期间无 cliProcess 属正常,宽限期内仍视为活跃,防止 queue/watchdog 误判假死重复 spawn */
+const ACTIVITY_GRACE_MS = 120_000;
+
 export class WsBridge {
   private sessions: Map<string, WsSession> = new Map();
   private eventListeners: Map<string, Set<(event: string, data: unknown) => void>> = new Map();
   private chatSaveTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
+  /** 每作品的 spawn 串行锁:createSession/sendMessage/stale 重试的 kill-then-spawn
+   *  必须互斥,否则并发触发会产生脱离跟踪的孤儿 CLI 进程(2026-08-06 根因) */
+  private spawnChains: Map<string, Promise<void>> = new Map();
   private browserWss: WebSocketServer;
+
+  /** 串行化同一作品的 spawn 相关操作 */
+  private async withSpawnLock<T>(workId: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.spawnChains.get(workId) ?? Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    this.spawnChains.set(workId, prev.then(() => gate));
+    await prev;
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
+  }
+
+  /** 作品是否活跃:有存活进程,或最近 ACTIVITY_GRACE_MS 内有 CLI 活动。
+   *  queue runner / watchdog 的存活判定必须用这个,而不是只看 cliProcess —
+   *  -p 单回合模式下进程每回合退出是常态,纯内存判定会误判假死(2026-08-06 根因) */
+  isWorkActive(workId: string): boolean {
+    const s = this.sessions.get(workId);
+    if (!s) return false;
+    if (s.cliProcess || s.evalProcess) return true;
+    return Date.now() - (s.lastActivityAt ?? 0) < ACTIVITY_GRACE_MS;
+  }
 
   constructor(_serverPort: number) {
     this.browserWss = new WebSocketServer({ noServer: true });
@@ -278,8 +311,18 @@ export class WsBridge {
 - 合成：使用ffmpeg命令剪辑视频（拼接片段+字幕+配乐+转场）
 - 字幕管线（强制）：
   1. **生成字幕文件**：使用 python3 ~/.claude/skills/content-assembly/scripts/caption_generate.py 生成 ASS 字幕（支持 douyin-highlight/xhs-soft/funny/minimal 等预设风格 + 逐词高亮 karaoke）。如果你有手动时间戳 JSON，也可以用 --timestamps 模式；否则用 --input 自动语音识别模式
-  2. **烧录字幕到视频**：**必须**使用 python3 ~/.claude/skills/content-assembly/scripts/subtitle_burn.py --subs <上一步生成的.ass> 烧录（禁止自行用 ffmpeg drawtext 或手写 ASS/手写 Pillow 方案）
-  3. **字体**：必须使用 ~/.autoviral/fonts/ 下的高质量字体（如 NotoSansCJKsc-Bold.otf），禁止使用系统字体（PingFang SC、Microsoft YaHei 等）
+  2. **烧录字幕到视频（默认路径，必须）**：使用 ffmpeg 原生 ass 滤镜烧录，单次编码、音频直拷：
+     ffmpeg -i composited.mp4 -vf "ass=subs.ass:fontsdir='C\\:/Users/顾庆冲/.autoviral/fonts'" -c:v libx264 -preset veryfast -crf 20 -c:a copy -y output/final.mp4
+     Windows 下盘符冒号需转义（C\\:/）；路径含中文时先 cd 到作品目录用相对路径。**禁止用 ffmpeg drawtext 或手写 Pillow 方案**
+  3. **备用路径**：仅当输入是 SRT 且不需要 karaoke、或 ffmpeg 无 libass 时，才用 python3 ~/.claude/skills/content-assembly/scripts/subtitle_burn.py（注意：它会剥掉 {\\kf} karaoke 标签并忽略 ASS MarginV，ASS+karaoke 场景禁用）
+  4. **字体**：必须使用 ~/.autoviral/fonts/ 下的高质量字体（NotoSansCJKsc-Bold.otf，家族名 Noto Sans CJK SC），禁止使用系统字体；libass 日志出现 fontselect 回退系统字体时必须停下来修正 Fontname
+  5. **布局安全区（强制）**：字幕带（MarginV=430，y≈1390–1550）与数字人/字卡 overlay 坐标必须由同一份布局常量计算且断言不相交；数字人分窗固定预设 scale=420:-2,pad=428:754 + overlay=616:200；合成后在 10%/50%/90% 抽帧复核遮挡
+- BGM 配乐（强制）：
+  1. BGM 只能来自以下渠道：公共素材库音乐（/api/shared-assets 中 music 类）、curl http://localhost:${port}/api/generate/music（MiniMax，可按情绪/BPM/乐器写 prompt）、yt-dlp 下载免版权音乐。**禁止用 ffmpeg 合成正弦波/白噪声/棕噪声等充当 BGM**——这属于静默降质，违反质量第一原则
+  2. BGM 时长必须 ≥ 视频时长；若用短素材循环，单段素材不得短于 60 秒，且接缝处必须交叉淡化，禁止生硬重复
+  3. 混音标准：BGM 音量 0.10–0.15（约 -16~-20dB），不得盖过人声；禁用 normalize=0 之外的爆音风险参数组合前先试听
+  4. 以上渠道全部不可用时，停下来明确报告"无可用 BGM 渠道"，不得在方案中承诺不存在的资源，也不得即兴合成
+- 资源可达性检查（必做）：规划阶段引用任何外部资源通道（Pixabay Music、Pexels、Unsplash、Lyria、即梦等）前，先验证该通道已配置可用（config 中有 apiKey / 接口实测可通）。**未配置的通道不得写进方案**，直接改用已配置的替代通道
 - 公共素材：通过 curl http://localhost:${port}/api/shared-assets 查看可用素材
 - 流水线管理：调用 curl -X POST http://localhost:${port}/api/works/${work.id}/pipeline/advance 更新流水线状态
 
@@ -343,6 +386,10 @@ ${memoryContext}
    */
   async createSession(workId: string, initialPrompt: string, model?: string): Promise<WsSession> {
     logBridge("session_create", workId, { model, promptLen: initialPrompt.length });
+    return this.withSpawnLock(workId, () => this.createSessionLocked(workId, initialPrompt, model));
+  }
+
+  private async createSessionLocked(workId: string, initialPrompt: string, model?: string): Promise<WsSession> {
     const existing = this.sessions.get(workId);
     if (existing?.cliProcess) {
       try { existing.cliProcess.kill("SIGTERM"); } catch { /* dead */ }
@@ -483,6 +530,12 @@ ${memoryContext}
         }
       }).catch(() => {});
     }
+
+    return this.withSpawnLock(workId, () => this.sendMessageLocked(session, text));
+  }
+
+  private async sendMessageLocked(session: WsSession, text: string): Promise<boolean> {
+    const workId = session.workId;
 
     // If CLI is still running (shouldn't normally be, but just in case)
     if (session.cliProcess) {
@@ -681,6 +734,7 @@ ${memoryContext}
     });
 
     session.cliProcess = proc;
+    session.lastActivityAt = Date.now();
 
     // Accumulate assistant text chunks for this turn
     let turnText = "";
@@ -692,6 +746,7 @@ ${memoryContext}
     // Parse NDJSON from stdout
     let buffer = "";
     proc.stdout?.on("data", (data: Buffer) => {
+      session.lastActivityAt = Date.now();
       buffer += data.toString();
       const lines = buffer.split("\n");
       buffer = lines.pop() ?? "";
@@ -964,7 +1019,9 @@ ${memoryContext}
           (session as WsSession & { staleRetried?: boolean }).staleRetried = true;
           logBridge("cli_stale_retry_fresh", session.workId, {});
           session.cliProcess = undefined;
-          (async () => {
+          // 与 queue resume / advance 续命的 spawn 互斥，避免同一作品双 spawn
+          void this.withSpawnLock(session.workId, async () => {
+            if (session.cliProcess) return; // 已被其他路径接管，不再重试
             try {
               const work = await getWork(session.workId);
               const freshPrompt = work
@@ -974,7 +1031,7 @@ ${memoryContext}
             } catch {
               this.spawnCli(session, prompt);
             }
-          })();
+          });
           return; // 新进程已接管 session.cliProcess，不走下方退出收尾
         }
       }
@@ -1267,20 +1324,27 @@ ${memoryContext}
     ws.on("close", () => {
       session.browserSockets.delete(ws);
       if (session.browserSockets.size === 0 && session.cliProcess) {
-        // Kill CLI process when all browsers disconnect (leaving the page = abort)
-        const delay = session.workId.startsWith("trends_") ? 3000 : 1000;
-        setTimeout(() => {
-          if (session.browserSockets.size === 0 && session.cliProcess) {
-            try { session.cliProcess.kill("SIGTERM"); } catch { /* dead */ }
-            session.cliProcess = undefined;
-            if (session.workId.startsWith("trends_")) {
-              this.cleanupTrendSession(session.workId);
-            } else {
-              session.idle = true;
-              this.broadcastToBrowsers(session.workId, { event: "cli_exited", data: { workId: session.workId } });
-            }
+        // 浏览器全断后的 CLI 处理:60 秒重连宽限(此前 1s 就 SIGTERM,关页即杀创作会话,
+        // 回合中断 → advance 永远不来 → 状态卡死重跑 —— 2026-08-06 根因)。
+        // 宽限到期时若 CLI 仍在活跃输出(长回合进行中),继续宽限而不是杀。
+        const graceMs = session.workId.startsWith("trends_") ? 3000 : 60_000;
+        const tryKill = () => {
+          if (session.browserSockets.size > 0 || !session.cliProcess) return;
+          const activeRecently = Date.now() - (session.lastActivityAt ?? 0) < graceMs;
+          if (activeRecently && !session.workId.startsWith("trends_")) {
+            setTimeout(tryKill, graceMs); // 活任务不杀,继续观察
+            return;
           }
-        }, delay);
+          try { session.cliProcess.kill("SIGTERM"); } catch { /* dead */ }
+          session.cliProcess = undefined;
+          if (session.workId.startsWith("trends_")) {
+            this.cleanupTrendSession(session.workId);
+          } else {
+            session.idle = true;
+            this.broadcastToBrowsers(session.workId, { event: "cli_exited", data: { workId: session.workId } });
+          }
+        };
+        setTimeout(tryKill, graceMs);
       }
     });
     ws.on("error", () => session.browserSockets.delete(ws));

@@ -4,7 +4,7 @@ import type { StockProvider } from "../../services/stock-asset-service.js";
 
 export const stockAssetRoutes = new Hono();
 
-/** GET /api/stock-assets/search?q=...&type=image|video|all - search across Openverse + Pexels/Pixabay/Unsplash */
+/** GET /api/stock-assets/search?q=...&type=image|video|all - search across Pexels（优先）/Pixabay/Unsplash */
 stockAssetRoutes.get("/search", async (c) => {
   const query = c.req.query("q");
   if (!query) return c.json({ error: "Query parameter 'q' is required" }, 400);
@@ -20,7 +20,7 @@ stockAssetRoutes.get("/search", async (c) => {
   }
 });
 
-/** GET /api/stock-assets/providers - list configured providers (Openverse always available) */
+/** GET /api/stock-assets/providers - list configured providers（按优先级排序，Pexels 优先） */
 stockAssetRoutes.get("/providers", async (c) => {
   return c.json({ providers: await getConfiguredStockProviders() });
 });

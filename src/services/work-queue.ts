@@ -4,6 +4,9 @@
 
 import * as repo from "../db/work-queue-repo.js";
 import { getWork } from "../work-store.js";
+import { existsSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+import { dataDir } from "../config.js";
 
 /** 会话恢复上限：超过后标记 failed，不再自动恢复 */
 const MAX_RESUME_ATTEMPTS = 5;
@@ -94,7 +97,7 @@ async function tickOnce(d: RunnerDeps): Promise<void> {
       repo.setStatus(item.workId, "failed");
       continue;
     }
-    if (work.status === "reviewing" || work.status === "published") {
+    if (work.status === "reviewing" || work.status === "approved" || work.status === "published") {
       repo.setStatus(item.workId, "done");
       continue;
     }
@@ -103,6 +106,9 @@ async function tickOnce(d: RunnerDeps): Promise<void> {
       continue;
     }
     if (!d.isSessionAlive(item.workId)) {
+      // 成片已存在时不 resume:作品实际已完成只是未上报,
+      // 交给 reconcile(每 60s)修复状态,避免对已完成的作坊重复渲染(2026-08-06 根因)
+      if (hasFinalOutput(item.workId)) continue;
       const attempts = repo.incrementResumeAttempts(item.workId);
       if (attempts > MAX_RESUME_ATTEMPTS) {
         repo.setStatus(item.workId, "failed");
@@ -118,4 +124,17 @@ async function tickOnce(d: RunnerDeps): Promise<void> {
   repo.setStatus(next.workId, "running");
   repo.incrementResumeAttempts(next.workId);
   await d.startWork(next.workId).catch(() => {});
+}
+
+/** 检查作品 output/ 下是否已有成片(final*.mp4/mov/webm),与 reconcile 的判定一致 */
+function hasFinalOutput(workId: string): boolean {
+  try {
+    const outDir = join(dataDir, "works", workId, "output");
+    if (!existsSync(outDir)) return false;
+    return readdirSync(outDir).some(
+      (f) => /final/i.test(f) && /\.(mp4|mov|webm)$/i.test(f),
+    );
+  } catch {
+    return false;
+  }
 }

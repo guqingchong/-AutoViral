@@ -9,24 +9,33 @@ class MockLocator {
   clicks: string[] = [];
   uploads: Array<string | string[]> = [];
   fills: string[] = [];
-  constructor(private label = "") {}
+  constructor(private label = "", private waitFails = false) {}
   first() { return this; }
   async fill(v: string) { this.fills.push(v); }
   async click() { this.clicks.push(this.label); }
   async setInputFiles(p: string | string[]) { this.uploads.push(p); }
   async press() {}
+  async waitFor() { if (this.waitFails) throw new Error("locator waitFor timeout"); }
+  async isVisible() { return true; }
 }
 
 class MockPage {
   currentUrl = "https://creator.xiaohongshu.com/publish/publish";
   navigations: string[] = [];
   locators: MockLocator[] = [];
+  /** false 时模拟"发布后无任何成功信号"（回归：不得假报成功） */
+  confirmSuccess = true;
   async goto(url: string) { this.navigations.push(url); }
   url() { return this.currentUrl; }
   async waitForTimeout() {}
+  async waitForURL() {
+    if (!this.confirmSuccess) throw new Error("waitForURL timeout");
+    this.currentUrl = "https://creator.xiaohongshu.com/publish/success";
+  }
   async close() {}
   locator(selector: string) {
-    const l = new MockLocator(selector);
+    const waitFails = !this.confirmSuccess && selector.startsWith("text=/");
+    const l = new MockLocator(selector, waitFails);
     this.locators.push(l);
     return l;
   }
@@ -117,5 +126,13 @@ describe("XiaohongshuPublisher", () => {
     });
     expect(res.success).toBe(true);
     expect(pub.getMockPage().clickLog().some((s) => s.includes("发布视频"))).toBe(true);
+  });
+
+  it("发布结果无法确认时按失败处理（不假报成功）", async () => {
+    const pub = new TestXHS();
+    pub.getMockPage().confirmSuccess = false;
+    const res = await pub.publish({ workId: "w1", videoPath: "/tmp/v.mp4", title: "T" });
+    expect(res.success).toBe(false);
+    expect(res.error).toContain("无法确认");
   });
 });

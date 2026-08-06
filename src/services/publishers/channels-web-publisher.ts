@@ -60,8 +60,36 @@ export class ChannelsWebPublisher extends PlaywrightPublisher {
 
     // 发表
     await page.locator('button:has-text("发表")').first().click();
-    await page.waitForTimeout(5000);
+    await page.waitForTimeout(1500);
 
-    return { success: true, postUrl: page.url() };
+    // 可能的二次确认弹窗，出现则确认
+    const confirmBtn = page.locator(
+      'div[role="dialog"] button:has-text("发表"), div[role="dialog"] button:has-text("确定"), [class*="modal"] button:has-text("确定")',
+    ).first();
+    if (await confirmBtn.isVisible().catch(() => false)) {
+      await confirmBtn.click().catch(() => {});
+    }
+
+    // 真实校验发布结果 —— 此前点击后无条件返回成功（假成功）。
+    // 成功信号：跳转动态列表页 或 成功提示；失败信号：错误提示；超时按失败处理。
+    const SUCCESS_TEXT = "text=/发表成功|发布成功|提交成功|审核中/";
+    const FAILURE_TEXT = "text=/发表失败|发布失败|上传失败|审核不通过|包含违规|不符合/";
+    const outcome = await Promise.race([
+      page.waitForURL(/platform\/post\/list|platform\/home/, { timeout: 60000 }).then(() => "success" as const),
+      page.locator(SUCCESS_TEXT).first().waitFor({ state: "visible", timeout: 60000 }).then(() => "success" as const),
+      page.locator(FAILURE_TEXT).first().waitFor({ state: "visible", timeout: 60000 }).then(() => "failed" as const),
+    ]).catch(() => "timeout" as const);
+
+    if (outcome === "success") {
+      return { success: true, postUrl: page.url() };
+    }
+    if (outcome === "failed") {
+      const errText = await page.locator(FAILURE_TEXT).first().textContent().catch(() => null);
+      return { success: false, error: `视频号发布被平台拒绝：${errText?.trim() ?? "未知错误"}` };
+    }
+    return {
+      success: false,
+      error: "视频号发布结果无法确认（60 秒内未出现成功提示或页面跳转），已按失败处理。请到视频号助手人工确认后重试。",
+    };
   }
 }

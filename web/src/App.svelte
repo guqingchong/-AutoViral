@@ -465,7 +465,7 @@
               <span class="field-label-sm">即梦 SecretKey（AI生图）</span>
               <input type="text" bind:value={jimengSecretKey} placeholder="火山引擎 SecretKey" class="key-input" />
             </label>
-            <p class="hint-sm">Pexels/Pixabay/Unsplash 用于素材搜索；即梦用于 AI 生图/生视频。Openverse 无需配置即可使用。</p>
+            <p class="hint-sm">Pexels/Pixabay/Unsplash 用于素材搜索（优先走 Pexels）；即梦用于 AI 生图/生视频。</p>
           </div>
         </div>
 

@@ -6,6 +6,7 @@ export type DbWorkStatus =
   | "assetting"
   | "assembling"
   | "reviewing"
+  | "approved"
   | "published"
   | "failed";
 export type DbStepStatus = "pending" | "active" | "evaluating" | "done" | "skipped" | "eval_blocked";

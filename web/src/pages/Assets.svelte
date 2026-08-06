@@ -338,8 +338,8 @@
 
   {#if mainTab === "assets"}
   <section class="panel">
-    <h2>素材搜索（Openverse 免费 + Pexels / Pixabay / Unsplash）</h2>
-    <p class="hint">Openverse 无需 API Key 即可搜索。配置 Pexels/Pixabay/Unsplash API Key 可获得更多高质量素材。</p>
+    <h2>素材搜索（Pexels 优先 + Pixabay / Unsplash 补充）</h2>
+    <p class="hint">网上素材搜索优先走 Pexels。在设置页配置 Pexels API Key 即可开始搜索；Pixabay/Unsplash 为可选补充源。</p>
     {#if onOpenSettings}
       <button class="btn-settings-link" onclick={() => onOpenSettings?.()}>⚙ 配置素材 API Key</button>
     {/if}

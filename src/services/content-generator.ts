@@ -23,6 +23,8 @@ export interface GeneratedScript {
 
 export interface ContentGenOptions {
   toneProfile?: Record<string, unknown> | null;
+  /** 生成用模型（默认由 runJsonPrompt 决定，批量链路传 config.scriptModel） */
+  model?: string;
 }
 
 function buildContext(topic: DbTopic, platform: string): string {
@@ -52,11 +54,12 @@ async function generateOutline(topic: DbTopic, platform: string, opts?: ContentG
       buildContext(topic, platform),
       `目标长度 1500–3000 字。`,
       `大纲需包含：标题、核心论点、3-5 个主要章节（每章含要点）、开头钩子、结尾 CTA。`,
-      `输出 JSON：{"title":"标题","hook":"开头钩子","sections":[{"heading":"章节标题","points":["要点1","要点2"]}],"cta":"结尾CTA"}`,
+      `**事实密度要求**：每个章节必须包含至少 1 个具名事实锚点——具体数字/日期/政策文件名/公司或人物名/信源（如"150号文""标普信评""115家"），禁止只有空泛概念的章节。`,
+      `输出 JSON：{"title":"标题","hook":"开头钩子","sections":[{"heading":"章节标题","points":["要点1","要点2"],"facts":["事实锚点1"]}],"cta":"结尾CTA"}`,
     ].join("\n"),
     evolution
   );
-  return runJsonPrompt<Record<string, unknown>>(prompt, { timeoutMs: 120_000 });
+  return runJsonPrompt<Record<string, unknown>>(prompt, { timeoutMs: 120_000, model: opts?.model });
 }
 
 /**
@@ -75,11 +78,13 @@ async function expandOutline(
     `- 口语化、有信息密度、自然不生硬`,
     `- 每个章节展开 300-600 字`,
     `- 保持大纲的结构和论点`,
+    `- **事实密度硬指标**：正文中必须保留并展开大纲里的事实锚点；每分钟阅读量（约 300 字）至少包含 2 个具名事实（数字/日期/政策名/主体名/信源）。禁止"近年来""相关部门""业内人士"这类无出处模糊表述`,
+    `- **禁止无出处断言**：涉及政策、数据、事件的陈述必须指明来源（如"财新报道""标普信评显示""150号文明确"），没有来源支撑的断言宁可不写`,
     `大纲：${JSON.stringify(outline)}`,
     buildContext(topic, platform),
     `输出 JSON：{"title":"标题","content":"完整正文（含换行，1500-3000字）"}`,
   ].join("\n");
-  return runJsonPrompt<GeneratedArticle>(prompt, { timeoutMs: 180_000 });
+  return runJsonPrompt<GeneratedArticle>(prompt, { timeoutMs: 180_000, model: opts?.model });
 }
 
 /**
@@ -94,12 +99,12 @@ async function refineArticle(article: GeneratedArticle, opts?: ContentGenOptions
     `2. 优化段落过渡，让行文更流畅`,
     `3. 确保结尾 CTA 有力、明确`,
     `4. 修正任何生硬或重复的表达`,
-    `5. 保持原有信息和结构不变`,
+    `5. 保持原有信息、数据和事实锚点不变（不得删改具体数字/日期/信源）`,
     `原标题：${article.title}`,
     `原文：${article.content}`,
     `输出 JSON：{"title":"精修后标题","content":"精修后正文"}`,
   ].join("\n");
-  return runJsonPrompt<GeneratedArticle>(prompt, { timeoutMs: 180_000 });
+  return runJsonPrompt<GeneratedArticle>(prompt, { timeoutMs: 180_000, model: opts?.model });
 }
 
 export async function generateArticleFromTopic(topic: DbTopic, platform: string, opts?: ContentGenOptions): Promise<GeneratedArticle> {
@@ -125,11 +130,12 @@ export async function generateScriptFromArticle(article: GeneratedArticle, durat
       `- 每个场景对应一段口播文案 + 画面描述`,
       `- 口播自然、适合数字人朗读`,
       `- 结尾有明确 CTA`,
+      `- **事实密度硬指标**：保留文章中的全部具名事实（数字/日期/政策名/主体/信源），每分钟口播至少 2 个；禁止把具体事实泛化成"很多地方""相关规定"`,
       `标题：${article.title}`,
       `文章：${article.content}`,
       `输出 JSON：{"scenes":[{"timestamp":"0:00-0:15","narration":"口播文案","visual":"画面描述"}],"duration":${duration}}`,
     ].join("\n"),
     evolution
   );
-  return runJsonPrompt<GeneratedScript>(prompt, { timeoutMs: 180_000 });
+  return runJsonPrompt<GeneratedScript>(prompt, { timeoutMs: 180_000, model: opts?.model });
 }

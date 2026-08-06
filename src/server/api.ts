@@ -1879,6 +1879,12 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
           `- Subject is not cropped unless Strategy A was deliberately chosen`,
           `\`ffmpeg -i final.mp4 -ss 3 -frames:v 1 -y /tmp/verify.png\``,
           ``,
+          `## BGM 配乐与布局安全（强制）`,
+          `- BGM 只能来自：公共素材库 music、/api/generate/music（MiniMax）、yt-dlp 免版权音乐。**禁止用 ffmpeg 合成正弦波/白噪声/棕噪声充当 BGM**——属于静默降质`,
+          `- BGM 时长必须 ≥ 视频时长；循环素材单段不得短于 60 秒且接缝交叉淡化；混音音量 0.10–0.15（约 -16~-20dB），不得盖过人声`,
+          `- **布局安全区断言（必做）**：数字人窗口/字卡 overlay 的坐标矩形 与 字幕带矩形 不得相交。先确定字幕带的 y 区间（含字号行高），再选 overlay 坐标使其完全避开；二者由同一份布局常量计算，禁止分别拍脑袋写坐标`,
+          `- 合成完成后抽帧复核：在 10%/50%/90% 三个时间点抽帧检查字幕与数字人/字卡无遮挡`,
+          ``,
           `## REQUIRED: Generate Publishing Copytext & Tags`,
           `After producing the final video, you MUST also generate a publishing copytext file.`,
           `Write it to \`output/copytext.md\` in the work directory.`,
@@ -2955,6 +2961,8 @@ interface BatchConvertOptions {
   assetSource?: string;
   /** 成本档：eco（禁 AI 视频生成）| premium */
   assetBudget?: string;
+  /** 质量评审闸门：默认开（true），显式传 false 关闭 */
+  evaluationMode?: boolean;
 }
 
 const CONTENT_FORM_LABELS: Record<string, string> = {
@@ -2996,6 +3004,10 @@ function buildAssetConstraintSection(assetForm?: string, assetSource?: string, a
   if (assetForm) lines.push(`- 素材形态: ${ASSET_FORM_LABELS[assetForm] ?? assetForm}`);
   if (assetSource) lines.push(`- 素材来源: ${ASSET_SOURCE_LABELS[assetSource] ?? assetSource}`);
   if (assetBudget) lines.push(`- 成本档: ${ASSET_BUDGET_LABELS[assetBudget] ?? assetBudget}`);
+  // 口播类长视频的质量底线:纯图片轮播观感廉价,video-mix/auto 下必须以真实视频混剪为主
+  if (assetForm === "video-mix" || assetForm === "auto" || !assetForm) {
+    lines.push(`- 质量底线: 超过 60 秒的口播类视频必须以真实视频混剪为主(优先 Pexels 竖版视频,type=video 搜索),禁止全片纯图片轮播+Ken Burns;图片仅作为信息补充(数据卡/示意图),占比不超过 30%`);
+  }
   return lines.length ? `素材约束:\n${lines.join("\n")}` : "";
 }
 
@@ -3062,13 +3074,16 @@ async function runBatchConvert(
           assetSource: assetSource as any,
           assetBudget: assetBudget as any,
           dualOutput,
+          evaluationMode: body.evaluationMode ?? true,
         });
         item.workId = work.id;
 
         item.stage = "generating";
         const platform = platforms[0] ?? "douyin";
-        const article = await generateArticleFromTopic(topic, platform);
-        const script = await generateScriptFromArticle(article, duration);
+        const scriptCfg = await loadConfig();
+        const scriptModel = scriptCfg.scriptModel ?? "opus";
+        const article = await generateArticleFromTopic(topic, platform, { model: scriptModel });
+        const script = await generateScriptFromArticle(article, duration, { model: scriptModel });
 
         try {
           createArticle({ work_id: work.id, topic_id: topic.id, title: article.title, content: article.content, platform, status: "ready" });

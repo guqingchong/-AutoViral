@@ -66,7 +66,8 @@ PRESET_STYLES = {
         "outline_width": 3,
         "shadow": 2,
         "alignment": 2,
-        "margin_v": 960,
+        # 底部安全带:基线 y≈1490(1920-430),避开抖音底部 20% UI 遮挡区(y>1536)与顶部数字人分窗
+        "margin_v": 430,
         "margin_l": 20,
         "margin_r": 20,
         "karaoke": True,
@@ -85,7 +86,7 @@ PRESET_STYLES = {
         "outline_width": 4,
         "shadow": 2,
         "alignment": 2,
-        "margin_v": 960,
+        "margin_v": 430,
         "margin_l": 20,
         "margin_r": 20,
         "karaoke": False,
@@ -123,7 +124,7 @@ PRESET_STYLES = {
         "outline_width": 4,
         "shadow": 2,
         "alignment": 2,
-        "margin_v": 960,
+        "margin_v": 430,
         "margin_l": 20,
         "margin_r": 20,
         "karaoke": True,
@@ -373,12 +374,13 @@ def build_style_config(style_name: str, overrides: dict) -> dict:
         config["outline_width"] = overrides["stroke_width"]
     if overrides.get("position"):
         pos = overrides["position"]
+        # Alignment=2(底部锚定)时 MarginV 是距底边的距离,值越大越高:top=1200 / center=960 / bottom=430(底部安全带)
         if pos == "top":
-            config["margin_v"] = 400
+            config["margin_v"] = 1200
         elif pos == "center":
             config["margin_v"] = 960
         elif pos == "bottom":
-            config["margin_v"] = 1200
+            config["margin_v"] = 430
 
     return config
 

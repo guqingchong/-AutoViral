@@ -40,6 +40,7 @@ class MockPage {
 
   async goto(): Promise<void> {}
   async waitForTimeout(): Promise<void> {}
+  async waitForURL(): Promise<void> {}
   url(): string {
     return "https://zhuanlan.zhihu.com/p/12345";
   }

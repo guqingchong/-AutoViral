@@ -15,6 +15,15 @@ description: Generate images and videos for Douyin (抖音) and Xiaohongshu (小
 
 **绝不在未经用户确认的情况下生成素材。** 每次生成前都要描述即将生成的内容，等用户说"确认"或类似的话后，再调用 API。这样可以避免浪费生成额度，同时保证用户拥有创意控制权。
 
+## 批量生成效率（强制）
+
+多张图片（≥4 张）生成**必须并发执行**，禁止 for 循环串行等待：
+
+- shell：后台任务 + `wait`，并发度 4（如 `for i in 1..N; do (curl ... &) ; done; wait`，或 `xargs -P4`）
+- Python：`concurrent.futures.ThreadPoolExecutor(max_workers=4)`
+- 即梦/MiniMax 等 API 均支持并发提交后轮询；实测 12 张图串行约 11 分钟，并发 4 路约 3 分钟
+- 例外：样本测试阶段（前 1-2 张）仍串行，确认风格/质量达标后再并发批量
+
 ---
 
 ## 视频五维约束框架（全网搜索 / AI 生成 必读）

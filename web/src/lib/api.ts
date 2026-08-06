@@ -170,7 +170,7 @@ export async function deleteScheduleEntry(id: string): Promise<void> {
 
 export type WorkType = "short-video" | "image-text";
 export type ContentCategory = "anxiety" | "conflict" | "comedy" | "envy" | "other";
-export type WorkStatus = "draft" | "researching" | "planning" | "assetting" | "assembling" | "reviewing" | "published" | "failed";
+export type WorkStatus = "draft" | "researching" | "planning" | "assetting" | "assembling" | "reviewing" | "approved" | "published" | "failed";
 
 export interface WorkSummary {
   id: string;

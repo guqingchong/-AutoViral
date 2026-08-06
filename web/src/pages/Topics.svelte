@@ -28,13 +28,15 @@
   // 视频制作控制条件（全自动模式）：时长/风格/素材样式/配音风格
   let batchDuration = $state<number>(60);
   let batchContentForm = $state<string>("knowledge");
-  let batchAssetForm = $state<string>("auto");
+  let batchAssetForm = $state<string>("video-mix");
   let batchAssetSource = $state<string>("stock");
   let batchAssetBudget = $state<string>("eco");
   let batchVoiceStyle = $state<string>("male-qn-qingse");
   let myVoices = $state<VoiceItem[]>([]);
   let favVoices = $state<VoiceItem[]>([]);
   let batchVoiceMode = $state<"cloned" | "ai">("ai");
+  // 质量评审闸门：默认开（每阶段完成后由独立评审会话把关,不合格打回重做）
+  let batchEvaluation = $state<boolean>(true);
 
   // 模式/列表变化时同步选中的音色，避免提交了另一模式下的 voice_id
   $effect(() => {
@@ -343,6 +345,7 @@
           assetBudget: isVideo ? batchAssetBudget : undefined,
           voiceStyle: isVideo ? batchVoiceStyle : undefined,
           voiceMode: isVideo ? batchVoiceMode : undefined,
+          evaluationMode: batchEvaluation,
         }),
       });
       const data = await res.json();
@@ -868,6 +871,10 @@
           {/if}
           <div class="batch-info">
             <p>将选中的 <strong>{selectedTopicIds.size}</strong> 个选题批量转为作品。</p>
+            <label class="batch-eval-toggle" style="display:flex;align-items:center;gap:6px;margin:4px 0;cursor:pointer;">
+              <input type="checkbox" bind:checked={batchEvaluation} />
+              质量评审(每阶段由独立评审把关,不合格自动打回重做,强烈建议开启)
+            </label>
             {#if batchTemplateId || batchDigitalHumanId}
               <p class="batch-auto-notice">已选择模板/数字人 → <strong>全自动模式</strong>：AI 将无人值守执行完整流水线，本窗口会实时显示每个选题的制作进度。</p>
             {:else}
