@@ -50,8 +50,8 @@ export class XiaohongshuPublisher extends PlaywrightPublisher {
       await page.waitForTimeout(3000);
     }
 
-    // 填写标题（小红书图文标题上限 20 字）
-    const title = imagePaths.length > 0 ? input.title.slice(0, 20) : input.title;
+    // 填写标题（小红书标题上限 20 字,超出时提交会被平台拒绝 —— 2026-08-06 实证 22/20 标红）
+    const title = input.title.slice(0, 20);
     const titleInput = page.locator('input[placeholder*="标题"]').first();
     await titleInput.fill(title);
 
@@ -70,19 +70,22 @@ export class XiaohongshuPublisher extends PlaywrightPublisher {
       }
     }
 
-    // 发布：视频上传后平台要转码处理,期间发布按钮置灰不可点
-    // (旧逻辑固定等 3 秒就点,大视频必超时 —— 2026-08-06 实证)。
-    // 注意必须精确文本匹配:has-text("发布") 会先命中左侧栏「发布笔记」导航按钮。
-    let publishBtn = page.locator('button:text-is("发布")').first();
-    if ((await publishBtn.count()) === 0) {
-      publishBtn = page.locator('button:has-text("发布")').last();
-    }
+    // 发布：底部发布栏是 <xhs-publish-btn> Web Component,内部按钮在**封闭
+    // shadow root** 里,任何 button/text 选择器都选不到(2026-08-06 实证:
+    // 截图可见按钮但 innerText/querySelector 均无)。改用组件属性驱动:
+    // 等组件出现 → 等 submit-disabled=false(转码期间为 true)→ 按坐标点右半侧提交区。
+    const comp = page.locator("xhs-publish-btn").first();
+    await comp.waitFor({ state: "visible", timeout: 120000 });
     const enableDeadline = Date.now() + 180_000;
     while (Date.now() < enableDeadline) {
-      if (await publishBtn.isEnabled().catch(() => false)) break;
+      const disabled = await comp.getAttribute("submit-disabled").catch(() => null);
+      if (disabled === "false") break;
       await page.waitForTimeout(2000);
     }
-    await publishBtn.click();
+    const box = await comp.boundingBox();
+    if (!box) return { success: false, error: "小红书发布组件不可见（xhs-publish-btn 无布局）" };
+    // 提交按钮在组件右半部(左为暂存离开,右为红色发布);shadow 内原生命中
+    await comp.click({ position: { x: box.width * 0.62, y: box.height / 2 } });
     await page.waitForTimeout(1500);
 
     // 可能的二次确认弹窗，出现则确认

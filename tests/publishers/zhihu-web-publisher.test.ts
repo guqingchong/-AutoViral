@@ -48,7 +48,10 @@ class MockPage {
     return "https://zhuanlan.zhihu.com/p/12345";
   }
   locator(selector: string): MockLocator {
-    return selector.includes('input[type="file"]') ? this.fileLocator : this.genericLocator;
+    if (selector.includes('input[type="file"]')) return this.fileLocator;
+    // 风控页检测选择器默认无匹配(页面正常)
+    if (selector.includes("请求存在异常")) return new MockLocator(0);
+    return this.genericLocator;
   }
   keyboard = {
     type: async (t: string) => {

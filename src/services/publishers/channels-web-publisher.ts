@@ -38,6 +38,26 @@ export class ChannelsWebPublisher extends PlaywrightPublisher {
     return null;
   }
 
+  /**
+   * 轮询等待 frame 内文件输入可用(最长 maxMs)。
+   * 不用 waitForSelector:wujie 会重建 frame 文档导致等待悬挂 ——
+   * 实测 input 已存在于 document(evaluate 可见)但 waitForSelector 超时。
+   * 每轮重新解析 frame(wujie 可能替换 frame 对象),用 frame.$ 直接探测。
+   */
+  private async waitFileInput(page: Page, maxMs = 120_000): Promise<{ frame: Frame; input: import("playwright").ElementHandle } | null> {
+    const deadline = Date.now() + maxMs;
+    let frame = await this.waitMicroFrame(page);
+    while (Date.now() < deadline) {
+      if (frame) {
+        const handle = await frame.$('input[type="file"]').catch(() => null);
+        if (handle) return { frame, input: handle };
+      }
+      await page.waitForTimeout(2000);
+      frame = page.frames().find((f) => f.url().includes("/micro/")) ?? frame;
+    }
+    return null;
+  }
+
   /** 关掉初始化期间可能弹出的引导/绑定弹窗（我知道了/取消），不强制 */
   private async dismissDialogs(frame: Frame): Promise<void> {
     for (const text of ["我知道了", "取消", "暂不"]) {
@@ -52,28 +72,20 @@ export class ChannelsWebPublisher extends PlaywrightPublisher {
   protected override async doUpload(page: Page, input: PublishInput): Promise<PublishOutput> {
     await page.goto(this.uploadUrl, { waitUntil: "domcontentloaded" });
 
-    // 微前端偶发"页面初始化中"挂起:文件输入 90 秒不出现时重载页面重试一次(2026-08-06 实证)
-    let frame = await this.waitMicroFrame(page);
-    let attached = false;
-    if (frame) {
-      attached = await frame
-        .waitForSelector('input[type="file"]', { state: "attached", timeout: 90000 })
-        .then(() => true)
-        .catch(() => false);
-    }
-    if (!frame || !attached) {
+    // 微前端偶发"页面初始化中"挂起:文件输入 120 秒不出现时重载页面重试一次(2026-08-06 实证)
+    let ready = await this.waitFileInput(page);
+    if (!ready) {
       await page.reload({ waitUntil: "domcontentloaded" });
-      frame = await this.waitMicroFrame(page);
-      if (!frame) {
-        return { success: false, error: "视频号发表页微前端加载超时（重载后 /micro/ frame 仍未出现）" };
-      }
-      await frame.waitForSelector('input[type="file"]', { state: "attached", timeout: 90000 });
+      ready = await this.waitFileInput(page);
     }
+    if (!ready) {
+      return { success: false, error: "视频号发表页微前端加载超时（重载后文件输入仍未出现）" };
+    }
+    const { frame, input: fileHandle } = ready;
     await this.dismissDialogs(frame);
 
     // 上传视频
-    const fileInput = frame.locator('input[type="file"][accept*="video"], input[type="file"]').first();
-    await fileInput.setInputFiles(input.videoPath);
+    await fileHandle.setInputFiles(input.videoPath);
 
     // 等待上传完成（进度条消失或出现封面帧，视频越大越慢）
     await frame

@@ -15,6 +15,8 @@ class MockLocator {
   async click() { this.clicks.push(this.label); }
   async count() { return 1; }
   async isEnabled() { return true; }
+  async getAttribute(name: string) { return name === "submit-disabled" ? "false" : null; }
+  async boundingBox() { return { x: 0, y: 0, width: 100, height: 40 }; }
   async setInputFiles(p: string | string[]) { this.uploads.push(p); }
   async press() {}
   async waitFor() { if (this.waitFails) throw new Error("locator waitFor timeout"); }

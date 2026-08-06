@@ -76,9 +76,27 @@ export class ZhihuWebPublisher extends PlaywrightPublisher {
     }
   }
 
+  /** 知乎风控页检测(code 40362「请求存在异常,暂时限制本次访问」),触发后给可操作指引而非无谓重试 */
+  private async checkRiskControl(page: Page): Promise<PublishOutput | null> {
+    const blocked = await page
+      .locator("text=/请求存在异常|暂时限制本次访问|40362/")
+      .count()
+      .catch(() => 0);
+    if (blocked > 0) {
+      return {
+        success: false,
+        error:
+          "知乎风控限制本次访问（40362，自动化请求过密触发）。请暂停 2-4 小时后重试；若持续被限，按页面提示手机摇一摇或登录后私信知乎小管家解除。",
+      };
+    }
+    return null;
+  }
+
   protected override async doUpload(page: Page, input: PublishInput): Promise<PublishOutput> {
     await page.goto(this.uploadUrl, { waitUntil: "domcontentloaded" });
     await page.waitForTimeout(3000);
+    const blocked = await this.checkRiskControl(page);
+    if (blocked) return blocked;
     await this.dismissOverlays(page);
 
     const content =
