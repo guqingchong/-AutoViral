@@ -1,16 +1,23 @@
-﻿import { readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import type { Publisher, PublishInput, PublishOutput } from "./types.js";
 import { getCredential } from "../../db/platform-credentials-repo.js";
 
 const MEMBER_BASE = "https://member.bilibili.com";
+const UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+/** 当前 Web 投稿端的上传 profile（旧 ugcfr/pc3 已于 2026 年前后下线，调用一律 403 HTML） */
+const UPLOAD_PROFILE = "ugcfx/bup";
 
 interface BiliPreUpload {
-  end_point?: string;
-  upos_uri?: string;
+  OK?: number;
   auth?: string;
   biz_id?: number;
+  chunk_size?: number;
+  endpoint?: string;
+  endpoints?: string[];
+  put_query?: string;
+  upos_uri?: string;
   error?: number;
-  OK?: number;
 }
 
 interface BiliAddResponse {
@@ -20,13 +27,19 @@ interface BiliAddResponse {
 }
 
 /**
- * Bilibili publisher using the member web upload + submit API.
+ * Bilibili publisher using the member web upload (upos chunked) + submit API.
  *
  * Credentials (stored in platform_credentials):
  *   - access_token: the member SESSDATA cookie value
  *   - csrf: the bili_jct cookie value
  *
- * Flow: pre-upload -> single-part upload -> submit (x/vu/web/add).
+ * Flow (与当前 york 投稿前端一致，2026-08 逆向验证):
+ *   1. GET  /preupload?profile=ugcfx/bup&r=upos   → auth/biz_id/chunk_size/endpoint/upos_uri
+ *   2. POST {endpoint}{upos_uri}?uploads&output=json&profile&partsize&biz_id&filesize → upload_id
+ *      （filesize 必传，缺了 upos 一律 400 InvalidArgument）
+ *   3. PUT  ?partNumber=N&uploadId&chunk=N-1      → MULTIPART_PUT_SUCCESS
+ *   4. POST ?output=json&name&uploadId&biz_id&profile  parts → OK:1
+ *   5. POST /x/vu/web/add/v3?csrf=                → bvid（v2 已 404 下线）
  */
 export class BilibiliOfficialPublisher implements Publisher {
   readonly platform = "bilibili";
@@ -50,43 +63,87 @@ export class BilibiliOfficialPublisher implements Publisher {
 
     try {
       const videoBuffer = await readFile(input.videoPath);
+      const size = videoBuffer.byteLength;
+      const cookie = this.cookieHeader();
 
-      const preRes = await fetch(`${MEMBER_BASE}/preupload?name=video.mp4&size=${videoBuffer.byteLength}`, {
-        headers: { Cookie: this.cookieHeader() },
-      });
-      const pre = (await preRes.json()) as BiliPreUpload;
-      if (pre.error !== undefined && pre.error !== 0) {
-        return { success: false, error: `B站预上传失败：${JSON.stringify(pre)}` };
+      // 1. preupload
+      const preRes = await fetch(
+        `${MEMBER_BASE}/preupload?name=video.mp4&size=${size}&profile=${encodeURIComponent(UPLOAD_PROFILE)}&r=upos`,
+        { headers: { Cookie: cookie, "User-Agent": UA, Referer: `${MEMBER_BASE}/york/videoup` } },
+      );
+      const pre = (await preRes.json().catch(() => null)) as BiliPreUpload | null;
+      if (!pre || pre.OK !== 1 || !pre.auth || !pre.upos_uri || !pre.endpoint) {
+        return {
+          success: false,
+          error: `B站预上传失败：HTTP ${preRes.status} ${pre ? JSON.stringify(pre).slice(0, 200) : "非 JSON 响应（登录态可能失效，请到发布中心重测）"}`,
+        };
       }
-      const uposUri = pre.upos_uri ?? "";
-      const endpoint = (pre.end_point ?? "https://upos-sz-uposbilibili.com").replace(/^https?:\/\//, "");
-      const uposPath = uposUri.replace(/^upos:\/\//, "");
 
-      const uploadRes = await fetch(`https://${endpoint}/${uposPath}`, {
-        method: "POST",
-        headers: {
-          Cookie: this.cookieHeader(),
-          "X-Upos-Auth": pre.auth ?? "",
-          "Content-Type": "application/octet-stream",
-          "Content-Length": String(videoBuffer.byteLength),
+      const uposPath = pre.upos_uri.replace(/^upos:\/\//, "");
+      const base = `https:${pre.endpoint}/${uposPath}`;
+      const uposHeaders = { "X-Upos-Auth": pre.auth, "User-Agent": UA };
+      const chunkSize = pre.chunk_size && pre.chunk_size > 0 ? pre.chunk_size : 10 * 1024 * 1024;
+
+      // 2. init multipart（uploadsQuery 四参数缺一不可，尤其 filesize）
+      const initQuery =
+        `uploads&output=json&profile=${encodeURIComponent(UPLOAD_PROFILE)}` +
+        `&partsize=${chunkSize}&biz_id=${pre.biz_id}&filesize=${size}`;
+      const initRes = await fetch(`${base}?${initQuery}`, { method: "POST", headers: uposHeaders });
+      const initJson = (await initRes.json().catch(() => null)) as { upload_id?: string } | null;
+      if (!initRes.ok || !initJson?.upload_id) {
+        return { success: false, error: `B站上传初始化失败：HTTP ${initRes.status}` };
+      }
+      const uploadId = initJson.upload_id;
+
+      // 3. chunk upload（顺序上传，单块失败重试 3 次）
+      const parts: Array<{ partNumber: number; etag: string }> = [];
+      const totalChunks = Math.ceil(size / chunkSize);
+      for (let idx = 0; idx < totalChunks; idx++) {
+        const partNumber = idx + 1;
+        const chunk = videoBuffer.subarray(idx * chunkSize, Math.min(size, (idx + 1) * chunkSize));
+        let ok = false;
+        let lastStatus = 0;
+        for (let attempt = 0; attempt < 3 && !ok; attempt++) {
+          const putRes = await fetch(
+            `${base}?partNumber=${partNumber}&uploadId=${uploadId}&chunk=${idx}`,
+            {
+              method: "PUT",
+              headers: { ...uposHeaders, "Content-Type": "application/octet-stream" },
+              body: chunk,
+            },
+          );
+          lastStatus = putRes.status;
+          ok = putRes.ok;
+          if (!ok) await putRes.text().catch(() => "");
+        }
+        if (!ok) {
+          return { success: false, error: `B站分片 ${partNumber}/${totalChunks} 上传失败：HTTP ${lastStatus}` };
+        }
+        parts.push({ partNumber, etag: "etag" }); // upos complete 不校验 etag 内容
+      }
+
+      // 4. complete multipart
+      const completeRes = await fetch(
+        `${base}?output=json&name=video.mp4&uploadId=${uploadId}&biz_id=${pre.biz_id}&profile=${encodeURIComponent(UPLOAD_PROFILE)}`,
+        {
+          method: "POST",
+          headers: { ...uposHeaders, "Content-Type": "application/json" },
+          body: JSON.stringify({ parts }),
         },
-        body: videoBuffer,
-      });
-      if (!uploadRes.ok) {
-        return { success: false, error: `B站上传失败：HTTP ${uploadRes.status}` };
+      );
+      const completeJson = (await completeRes.json().catch(() => null)) as { OK?: number } | null;
+      if (!completeRes.ok || completeJson?.OK !== 1) {
+        return { success: false, error: `B站上传完成确认失败：HTTP ${completeRes.status}` };
       }
 
-      const parts = [{ partNumber: 1, etag: await uploadRes.text() }];
-      await fetch(`https://${endpoint}/${uposPath}?output=json`, {
-        method: "POST",
-        headers: { Cookie: this.cookieHeader(), "Content-Type": "application/json" },
-        body: JSON.stringify({ parts }),
-      });
-
-      const addRes = await fetch(`${MEMBER_BASE}/x/vu/web/add/v2`, {
+      // 5. submit（add/v3，v2 已下线 404；filename 用 upos key 去扩展名）
+      const biliFilename = uposPath.split("/").pop()!.replace(/\.[^.]+$/, "");
+      const addRes = await fetch(`${MEMBER_BASE}/x/vu/web/add/v3?csrf=${encodeURIComponent(csrf)}`, {
         method: "POST",
         headers: {
-          Cookie: this.cookieHeader(),
+          Cookie: cookie,
+          "User-Agent": UA,
+          Referer: `${MEMBER_BASE}/york/videoup`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
@@ -97,10 +154,13 @@ export class BilibiliOfficialPublisher implements Publisher {
           title: input.title,
           tag: "",
           desc: (input.options?.description as string) ?? "",
-          videos: [{ filename: uposPath, title: input.title, cid: pre.biz_id }],
+          videos: [{ filename: biliFilename, title: input.title, cid: pre.biz_id }],
         }),
       });
-      const addJson = (await addRes.json()) as BiliAddResponse;
+      const addJson = (await addRes.json().catch(() => null)) as BiliAddResponse | null;
+      if (!addJson) {
+        return { success: false, error: `B站提交投稿失败：HTTP ${addRes.status} 非 JSON 响应（登录态可能失效）` };
+      }
       if (addJson.code !== 0) {
         return { success: false, error: `B站发布失败：${addJson.message ?? JSON.stringify(addJson)}` };
       }
