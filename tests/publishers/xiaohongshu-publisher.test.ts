@@ -13,6 +13,7 @@ class MockLocator {
   first() { return this; }
   async fill(v: string) { this.fills.push(v); }
   async click() { this.clicks.push(this.label); }
+  async count() { return 1; }
   async setInputFiles(p: string | string[]) { this.uploads.push(p); }
   async press() {}
   async waitFor() { if (this.waitFails) throw new Error("locator waitFor timeout"); }
@@ -87,12 +88,13 @@ describe("XiaohongshuPublisher", () => {
     expect(res.error).toBeTruthy();
   });
 
-  it("无 imagePaths 时走「发布视频」链路上传视频", async () => {
+  it("无 imagePaths 时走默认「上传视频」Tab 直接上传视频", async () => {
     const pub = new TestXHS();
     const res = await pub.publish({ workId: "w1", videoPath: "/tmp/v.mp4", title: "T" });
     expect(res.success).toBe(true);
     const page = pub.getMockPage();
-    expect(page.clickLog().some((s) => s.includes("发布视频"))).toBe(true);
+    // 新版创作页默认就是上传视频 Tab,不再点击「发布视频」(该入口已被平台移除)
+    expect(page.clickLog().some((s) => s.includes("发布视频"))).toBe(false);
     expect(page.clickLog().some((s) => s.includes("上传图文"))).toBe(false);
     expect(page.uploadLog()).toContain("/tmp/v.mp4");
   });
@@ -125,7 +127,8 @@ describe("XiaohongshuPublisher", () => {
       options: { imagePaths: ["", ""] },
     });
     expect(res.success).toBe(true);
-    expect(pub.getMockPage().clickLog().some((s) => s.includes("发布视频"))).toBe(true);
+    expect(pub.getMockPage().clickLog().some((s) => s.includes("发布视频"))).toBe(false);
+    expect(pub.getMockPage().uploadLog()).toContain("/tmp/v.mp4");
   });
 
   it("发布结果无法确认时按失败处理（不假报成功）", async () => {

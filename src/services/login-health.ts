@@ -25,8 +25,9 @@ export interface PlatformHealth {
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
-const RPA_CHECKS: Record<string, { url: string; loginPattern: RegExp }> = {
-  douyin: { url: "https://creator.douyin.com/creator-micro/content/upload", loginPattern: /\/login/ },
+const RPA_CHECKS: Record<string, { url: string; loginPattern: RegExp; loginContentPattern?: RegExp }> = {
+  // 抖音现在会在上传 URL 原地渲染登录表单(不跳转 /login),仅查 URL 会误判有效(2026-08-06 实证)
+  douyin: { url: "https://creator.douyin.com/creator-micro/content/upload", loginPattern: /\/login/, loginContentPattern: /扫码登录|验证码登录|我是创作者/ },
   xiaohongshu: { url: "https://creator.xiaohongshu.com/publish/publish", loginPattern: /\/login/ },
   channels: { url: "https://channels.weixin.qq.com/platform/post/create", loginPattern: /login/ },
   zhihu: { url: "https://zhuanlan.zhihu.com/write", loginPattern: /signin|login/ },
@@ -52,8 +53,18 @@ async function verifyRpa(platform: string, browser: Browser): Promise<PlatformHe
     await page.goto(check.url, { waitUntil: "domcontentloaded", timeout: 60000 });
     await page.waitForTimeout(4000);
     const finalUrl = page.url();
+    // 内容级判定:登录表单可能原地渲染而不跳转 URL(text=/.../ 为正则选择器)。
+    // 抖音登录表单要 5-8 秒才渲染,短等待会误判有效 —— 轮询最长 15 秒(2026-08-06 实证)
+    let contentIsLogin = false;
+    if (check.loginContentPattern) {
+      for (let i = 0; i < 11 && !contentIsLogin; i++) {
+        contentIsLogin =
+          (await page.locator(`text=/${check.loginContentPattern.source}/`).count().catch(() => 0)) > 0;
+        if (!contentIsLogin) await page.waitForTimeout(1500);
+      }
+    }
     await context.close();
-    if (check.loginPattern.test(finalUrl)) {
+    if (check.loginPattern.test(finalUrl) || contentIsLogin) {
       return { platform, configured: true, valid: false, detail: "登录态已失效，请重新浏览器登录" };
     }
     return { platform, configured: true, valid: true, detail: "登录态有效" };
