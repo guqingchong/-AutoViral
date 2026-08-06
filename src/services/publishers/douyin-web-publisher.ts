@@ -44,8 +44,10 @@ export class DouyinWebPublisher extends PlaywrightPublisher {
       }
     }
 
-    // 点击发布
-    await page.locator('button:has-text("发布")').first().click();
+    // 点击发布：必须用精确文本匹配 —— button:has-text("发布") 会先命中左侧导航的
+    // 「作品发布」菜单按钮(.first()),根本没提交,等 60 秒成功信号只能超时
+    // (2026-08-06 实测复现:同一流程 .last()/text-is 点击后 6 秒跳内容管理页)
+    await page.locator('button:text-is("发布")').first().click();
     await page.waitForTimeout(1500);
 
     // 可能的二次确认弹窗（声明/同步设置等），出现则确认
