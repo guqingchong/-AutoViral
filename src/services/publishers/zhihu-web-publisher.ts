@@ -128,8 +128,8 @@ export class ZhihuWebPublisher extends PlaywrightPublisher {
       if (paragraphBreakPending) await page.keyboard.press("Enter");
     }
 
-    // 点击「发布」弹出确认面板
-    await page.locator('button:has-text("发布")').first().click();
+    // 点击「发布」弹出确认面板(精确匹配,避免命中其他含"发布"的按钮)
+    await page.locator('button:text-is("发布")').first().click();
     await page.waitForTimeout(2000);
 
     // 确认面板中再次点击「确认并发布」/「发布」
