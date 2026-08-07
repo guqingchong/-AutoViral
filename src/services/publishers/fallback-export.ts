@@ -14,9 +14,27 @@ export async function generateFallbackPackage(
   const packageDir = join(outputDir, packageName);
   await mkdir(packageDir, { recursive: true });
 
-  const videoExt = input.videoPath.split(".").pop() || "mp4";
-  const videoDest = join(packageDir, `video.${videoExt}`);
-  await copyFile(input.videoPath, videoDest);
+  // 视频作品拷贝视频;图文作品(imagePaths 非空)没有视频,拷贝图片卡片
+  // (2026-08-07:图文子作品发布失败时因缺 final.mp4 导致兜底包 ENOENT 500)
+  const imagePaths = Array.isArray(input.options?.imagePaths)
+    ? (input.options.imagePaths as unknown[]).filter((p): p is string => typeof p === "string" && p.length > 0)
+    : [];
+
+  let videoDestName: string | undefined;
+  if (imagePaths.length === 0 && input.videoPath && existsSync(input.videoPath)) {
+    const videoExt = input.videoPath.split(".").pop() || "mp4";
+    const videoDest = join(packageDir, `video.${videoExt}`);
+    await copyFile(input.videoPath, videoDest);
+    videoDestName = basename(videoDest);
+  }
+
+  const imageDestNames: string[] = [];
+  for (const p of imagePaths) {
+    if (!existsSync(p)) continue;
+    const dest = join(packageDir, basename(p));
+    await copyFile(p, dest);
+    imageDestNames.push(basename(dest));
+  }
 
   let coverDest: string | undefined;
   if (input.coverPath && existsSync(input.coverPath)) {
@@ -30,7 +48,8 @@ export async function generateFallbackPackage(
     title: input.title,
     description: input.options?.description,
     tags: input.options?.tags,
-    videoFile: basename(videoDest),
+    videoFile: videoDestName,
+    imageFiles: imageDestNames.length > 0 ? imageDestNames : undefined,
     coverFile: coverDest ? basename(coverDest) : undefined,
   };
   const metadataPath = join(packageDir, "metadata.json");
@@ -50,6 +69,7 @@ export async function generateFallbackPackage(
 
 function buildManualGuide(platform: string, input: PublishInput): string {
   const tagsLine = (input.options?.tags as string[] | undefined)?.map((t) => `#${t}`).join(" ") ?? "";
+  const hasImages = Array.isArray(input.options?.imagePaths) && (input.options.imagePaths as unknown[]).length > 0;
   const guides: Record<string, string> = {
     douyin: `# 抖音手动发布指南
 
@@ -59,7 +79,16 @@ function buildManualGuide(platform: string, input: PublishInput): string {
 4. 话题标签：${tagsLine}
 5. 简介：${input.options?.description ?? ""}
 6. 确认无误后点击「发布」。`,
-    xiaohongshu: `# 小红书手动发布指南
+    xiaohongshu: hasImages
+      ? `# 小红书手动发布指南（图文笔记）
+
+1. 打开 https://creator.xiaohongshu.com/publish/publish 并登录。
+2. 选择「上传图文」，按文件名顺序上传本目录下的 01-*.png 起全部图片。
+3. 标题：${input.title}
+4. 正文：${input.options?.description ?? ""}
+5. 话题：${tagsLine}
+6. 点击「发布」。`
+      : `# 小红书手动发布指南
 
 1. 打开 https://creator.xiaohongshu.com/publish/publish 并登录。
 2. 选择「发布视频」，上传本目录下的 video.*。

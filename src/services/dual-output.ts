@@ -630,7 +630,50 @@ async function ensureImageTextChild(
     }
   }
 
+  // 公众号草稿封面:由封面卡转出 output/cover.jpg(thumb_media 只收 JPEG;
+  // 缺失会导致公众号发布失败 "需要封面图" —— 2026-08-07 实测)
+  if (cardFiles.length > 0) {
+    const coverPng = cardFiles.find((f) => /01-cover\.png$/i.test(f)) ?? cardFiles[0];
+    try {
+      await coverPngToJpg(coverPng, join(childWorkDir, "output", "cover.jpg"));
+    } catch (err) {
+      log("warn", "server", "dual_output_cover_jpg_failed", parent.id, {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   return { childId, cardFiles, cardsDir: childCardsDir };
+}
+
+/**
+ * 封面卡 PNG → output/cover.jpg（公众号草稿封面 thumb_media 只收 JPEG）。
+ * 无 sharp/canvas 基建,用 Playwright 页内 canvas 转换。
+ */
+async function coverPngToJpg(pngPath: string, jpgPath: string): Promise<void> {
+  const { readFile: readBuf } = await import("node:fs/promises");
+  const { chromium } = await import("playwright");
+  const b64 = (await readBuf(pngPath)).toString("base64");
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    const jpgB64 = await page.evaluate(async (src: string) => {
+      const img = new Image();
+      img.src = `data:image/png;base64,${src}`;
+      await img.decode();
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext("2d")!;
+      ctx.fillStyle = "#FFFFFF";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0);
+      return canvas.toDataURL("image/jpeg", 0.9).split(",")[1];
+    }, b64);
+    await writeFile(jpgPath, Buffer.from(jpgB64, "base64"));
+  } finally {
+    await browser.close();
+  }
 }
 
 // ── 派生主流程 ───────────────────────────────────────────────────────────────

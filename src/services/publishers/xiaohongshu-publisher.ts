@@ -27,13 +27,26 @@ export class XiaohongshuPublisher extends PlaywrightPublisher {
       : [];
 
     if (imagePaths.length > 0) {
-      // 选择「上传图文」Tab（新版创作页 Tab 为 .creator-tab 结构;
-      // 旧 text=上传图文 会匹配到隐藏的侧边栏重复元素导致 click 超时 —— 2026-08-06 实证）
-      await page.locator('.creator-tab:has-text("上传图文")').first().click();
+      // 选择「上传图文」Tab。页面有两套重复 .creator-tab DOM(一套在视口外
+      // 隐藏容器),Playwright locator 点击会命中视口外副本报
+      // "element is outside of the viewport"(2026-08-07 实测)——
+      // 改 evaluate 找视口内可视副本直接 .click()。
+      const clicked = await page.evaluate(() => {
+        const tabs = Array.from(document.querySelectorAll(".creator-tab"));
+        const tab = tabs.find((t) => {
+          const r = t.getBoundingClientRect();
+          return /上传图文/.test(t.textContent ?? "") && r.top >= 0 && r.top < window.innerHeight && r.width > 0;
+        });
+        if (tab) { (tab as HTMLElement).click(); return true; }
+        return false;
+      });
+      if (!clicked) {
+        await page.locator('.creator-tab:has-text("上传图文")').last().click({ force: true });
+      }
       await page.waitForTimeout(1000);
 
       // 上传图片卡片（多图一次传入，顺序即展示顺序）
-      const fileInput = page.locator('input[type="file"]').first();
+      const fileInput = page.locator('input[type="file"][accept*="image"], input[type="file"]').first();
       await fileInput.setInputFiles(imagePaths);
       await page.waitForTimeout(3000);
     } else {
