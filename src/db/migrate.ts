@@ -649,6 +649,16 @@ ALTER TABLE works ADD COLUMN asset_budget TEXT;
 ALTER TABLE works ADD COLUMN dual_output INTEGER NOT NULL DEFAULT 0;
 `,
   },
+  {
+    version: 20,
+    name: "works_parent_work_id",
+    sql: `
+-- 双产物派生的图文子作品：parent_work_id 指向短视频父作品
+-- （子作品拥有独立的 待审核→待发布→已发布 生命周期，实现视频/图文分块发布）
+ALTER TABLE works ADD COLUMN parent_work_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_works_parent_work_id ON works(parent_work_id);
+`,
+  },
 ];
 
 export function migrate(): void {

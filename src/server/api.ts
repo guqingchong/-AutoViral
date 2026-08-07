@@ -472,8 +472,19 @@ apiRoutes.post("/api/works/:id/reject", async (c) => {
     const comment = (body.comment ?? "").trim();
     if (!stage || !comment) return c.json({ error: "stage and comment are required" }, 400);
 
-    const work = await getWork(id);
+    let work = await getWork(id);
     if (!work) return c.json({ error: "Work not found" }, 404);
+
+    // 图文子作品(无流水线)打回 → 转发父作品:图文内容源自父作品策划阶段,
+    // 父作品重做后 deriveDualOutputs 会刷新仍在 reviewing 的子作品
+    // (2026-08-07 双产物子作品机制)。已 approved/published 的子作品不被刷新。
+    if (work.parentWorkId) {
+      const parent = await getWork(work.parentWorkId);
+      if (!parent) return c.json({ error: "父作品不存在，无法打回重做" }, 400);
+      log("info", "api", "work_rejected_via_child", id, { parentId: parent.id, stage });
+      work = parent;
+    }
+    const targetId = work.id;
 
     const stepKeys = Object.keys(work.pipeline);
     if (!stepKeys.includes(stage)) {
@@ -499,19 +510,19 @@ apiRoutes.post("/api/works/:id/reject", async (c) => {
 
     // 2. 意见入库 + 状态派生
     const newStatus = deriveStatusFromPipeline(work.pipeline, work.status);
-    await storeUpdateWork(id, { pipeline: work.pipeline, status: newStatus, reviewComment: comment });
-    broadcastPipelineUpdate(id, work.pipeline);
-    log("info", "api", "work_rejected", id, { stage, status: newStatus });
+    await storeUpdateWork(targetId, { pipeline: work.pipeline, status: newStatus, reviewComment: comment });
+    broadcastPipelineUpdate(targetId, work.pipeline);
+    log("info", "api", "work_rejected", targetId, { stage, status: newStatus });
 
     // 3. 渲染池清理：取消该作品未提交的旧渲染任务（重做会重新合成口播，
     //    旧任务留着会被攒批提交 → 复用旧口播/重复计费）
-    const cancelled = cancelQueuedJobsForWork(id);
-    if (cancelled > 0) log("info", "api", "render_jobs_cancelled", id, { cancelled });
+    const cancelled = cancelQueuedJobsForWork(targetId);
+    if (cancelled > 0) log("info", "api", "render_jobs_cancelled", targetId, { cancelled });
 
     // 4. 入队等待串行 runner 驱动重做（afterRunning：排在当前运行中作品之后、
     // 其余排队作品之前）。即使该作品此刻有活跃会话也不直接 sendMessage ——
     // 会话跑完当前阶段后自然停滞，runner 健康检查会重建会话并注入审核意见。
-    enqueueWork(id, { afterRunning: true });
+    enqueueWork(targetId, { afterRunning: true });
     // 入队位置变化后同步渲染池位次
     syncRenderPool();
 
