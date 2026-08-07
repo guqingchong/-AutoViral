@@ -60,6 +60,10 @@
   let articleSaving = $state(false);
   let showArticle = $state(false);
 
+  // 图文产物预览（kind === "image-text"）：小红书卡片 + 知乎/公众号文内插图
+  let cardImages = $state<string[]>([]);
+  let contentImages = $state<string[]>([]);
+
   /** 打回重做的可选阶段（与流水线 step key 对齐） */
   const REJECT_STAGES = [
     { key: "plan", label: "策划/文案" },
@@ -170,6 +174,55 @@
     } catch {}
   }
 
+  /** 文章段落（预览渲染用） */
+  const articleParagraphs = $derived(articleContent.split(/\n\s*\n/).filter((p) => p.trim()));
+
+  /**
+   * 文内插图位置（与发布链路 planImageInsertions 同思路：插图均匀分布到段落间隙）。
+   * 返回 Map: 段落索引 → 该段之后插入的图片 URL。
+   */
+  const articleIllustrations = $derived.by(() => {
+    const map = new Map<number, string>();
+    const paras = articleParagraphs;
+    if (paras.length < 2 || contentImages.length === 0) return map;
+    const gaps = paras.length - 1;
+    const used = new Set<number>();
+    for (let g = 0; g < gaps; g++) {
+      const idx = Math.round(((g + 1) * contentImages.length) / gaps) - 1;
+      const clamped = Math.min(Math.max(idx, 0), contentImages.length - 1);
+      if (!used.has(clamped)) {
+        used.add(clamped);
+        map.set(g, contentImages[clamped]);
+      }
+    }
+    return map;
+  });
+
+  /** 素材路径 → 可访问 URL（与作品列表封面同一拼法） */
+  function assetUrl(workId: string, rel: string): string {
+    return `/api/works/${workId}/assets/${rel.replace(/\\/g, "/").split("/").map(encodeURIComponent).join("/")}`;
+  }
+
+  /** 加载图文产物预览:小红书卡片(output/cards)+ 知乎/公众号文内插图(assets/images) */
+  async function loadImageTextAssets(workId: string) {
+    cardImages = [];
+    contentImages = [];
+    try {
+      const res = await fetch(`/api/works/${workId}/assets`);
+      const data = await res.json();
+      const assets: string[] = data.assets ?? [];
+      const isImg = (a: string) => /\.(png|jpe?g|webp|gif)$/i.test(a);
+      cardImages = assets
+        .filter((a) => a.startsWith("output/cards/") && isImg(a))
+        .sort()
+        .map((a) => assetUrl(workId, a));
+      contentImages = assets
+        .filter((a) => a.startsWith("assets/images/") && isImg(a))
+        .sort()
+        .map((a) => assetUrl(workId, a));
+    } catch {}
+  }
+
   async function saveArticle() {
     if (!articleId) return;
     articleSaving = true;
@@ -192,7 +245,10 @@
     reviewComment = "";
     rejectStage = "assembly";
     showArticle = false;
-    if (kind === "image-text") loadArticle(workId);
+    if (kind === "image-text") {
+      loadArticle(workId);
+      loadImageTextAssets(workId);
+    }
   }
 
   function backToBoard() {
@@ -452,19 +508,53 @@
       </div>
 
       <!-- 预览区 -->
-      <div class="preview-area">
-        {#if selectedWork?.previewUrl}
-          <video src={selectedWork.previewUrl} controls></video>
-        {:else if selectedWork?.coverImage}
-          {#if selectedWork?.coverIsVideo}
-            <video src={selectedWork.coverImage} controls></video>
-          {:else}
-            <img src={selectedWork.coverImage} alt="preview" />
-          {/if}
-        {:else}
-          <p class="preview-empty">暂无预览内容</p>
+      {#if kind === "image-text"}
+        <!-- 图文双形态预览:小红书卡片 + 知乎/公众号文内插图文章 -->
+        {#if cardImages.length > 0}
+          <div class="cards-preview">
+            <h3>小红书卡片（{cardImages.length} 张）</h3>
+            <div class="cards-strip">
+              {#each cardImages as url, i}
+                <figure class="card-item">
+                  <img src={url} alt="卡片 {i + 1}" />
+                  <figcaption>{i === 0 ? "封面" : `卡 ${i}`}</figcaption>
+                </figure>
+              {/each}
+            </div>
+          </div>
         {/if}
-      </div>
+
+        <div class="article-preview">
+          <h3>知乎 / 公众号图文预览{contentImages.length > 0 ? `（文内插图 ${contentImages.length} 张）` : "（纯文本，无插图）"}</h3>
+          {#if articleId}
+            <div class="article-render">
+              <h4>{articleTitle}</h4>
+              {#each articleParagraphs as para, i}
+                <p>{para}</p>
+                {#if articleIllustrations.has(i)}
+                  <img class="inline-img" src={articleIllustrations.get(i)} alt="插图" />
+                {/if}
+              {/each}
+            </div>
+          {:else}
+            <p class="preview-empty">该作品暂无文章内容</p>
+          {/if}
+        </div>
+      {:else}
+        <div class="preview-area">
+          {#if selectedWork?.previewUrl}
+            <video src={selectedWork.previewUrl} controls></video>
+          {:else if selectedWork?.coverImage}
+            {#if selectedWork?.coverIsVideo}
+              <video src={selectedWork.coverImage} controls></video>
+            {:else}
+              <img src={selectedWork.coverImage} alt="preview" />
+            {/if}
+          {:else}
+            <p class="preview-empty">暂无预览内容</p>
+          {/if}
+        </div>
+      {/if}
 
       <!-- 图文：文章查看/编辑 -->
       {#if kind === "image-text" && articleId}
@@ -644,6 +734,19 @@
   .preview-area { background: var(--bg-inset); border-radius: var(--card-radius); overflow: hidden; margin-bottom: 1rem; max-height: 500px; display: flex; justify-content: center; }
   .preview-area video, .preview-area img { max-width: 100%; max-height: 500px; }
   .preview-empty { color: var(--text-dim); padding: 3rem; text-align: center; }
+
+  /* ── 图文产物预览 ── */
+  .cards-preview { margin-bottom: 1rem; }
+  .cards-preview h3, .article-preview h3 { font-size: 0.9rem; margin: 0 0 0.6rem; }
+  .cards-strip { display: flex; gap: 0.6rem; overflow-x: auto; padding-bottom: 0.5rem; }
+  .card-item { flex: 0 0 auto; width: 130px; margin: 0; background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 6px; overflow: hidden; }
+  .card-item img { width: 100%; display: block; aspect-ratio: 3/4; object-fit: cover; }
+  .card-item figcaption { font-size: 0.68rem; color: var(--text-dim); text-align: center; padding: 0.25rem; }
+  .article-preview { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: var(--card-radius); padding: 1rem; margin-bottom: 1rem; }
+  .article-render { background: #fff; color: #1a1a1a; border-radius: 6px; padding: 1.2rem 1.4rem; max-height: 480px; overflow-y: auto; }
+  .article-render h4 { font-size: 1.05rem; margin: 0 0 0.8rem; line-height: 1.4; }
+  .article-render p { font-size: 0.88rem; line-height: 1.8; margin: 0 0 0.8rem; white-space: pre-wrap; }
+  .article-render .inline-img { width: 100%; border-radius: 6px; margin: 0.2rem 0 1rem; display: block; }
 
   .article-section { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: var(--card-radius); padding: 1rem; margin-bottom: 1rem; }
   .article-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; }
