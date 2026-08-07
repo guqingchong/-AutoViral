@@ -64,6 +64,21 @@
   let cardImages = $state<string[]>([]);
   let contentImages = $state<string[]>([]);
 
+  // 卡片灯箱（点击缩略图放大预览，← → 或按钮翻页，Esc/点遮罩关闭）
+  let zoomIndex = $state<number | null>(null);
+
+  function openZoom(i: number) { zoomIndex = i; }
+  function closeZoom() { zoomIndex = null; }
+  function zoomPrev() { if (zoomIndex !== null && zoomIndex > 0) zoomIndex--; }
+  function zoomNext() { if (zoomIndex !== null && zoomIndex < cardImages.length - 1) zoomIndex++; }
+
+  function handleZoomKeydown(e: KeyboardEvent) {
+    if (zoomIndex === null) return;
+    if (e.key === "Escape") closeZoom();
+    else if (e.key === "ArrowLeft") zoomPrev();
+    else if (e.key === "ArrowRight") zoomNext();
+  }
+
   /** 打回重做的可选阶段（与流水线 step key 对齐） */
   const REJECT_STAGES = [
     { key: "plan", label: "策划/文案" },
@@ -367,7 +382,8 @@
     const timer = setInterval(() => {
       if (!destroyed && !selectedWorkId) loadWorks();
     }, 10_000);
-    return () => { destroyed = true; clearInterval(timer); };
+    window.addEventListener("keydown", handleZoomKeydown);
+    return () => { destroyed = true; clearInterval(timer); window.removeEventListener("keydown", handleZoomKeydown); };
   });
 </script>
 
@@ -515,7 +531,8 @@
             <h3>小红书卡片（{cardImages.length} 张）</h3>
             <div class="cards-strip">
               {#each cardImages as url, i}
-                <figure class="card-item">
+                <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+                <figure class="card-item card-clickable" onclick={() => openZoom(i)} title="点击放大预览">
                   <img src={url} alt="卡片 {i + 1}" />
                   <figcaption>{i === 0 ? "封面" : `卡 ${i}`}</figcaption>
                 </figure>
@@ -682,6 +699,30 @@
       {/if}
     </div>
   {/if}
+  {#if zoomIndex !== null && cardImages[zoomIndex]}
+    <!-- 卡片放大灯箱:点遮罩/Esc 关闭,← → 翻页 -->
+    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+    <div class="zoom-overlay" onclick={closeZoom}>
+      <button class="zoom-close" onclick={closeZoom} aria-label="关闭">✕</button>
+      <button
+        class="zoom-nav zoom-prev"
+        disabled={zoomIndex === 0}
+        onclick={(e) => { e.stopPropagation(); zoomPrev(); }}
+        aria-label="上一张"
+      >‹</button>
+      <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+      <figure class="zoom-figure" onclick={(e) => e.stopPropagation()}>
+        <img src={cardImages[zoomIndex]} alt="卡片放大预览" />
+        <figcaption>{zoomIndex === 0 ? "封面" : `卡 ${zoomIndex}`} · {zoomIndex + 1} / {cardImages.length}</figcaption>
+      </figure>
+      <button
+        class="zoom-nav zoom-next"
+        disabled={zoomIndex === cardImages.length - 1}
+        onclick={(e) => { e.stopPropagation(); zoomNext(); }}
+        aria-label="下一张"
+      >›</button>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -742,6 +783,19 @@
   .card-item { flex: 0 0 auto; width: 130px; margin: 0; background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 6px; overflow: hidden; }
   .card-item img { width: 100%; display: block; aspect-ratio: 3/4; object-fit: cover; }
   .card-item figcaption { font-size: 0.68rem; color: var(--text-dim); text-align: center; padding: 0.25rem; }
+  .card-clickable { cursor: zoom-in; transition: transform 0.15s, border-color 0.15s; }
+  .card-clickable:hover { transform: translateY(-2px); border-color: var(--accent); }
+
+  /* ── 卡片放大灯箱 ── */
+  .zoom-overlay { position: fixed; inset: 0; z-index: 1000; background: rgba(0, 0, 0, 0.82); display: flex; align-items: center; justify-content: center; gap: 1rem; }
+  .zoom-figure { margin: 0; max-height: 92vh; display: flex; flex-direction: column; align-items: center; gap: 0.5rem; cursor: default; }
+  .zoom-figure img { max-height: 86vh; max-width: min(72vw, 620px); border-radius: 8px; box-shadow: 0 8px 40px rgba(0,0,0,0.5); }
+  .zoom-figure figcaption { color: rgba(255,255,255,0.75); font-size: 0.8rem; }
+  .zoom-close { position: absolute; top: 1.2rem; right: 1.4rem; background: none; border: none; color: rgba(255,255,255,0.85); font-size: 1.6rem; cursor: pointer; line-height: 1; padding: 0.3rem; }
+  .zoom-close:hover { color: #fff; }
+  .zoom-nav { background: rgba(255,255,255,0.12); border: none; color: #fff; font-size: 2rem; width: 48px; height: 64px; border-radius: 8px; cursor: pointer; flex: 0 0 auto; line-height: 1; }
+  .zoom-nav:hover:not(:disabled) { background: rgba(255,255,255,0.25); }
+  .zoom-nav:disabled { opacity: 0.25; cursor: default; }
   .article-preview { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: var(--card-radius); padding: 1rem; margin-bottom: 1rem; }
   .article-render { background: #fff; color: #1a1a1a; border-radius: 6px; padding: 1.2rem 1.4rem; max-height: 480px; overflow-y: auto; }
   .article-render h4 { font-size: 1.05rem; margin: 0 0 0.8rem; line-height: 1.4; }
