@@ -316,6 +316,7 @@ describe("dual-output service", () => {
       const rendered: string[] = [];
       const result = await deriveDualOutputs("w_dual", {
         generateCopy: async () => ({ coverTitle: "封面", pages: [{ body: "卡一" }, { body: "卡二" }] }),
+        generateCaption: async () => "测试配文",
         render: async (_html, outPath) => {
           rendered.push(outPath);
           await writeFile(outPath, "png");
@@ -355,6 +356,7 @@ describe("dual-output service", () => {
       await seedDualWork("w_dual");
       const result = await deriveDualOutputs("w_dual", {
         generateCopy: async () => ({ coverTitle: "c", pages: [{ body: "b" }] }),
+        generateCaption: async () => "测试配文",
         render: async () => { throw new Error("chromium 启动失败"); },
       });
       expect(result).not.toBeNull();
@@ -372,6 +374,7 @@ describe("dual-output service", () => {
       const htmls: string[] = [];
       await deriveDualOutputs("w_dual", {
         generateCopy: async () => ({ coverTitle: "封面", pages: [{ body: "卡一" }] }),
+        generateCaption: async () => "测试配文",
         render: async (html, outPath) => {
           htmls.push(html);
           await writeFile(outPath, "png");

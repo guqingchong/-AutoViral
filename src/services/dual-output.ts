@@ -705,7 +705,9 @@ async function ensureImageTextChild(
   // 小红书配文:LLM 提炼全文(LLM 失败回退句边界截断),存 cards/caption.txt,
   // 发布链路 buildPublishInput 优先读取 —— 不再 slice(0,1000) 腰斩原文
   try {
-    const caption = await generateXhsCaption(article);
+    const caption = deps.generateCaption
+      ? await deps.generateCaption({ title: article.title, content: article.content })
+      : await generateXhsCaption(article);
     await mkdir(childCardsDir, { recursive: true });
     await writeFile(join(childCardsDir, "caption.txt"), caption, "utf-8");
   } catch (err) {
@@ -774,6 +776,8 @@ export interface DeriveDualOutputsResult {
 
 export interface DeriveDualOutputsDeps {
   generateCopy?: (article: { title: string; content: string }) => Promise<CardCopy>;
+  /** 注入的小红书配文生成(测试用);缺省走 generateXhsCaption(LLM+截断兜底) */
+  generateCaption?: (article: { title: string; content: string }) => Promise<string>;
   render?: CardRenderer;
   /** 强制重渲染卡片(忽略父作品已有卡片复制快路径),版式/素材策略升级后回填用 */
   forceRender?: boolean;
