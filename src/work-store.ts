@@ -81,6 +81,7 @@ export interface Work {
   assetBudget?: AssetBudget;
   /** 双产物标记：短视频+图文同一作品双产物 */
   dualOutput?: boolean;
+  parentWorkId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -208,6 +209,7 @@ function dbWorkToWork(w: DbWork, steps?: DbPipelineStep[]): Work {
     assetSource: w.asset_source as AssetSource | undefined,
     assetBudget: w.asset_budget as AssetBudget | undefined,
     dualOutput: w.dual_output,
+    parentWorkId: w.parent_work_id,
     createdAt: w.created_at,
     updatedAt: w.updated_at,
   };

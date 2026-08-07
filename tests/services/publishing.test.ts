@@ -46,7 +46,7 @@ describe("publishing service", () => {
   });
 
   describe("buildPublishInput 正文配图注入", () => {
-    const work = { id: "w_img", title: "图文作品" } as unknown as DbWork;
+    const work = { id: "w_img", title: "图文作品", type: "image-text" } as unknown as DbWork;
 
     async function seedWorkFiles(dataDir: string): Promise<void> {
       const workDir = join(dataDir, "works", "w_img");
@@ -107,10 +107,21 @@ describe("publishing service", () => {
 
     it("无素材图时注入空数组", async () => {
       const input = await buildPublishInput(
-        { id: "w_noimg", title: "纯文本" } as unknown as DbWork,
+        { id: "w_noimg", title: "纯文本", type: "image-text" } as unknown as DbWork,
         "zhihu"
       );
       expect(input.options?.contentImages).toEqual([]);
+    });
+
+    it("short-video 作品发知乎不注入文章（走视频发布器,2026-08-07 分块约定）", async () => {
+      const config = await import("../../src/config.js");
+      const dataDir = (config as unknown as { __testDataDir: string }).__testDataDir;
+      await seedWorkFiles(dataDir);
+
+      const videoWork = { id: "w_img", title: "视频作品", type: "short-video" } as unknown as DbWork;
+      const input = await buildPublishInput(videoWork, "zhihu");
+      expect(input.options?.content).toBeUndefined();
+      expect(input.options?.contentImages).toBeUndefined();
     });
   });
 });

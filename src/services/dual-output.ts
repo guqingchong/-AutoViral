@@ -16,15 +16,16 @@
  * 失败不阻塞作品进 reviewing：deriveDualOutputs 内部全程捕获，仅记日志。
  */
 
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile, cp, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { dataDir } from "../config.js";
 import { log } from "../logger.js";
-import { getWork } from "../db/works-repo.js";
-import { listArticlesByWork } from "../db/articles-repo.js";
+import { getWork, getChildWorkByParent, createWork } from "../db/works-repo.js";
+import { listArticlesByWork, createArticle, updateArticle } from "../db/articles-repo.js";
 import { getTemplate, listTemplates, type DbTemplate, type TemplateCanvas } from "../db/templates-repo.js";
 import { normalizeLayoutSpec, type LayoutSpec } from "./image-text-template-generator.js";
 import { runJsonPrompt } from "./llm-json.js";
+import type { DbWork } from "../db/types.js";
 
 // ── 卡片文案数据结构 ─────────────────────────────────────────────────────────
 
@@ -446,12 +447,140 @@ export async function renderCardsToPng(
   return { cardsDir: outDir, files: jobs.map((j) => j.outPath) };
 }
 
+// ── 图文子作品派生 ───────────────────────────────────────────────────────────
+
+/** 与 work-store.generateId 同格式:w_<yyyyMMdd_HHmm>_<3位hex> */
+function generateChildId(): string {
+  const now = new Date();
+  const ts = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}_${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}`;
+  const hex = Math.random().toString(16).slice(2, 5);
+  return `w_${ts}_${hex}`;
+}
+
+/**
+ * 确保父作品有独立的图文子作品（type=image-text, status=reviewing）。
+ *
+ * 背景（2026-08-07 修复）：双产物作品建库为 short-video + dual_output=1,
+ * 图文产物只挂在父作品上,图文发布页(只认 type=image-text)永远没有待审图文。
+ * 现在派生时创建独立子作品,拥有自己的 待审核→待发布→已发布 生命周期,
+ * 文章/卡片/素材图都复制进子作品目录,发布链路 buildPublishInput 无需特判。
+ *
+ * 幂等:子作品已存在时 —— 仍在 reviewing 则刷新文章与卡片(打回重做场景);
+ * 已 approved/published 则不动(不覆盖用户已确认的图文)。
+ */
+async function ensureImageTextChild(
+  parent: DbWork,
+  article: { title: string; content: string; status: string; topic_id?: number },
+  deps: DeriveDualOutputsDeps,
+): Promise<{ childId: string; cardFiles: string[]; cardsDir?: string } | null> {
+  const existing = getChildWorkByParent(parent.id);
+  if (existing && existing.status !== "reviewing") {
+    log("info", "server", "dual_output_child_exists", parent.id, {
+      childId: existing.id, status: existing.status, msg: "子作品已过审,跳过刷新",
+    });
+    return { childId: existing.id, cardFiles: [] };
+  }
+
+  const now = new Date().toISOString();
+  const childId = existing?.id ?? generateChildId();
+
+  if (!existing) {
+    createWork(
+      {
+        id: childId,
+        title: article.title || `${parent.title}（图文）`,
+        type: "image-text",
+        status: "reviewing",
+        platforms: [],
+        evaluation_mode: false,
+        tags: parent.tags,
+        topic_id: parent.topic_id,
+        template_id: parent.template_id,
+        dual_output: false,
+        parent_work_id: parent.id,
+        created_at: now,
+        updated_at: now,
+      } as DbWork,
+      [],
+    );
+    log("info", "server", "dual_output_child_created", parent.id, { childId });
+  }
+
+  // 文章复制到子作品名下(独立编辑,互不影响父作品文章)
+  const childArticle = listArticlesByWork(childId)[0];
+  if (childArticle) {
+    updateArticle(childArticle.id, { title: article.title, content: article.content });
+  } else {
+    createArticle({
+      work_id: childId,
+      topic_id: article.topic_id ?? parent.topic_id,
+      title: article.title,
+      content: article.content,
+      status: article.status as import("../db/types.js").DbArticle["status"],
+    });
+  }
+
+  const childWorkDir = join(dataDir, "works", childId);
+  const parentWorkDir = join(dataDir, "works", parent.id);
+
+  // 素材图复制(知乎/公众号正文插图 buildPublishInput.collectContentImages 用)
+  const srcImages = join(parentWorkDir, "assets", "images");
+  try {
+    await cp(srcImages, join(childWorkDir, "assets", "images"), { recursive: true });
+  } catch { /* 父作品无素材图,纯文本图文也成立 */ }
+
+  // 卡片:父作品已有渲染产物(回填场景)直接复制;否则 LLM 文案 + 渲染到子目录
+  const childCardsDir = join(childWorkDir, "output", "cards");
+  const parentCardsDir = join(parentWorkDir, "output", "cards");
+  let cardFiles: string[] = [];
+  try {
+    const parentCards = (await readdir(parentCardsDir)).filter((f) => f.endsWith(".png"));
+    if (parentCards.length > 0) {
+      await cp(parentCardsDir, childCardsDir, { recursive: true });
+      cardFiles = parentCards.sort().map((f) => join(childCardsDir, f));
+    }
+  } catch { /* 父目录无卡片,走渲染 */ }
+
+  if (cardFiles.length === 0) {
+    const layout = resolveCardLayout(parent.template_id);
+    const copy = deps.generateCopy
+      ? await deps.generateCopy({ title: article.title, content: article.content })
+      : await generateCardCopy({ title: article.title, content: article.content });
+    if (copy.pages.length === 0) {
+      log("warn", "server", "dual_output_empty_card_copy", parent.id, {});
+    } else {
+      const rendered = await renderCardsToPng(copy, layout, childCardsDir, deps.render);
+      cardFiles = rendered.files;
+      await writeFile(
+        join(childCardsDir, "cards.json"),
+        JSON.stringify(
+          {
+            workId: childId,
+            parentWorkId: parent.id,
+            title: article.title,
+            templateId: layout.templateId ?? null,
+            generatedAt: now,
+            files: rendered.files.map((f) => f.split(/[\\/]/).pop()),
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+    }
+  }
+
+  return { childId, cardFiles, cardsDir: childCardsDir };
+}
+
 // ── 派生主流程 ───────────────────────────────────────────────────────────────
 
 export interface DeriveDualOutputsResult {
   /** 图文文章产物就绪（文章存在，发布链路可获取内容 + 素材图） */
   articleReady: boolean;
-  /** 小红书卡片产物 */
+  /** 图文子作品 ID（图文发布页待审条目） */
+  childWorkId?: string;
+  /** 小红书卡片产物（在子作品 output/cards/ 下） */
   cardFiles: string[];
   cardsDir?: string;
 }
@@ -474,57 +603,33 @@ export async function deriveDualOutputs(
     const work = getWork(workId);
     if (!work || !work.dual_output) return null;
 
-    // 1. 图文文章（知乎/公众号）：文章内容 + 素材图发布时由 buildPublishInput
-    //    的 content/contentImages 机制获取（已就绪），这里验证文章存在。
+    // 图文子作品的内容来源是父作品文章(批量制作时已写入 articles 表)
     const article = listArticlesByWork(workId)[0];
-    if (article?.content) {
-      result.articleReady = true;
-    } else {
+    if (!article?.content) {
       log("warn", "server", "dual_output_no_article", workId, {
-        msg: "双产物作品无文章，知乎/公众号发布将退化为标题占位文本",
+        msg: "双产物作品无文章,无法派生图文子作品",
       });
+      return result;
     }
+    result.articleReady = true;
 
-    // 2. 小红书图+文卡片：需要文章作为卡片文案来源
-    if (article?.content) {
-      try {
-        const layout = resolveCardLayout(work.template_id);
-        const copy = deps.generateCopy
-          ? await deps.generateCopy({ title: article.title, content: article.content })
-          : await generateCardCopy({ title: article.title, content: article.content });
-        if (copy.pages.length === 0) {
-          log("warn", "server", "dual_output_empty_card_copy", workId, {});
-        } else {
-          const cardsDir = join(dataDir, "works", workId, "output", "cards");
-          const rendered = await renderCardsToPng(copy, layout, cardsDir, deps.render);
-          result.cardFiles = rendered.files;
-          result.cardsDir = rendered.cardsDir;
-          // 产物清单：发布链路/前端按此展示卡片产物
-          await writeFile(
-            join(cardsDir, "cards.json"),
-            JSON.stringify(
-              {
-                workId,
-                title: article.title,
-                templateId: layout.templateId ?? null,
-                generatedAt: new Date().toISOString(),
-                files: rendered.files.map((f) => f.split(/[\\/]/).pop()),
-              },
-              null,
-              2,
-            ),
-            "utf-8",
-          );
-        }
-      } catch (err) {
-        log("error", "server", "dual_output_cards_failed", workId, {
-          error: err instanceof Error ? err.message : String(err),
-        });
+    // 派生/刷新独立图文子作品(文章复制 + 卡片渲染 + 素材图复制)
+    try {
+      const child = await ensureImageTextChild(work, article, deps);
+      if (child) {
+        result.childWorkId = child.childId;
+        result.cardFiles = child.cardFiles;
+        result.cardsDir = child.cardsDir;
       }
+    } catch (err) {
+      log("error", "server", "dual_output_child_failed", workId, {
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
 
     log("info", "server", "dual_output_derived", workId, {
       articleReady: result.articleReady,
+      childWorkId: result.childWorkId ?? null,
       cards: result.cardFiles.length,
     });
     return result;

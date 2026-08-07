@@ -36,6 +36,7 @@ function rowToWork(row: Record<string, unknown>): DbWork {
     asset_source: (row.asset_source as string) || undefined,
     asset_budget: (row.asset_budget as string) || undefined,
     dual_output: Boolean(row.dual_output),
+    parent_work_id: (row.parent_work_id as string) || undefined,
     created_at: row.created_at as string,
     updated_at: row.updated_at as string,
   };
@@ -57,8 +58,8 @@ function rowToStep(row: Record<string, unknown>): DbPipelineStep {
 export function createWork(work: DbWork, steps: DbPipelineStep[]): DbWork {
   const db = getDb();
   const insert = db.prepare(
-    `INSERT INTO works (id, title, type, content_category, content_form, video_source, video_search_query, status, platforms, evaluation_mode, topic_hint, topic_id, article_id, script_id, digital_human_id, voice_id, cli_session_id, account_id, eval_session_ids, eval_attempts, topic_category, emotion_type, hook_type, template_id, tags, estimated_cost, actual_cost, review_comment, asset_form, asset_source, asset_budget, dual_output, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO works (id, title, type, content_category, content_form, video_source, video_search_query, status, platforms, evaluation_mode, topic_hint, topic_id, article_id, script_id, digital_human_id, voice_id, cli_session_id, account_id, eval_session_ids, eval_attempts, topic_category, emotion_type, hook_type, template_id, tags, estimated_cost, actual_cost, review_comment, asset_form, asset_source, asset_budget, dual_output, parent_work_id, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
   const insertStep = db.prepare(
     `INSERT INTO pipeline_steps (work_id, step_key, name, status, started_at, completed_at, note, sort_order)
@@ -98,6 +99,7 @@ export function createWork(work: DbWork, steps: DbPipelineStep[]): DbWork {
       work.asset_source ?? null,
       work.asset_budget ?? null,
       work.dual_output ? 1 : 0,
+      work.parent_work_id ?? null,
       work.created_at,
       work.updated_at
     );
@@ -145,6 +147,15 @@ export function listWorks(): DbWork[] {
   const db = getDb();
   const rows = db.prepare("SELECT * FROM works ORDER BY updated_at DESC").all() as Record<string, unknown>[];
   return rows.map(rowToWork);
+}
+
+/** 查双产物父作品派生出的图文子作品（无则 undefined） */
+export function getChildWorkByParent(parentWorkId: string): DbWork | undefined {
+  const db = getDb();
+  const row = db
+    .prepare("SELECT * FROM works WHERE parent_work_id = ? ORDER BY created_at DESC LIMIT 1")
+    .get(parentWorkId) as Record<string, unknown> | undefined;
+  return row ? rowToWork(row) : undefined;
 }
 
 export function updateWork(id: string, updates: Partial<DbWork>): DbWork | undefined {

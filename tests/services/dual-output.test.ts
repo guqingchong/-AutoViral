@@ -325,11 +325,21 @@ describe("dual-output service", () => {
       expect(result!.articleReady).toBe(true);
       expect(result!.cardFiles).toHaveLength(3);
       expect(rendered).toHaveLength(3);
+      // 2026-08-07 起派生独立图文子作品:卡片渲染到子作品目录
+      const childId = result!.childWorkId!;
+      expect(childId).toBeTruthy();
+      expect(childId).not.toBe("w_dual");
+      const { getWork } = await import("../../src/db/works-repo.js");
+      const child = getWork(childId);
+      expect(child?.type).toBe("image-text");
+      expect(child?.parent_work_id).toBe("w_dual");
+      expect(child?.status).toBe("reviewing");
 
       const dir = await testDataDir();
-      const cardsDir = join(dir, "works", "w_dual", "output", "cards");
+      const cardsDir = join(dir, "works", childId, "output", "cards");
       const manifest = JSON.parse(await readFile(join(cardsDir, "cards.json"), "utf-8"));
-      expect(manifest.workId).toBe("w_dual");
+      expect(manifest.workId).toBe(childId);
+      expect(manifest.parentWorkId).toBe("w_dual");
       expect(manifest.files).toEqual(["01-cover.png", "02-card.png", "03-card.png"]);
     });
 
@@ -384,7 +394,8 @@ describe("dual-output service", () => {
       await writeFile(join(cardsDir, "02-card.png"), "png");
       await writeFile(join(cardsDir, "01-cover.png"), "png");
 
-      const input = await buildPublishInput(makeWork({ id: workId }), "xiaohongshu");
+      // image-text 作品(图文子作品)才走图文笔记链路(2026-08-07 分块约定)
+      const input = await buildPublishInput(makeWork({ id: workId, type: "image-text" }), "xiaohongshu");
       const imagePaths = input.options?.imagePaths as string[];
       expect(imagePaths).toHaveLength(2);
       expect(imagePaths[0].endsWith("01-cover.png")).toBe(true);
@@ -395,6 +406,18 @@ describe("dual-output service", () => {
     it("无 cards 目录时不注入 imagePaths（维持视频链路）", async () => {
       dbCreateWork(makeWork({ id: "w_nocards" }), []);
       const input = await buildPublishInput(makeWork({ id: "w_nocards" }), "xiaohongshu");
+      expect(input.options?.imagePaths).toBeUndefined();
+    });
+
+    it("short-video 作品即使有 cards 也不注入（视频页小红书只发视频）", async () => {
+      const dir = await testDataDir();
+      const workId = "w_xhs_video";
+      dbCreateWork(makeWork({ id: workId }), []);
+      const cardsDir = join(dir, "works", workId, "output", "cards");
+      await mkdir(cardsDir, { recursive: true });
+      await writeFile(join(cardsDir, "01-cover.png"), "png");
+
+      const input = await buildPublishInput(makeWork({ id: workId, type: "short-video" }), "xiaohongshu");
       expect(input.options?.imagePaths).toBeUndefined();
     });
   });
