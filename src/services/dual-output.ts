@@ -16,7 +16,7 @@
  * 失败不阻塞作品进 reviewing：deriveDualOutputs 内部全程捕获，仅记日志。
  */
 
-import { mkdir, writeFile, cp, readdir } from "node:fs/promises";
+import { mkdir, writeFile, cp, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { dataDir } from "../config.js";
 import { log } from "../logger.js";
@@ -431,6 +431,13 @@ export async function renderCardsToPng(
   images?: string[],
 ): Promise<RenderedCards> {
   await mkdir(outDir, { recursive: true });
+  // 先清空旧卡片:重渲染若比上次少出卡,残留的旧序号卡会混进发布序列
+  // (2026-08-07 实测:重渲染 6 卡,旧 07-card.png 残留)
+  try {
+    for (const stale of await readdir(outDir)) {
+      if (/\.(png|jpg|jpeg|webp)$/i.test(stale)) await rm(join(outDir, stale), { force: true });
+    }
+  } catch { /* 目录刚创建 */ }
 
   const { readFile: readFileBuf } = await import("node:fs/promises");
   const { extname } = await import("node:path");
