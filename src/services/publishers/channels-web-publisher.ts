@@ -48,127 +48,169 @@ export class ChannelsWebPublisher extends PlaywrightPublisher {
     return false;
   }
 
-  /** 轮询等待微前端 frame 出现（wujie iframe 初始化慢，最长 90 秒） */
-  private async waitMicroFrame(page: Page): Promise<Frame | null> {
-    for (let i = 0; i < 45; i++) {
-      const frame = page.frames().find((f) => f.url().includes("/micro/"));
-      if (frame) return frame;
+  /**
+   * 轮询等待文件输入出现(最长 maxMs),返回所在 frame。
+   * wujie 沙箱下 Playwright 选择器引擎(frame.$/locator/waitForSelector)对
+   * 微前端内容全部失效:evaluate 里 querySelectorAll 明明有 1 个 input,
+   * frame.$ 却返回 null、evaluateHandle 句柄被判 detached(2026-08-07 实测)。
+   * 因此探测与后续所有交互都必须走 frame.evaluate 原生 JS。
+   */
+  private async waitFileInput(page: Page, maxMs = 120_000): Promise<Frame | null> {
+    const deadline = Date.now() + maxMs;
+    while (Date.now() < deadline) {
+      for (const frame of page.frames()) {
+        if (frame.isDetached()) continue;
+        const count = await frame
+          .evaluate(() => document.querySelectorAll('input[type="file"]').length)
+          .catch(() => 0);
+        if (count > 0) return frame;
+      }
       await page.waitForTimeout(2000);
     }
     return null;
   }
 
   /**
-   * 轮询等待 frame 内文件输入可用(最长 maxMs)。
-   * 不用 waitForSelector:wujie 会重建 frame 文档导致等待悬挂 ——
-   * 实测 input 已存在于 document(evaluate 可见)但 waitForSelector 超时。
-   * 每轮重新解析 frame(wujie 可能替换 frame 对象),用 frame.$ 直接探测。
+   * 经 frame.evaluate 把视频文件注入文件输入(绕开 wujie 沙箱)。
+   * 文件分块 base64 传入页面,JS 侧拼装 File + DataTransfer 赋值并派发
+   * input/change 事件。已在诊断脚本实测:1.5MB 视频注入后页面正常出封面。
    */
-  private async waitFileInput(page: Page, maxMs = 120_000): Promise<{ frame: Frame; input: import("playwright").ElementHandle } | null> {
-    const deadline = Date.now() + maxMs;
-    let frame = await this.waitMicroFrame(page);
-    while (Date.now() < deadline) {
-      if (frame) {
-        const handle = await frame.$('input[type="file"]').catch(() => null);
-        if (handle) return { frame, input: handle };
-      }
-      await page.waitForTimeout(2000);
-      frame = page.frames().find((f) => f.url().includes("/micro/")) ?? frame;
+  private async injectFile(frame: Frame, videoPath: string): Promise<boolean> {
+    const { readFile } = await import("node:fs/promises");
+    const { basename } = await import("node:path");
+    const buf = await readFile(videoPath);
+    const b64 = buf.toString("base64");
+    const name = basename(videoPath);
+    const CHUNK = 8 * 1024 * 1024;
+    await frame.evaluate(() => { (window as unknown as { __up: string[] }).__up = []; });
+    for (let off = 0; off < b64.length; off += CHUNK) {
+      await frame.evaluate((p: string) => {
+        (window as unknown as { __up: string[] }).__up.push(p);
+      }, b64.slice(off, off + CHUNK));
     }
-    return null;
+    const result = await frame.evaluate((fileName: string) => {
+      const w = window as unknown as { __up?: string[] };
+      const b64 = (w.__up ?? []).join("");
+      delete w.__up;
+      const bin = atob(b64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const file = new File([bytes], fileName, { type: "video/mp4" });
+      const input = document.querySelector('input[type="file"]') as HTMLInputElement | null;
+      if (!input) return "no-input";
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      input.files = dt.files;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      return `ok files=${input.files.length} size=${input.files[0]?.size ?? 0}`;
+    }, name);
+    return String(result).startsWith("ok");
   }
 
-  /** 关掉初始化期间可能弹出的引导/绑定弹窗（我知道了/取消），不强制 */
-  private async dismissDialogs(frame: Frame): Promise<void> {
-    for (const text of ["我知道了", "取消", "暂不"]) {
-      const btn = frame.locator(`button:has-text("${text}")`).first();
-      if (await btn.isVisible().catch(() => false)) {
-        await btn.click().catch(() => {});
-        await frame.waitForTimeout(500);
+  /** frame 内文本轮询(登录墙/弹窗/结果提示),evaluate 实现绕开 wujie */
+  private async frameText(frame: Frame): Promise<string> {
+    return frame.evaluate(() => document.body?.innerText ?? "").catch(() => "");
+  }
+
+  /** frame 内按文本点击按钮(evaluate 实现) */
+  private async clickButtonByText(frame: Frame, texts: string[]): Promise<boolean> {
+    return frame.evaluate((list: string[]) => {
+      const btns = Array.from(document.querySelectorAll("button, [role='button']"));
+      for (const t of list) {
+        const btn = btns.find((b) => (b.textContent ?? "").trim().includes(t));
+        if (btn) { (btn as HTMLElement).click(); return true; }
       }
-    }
+      return false;
+    }, texts).catch(() => false);
   }
 
   protected override async doUpload(page: Page, input: PublishInput): Promise<PublishOutput> {
-    await page.goto(this.uploadUrl, { waitUntil: "domcontentloaded" });
+    // 不在已就位的情况下重复 goto:checkLoggedIn 刚把页面导航到本 URL,
+    // 微前端初始化途中二次 goto 会把 wujie frame 卡成"有 frame 无内容"
+    // 的死状态(input 永不出现,2026-08-07 实测复现)。仅当不在目标页时才导航。
+    if (!page.url().startsWith(this.uploadUrl)) {
+      await page.goto(this.uploadUrl, { waitUntil: "domcontentloaded" });
+    }
 
     // 微前端偶发"页面初始化中"挂起:文件输入 120 秒不出现时重载页面重试一次(2026-08-06 实证)
-    let ready = await this.waitFileInput(page);
-    if (!ready) {
+    let frame = await this.waitFileInput(page);
+    if (!frame) {
       await page.reload({ waitUntil: "domcontentloaded" });
-      ready = await this.waitFileInput(page);
+      frame = await this.waitFileInput(page);
     }
-    if (!ready) {
+    if (!frame) {
       return { success: false, error: "视频号发表页微前端加载超时（重载后文件输入仍未出现）" };
     }
-    const { frame, input: fileHandle } = ready;
-    await this.dismissDialogs(frame);
+    await this.clickButtonByText(frame, ["我知道了", "取消", "暂不"]);
 
-    // 上传视频
-    await fileHandle.setInputFiles(input.videoPath);
+    // 上传视频(JS 注入,wujie 沙箱下唯一可靠路径)
+    const injected = await this.injectFile(frame, input.videoPath);
+    if (!injected) {
+      return { success: false, error: "视频注入文件输入失败（页面无可用 input）" };
+    }
 
-    // 等待上传完成（进度条消失或出现封面帧，视频越大越慢）
-    await frame
-      .waitForSelector('[class*="upload-progress"], [class*="progress-ing"]', {
-        state: "hidden",
-        timeout: 300000,
-      })
-      .catch(() => {});
-    await frame.waitForTimeout(3000);
-    await this.dismissDialogs(frame);
+    // 等待上传完成:封面预览/删除按钮出现,或进度条消失。视频越大越慢,最长 5 分钟。
+    const uploadDeadline = Date.now() + 300_000;
+    let uploadDone = false;
+    while (Date.now() < uploadDeadline) {
+      const text = await this.frameText(frame);
+      if (/删除|封面预览|编辑/.test(text) && /视频描述/.test(text)) { uploadDone = true; break; }
+      await page.waitForTimeout(3000);
+    }
+    if (!uploadDone) {
+      console.log("[publish:channels] 上传完成信号 5 分钟未出现,按既有流程继续尝试填表");
+    }
+    await this.clickButtonByText(frame, ["我知道了", "取消", "暂不"]);
 
-    // 填写描述（视频号新发表页「视频描述」框：textarea 或 contenteditable，按可见性兜底）
+    // 填写描述 + 话题(直接写入文本,不再依赖联想下拉)
     const desc = (input.options?.description as string) ?? input.title;
-    const descBox = frame
-      .locator(
-        'textarea[placeholder*="描述"], [data-placeholder*="描述"], input[placeholder*="描述"], div[contenteditable="true"]',
-      )
-      .first();
-    await descBox.click();
-    await descBox.fill(desc);
-
-    // 添加话题（描述框内输入 #话题 并选中联想项）
-    if (input.options?.tags && Array.isArray(input.options.tags)) {
-      for (const tag of (input.options.tags as string[]).slice(0, 5)) {
-        await page.keyboard.type(` #${tag}`, { delay: 30 });
-        await frame.waitForTimeout(1000);
-        const suggestion = frame.locator('[class*="topic"] [class*="item"], [class*="hash"] li').first();
-        if ((await suggestion.count()) > 0) {
-          await suggestion.click();
-        } else {
-          await page.keyboard.press("Enter");
-        }
+    const tags = Array.isArray(input.options?.tags) ? (input.options.tags as string[]).slice(0, 5) : [];
+    const fullDesc = tags.length > 0 ? `${desc}\n${tags.map((t) => `#${t}`).join(" ")}` : desc;
+    const descFilled = await frame.evaluate((text: string) => {
+      const box = document.querySelector(
+        'textarea[placeholder*="描述"], [data-placeholder*="描述"], div[contenteditable="true"]',
+      ) as HTMLElement | null;
+      if (!box) return false;
+      box.focus();
+      if (box instanceof HTMLTextAreaElement || box instanceof HTMLInputElement) {
+        const setter = Object.getOwnPropertyDescriptor(
+          box instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype,
+          "value",
+        )?.set;
+        setter?.call(box, text);
+      } else {
+        box.innerText = text;
       }
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+      box.dispatchEvent(new Event("change", { bubbles: true }));
+      return true;
+    }, fullDesc).catch(() => false);
+    if (!descFilled) {
+      return { success: false, error: "视频描述框填写失败（未找到描述输入元素）" };
     }
+    await page.waitForTimeout(1000);
 
-    // 发表
-    await frame.locator('button:has-text("发表")').first().click();
-    await frame.waitForTimeout(1500);
+    // 发表 + 可能的二次确认
+    await this.clickButtonByText(frame, ["发表"]);
+    await page.waitForTimeout(1500);
+    await this.clickButtonByText(frame, ["发表", "确定"]);
 
-    // 可能的二次确认弹窗，出现则确认
-    const confirmBtn = frame.locator(
-      'div[role="dialog"] button:has-text("发表"), div[role="dialog"] button:has-text("确定"), [class*="modal"] button:has-text("确定")',
-    ).first();
-    if (await confirmBtn.isVisible().catch(() => false)) {
-      await confirmBtn.click().catch(() => {});
-    }
-
-    // 真实校验发布结果 —— 此前点击后无条件返回成功（假成功）。
-    // 成功信号：跳转动态列表页 或 成功提示；失败信号：错误提示；超时按失败处理。
-    const SUCCESS_TEXT = "text=/发表成功|发布成功|提交成功|审核中/";
-    const FAILURE_TEXT = "text=/发表失败|发布失败|上传失败|审核不通过|包含违规|不符合/";
-    const outcome = await Promise.race([
-      page.waitForURL(/platform\/post\/list|platform\/home/, { timeout: 60000 }).then(() => "success" as const),
-      frame.locator(SUCCESS_TEXT).first().waitFor({ state: "visible", timeout: 60000 }).then(() => "success" as const),
-      frame.locator(FAILURE_TEXT).first().waitFor({ state: "visible", timeout: 60000 }).then(() => "failed" as const),
-    ]).catch(() => "timeout" as const);
-
-    if (outcome === "success") {
-      return { success: true, postUrl: page.url() };
-    }
-    if (outcome === "failed") {
-      const errText = await frame.locator(FAILURE_TEXT).first().textContent().catch(() => null);
-      return { success: false, error: `视频号发布被平台拒绝：${errText?.trim() ?? "未知错误"}` };
+    // 真实校验发布结果:跳转动态列表/成功提示 → 成功;错误提示 → 失败;超时按失败。
+    const deadline = Date.now() + 60_000;
+    while (Date.now() < deadline) {
+      if (/platform\/post\/list|platform\/home/.test(page.url())) {
+        return { success: true, postUrl: page.url() };
+      }
+      const text = await this.frameText(frame);
+      if (/发表成功|发布成功|提交成功|审核中/.test(text)) {
+        return { success: true, postUrl: page.url() };
+      }
+      const failMatch = text.match(/发表失败|发布失败|上传失败|审核不通过|包含违规|不符合[^。]*/);
+      if (failMatch) {
+        return { success: false, error: `视频号发布被平台拒绝：${failMatch[0]}` };
+      }
+      await page.waitForTimeout(2000);
     }
     return {
       success: false,
