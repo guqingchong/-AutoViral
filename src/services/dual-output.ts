@@ -200,6 +200,78 @@ export async function generateCardCopy(
   return splitArticleToCardCopy(article.title, article.content);
 }
 
+// ── 小红书配文（caption） ────────────────────────────────────────────────────
+
+/** 小红书笔记正文硬上限 1000 字 */
+export const XHS_CAPTION_LIMIT = 1000;
+
+/**
+ * 句边界智能截断(兜底):在 limit 内最后一个完整句号处截断 + 省略号,
+ * 绝不像 slice(0,1000) 那样断在半句中间(2026-08-07 实证小红书配文被腰斩)。
+ */
+export function smartTruncate(text: string, limit = XHS_CAPTION_LIMIT): string {
+  const cleaned = stripMarkdown(text).trim();
+  if (cleaned.length <= limit) return cleaned;
+  const window_ = cleaned.slice(0, limit - 10);
+  // 优先段落边界,其次句边界
+  const paraCut = window_.lastIndexOf("\n\n");
+  const sentCut = Math.max(
+    window_.lastIndexOf("。"),
+    window_.lastIndexOf("！"),
+    window_.lastIndexOf("？"),
+  );
+  const cut = paraCut > limit * 0.5 ? paraCut : sentCut > limit * 0.5 ? sentCut : -1;
+  if (cut > 0) return window_.slice(0, cut + (cut === sentCut ? 1 : 0)).trimEnd() + "\n……";
+  return window_.trimEnd() + "……";
+}
+
+/**
+ * 生成小红书配文:LLM 提炼全文要点(钩子+干货+互动引导+话题标签),
+ * 失败回退句边界智能截断。产物保证 ≤1000 字。
+ */
+export async function generateXhsCaption(
+  article: { title: string; content: string },
+  opts: { llm?: (prompt: string) => Promise<unknown> } = {},
+): Promise<string> {
+  const callLlm = opts.llm ?? ((prompt: string) => runJsonPrompt<unknown>(prompt, { timeoutMs: 120_000 }));
+  const prompt = [
+    "你是小红书爆款笔记编辑。基于下面这篇文章,写一条小红书笔记配文(正文,不是卡片)。",
+    "",
+    "## 要求",
+    "1. 800 字以内(平台硬上限 1000 字,留余量)",
+    "2. 开头一句钩子(痛点/悬念/反常识),3 秒抓人",
+    "3. 提炼全文 3-5 个核心要点,口语化、短句、可用 emoji 适度点缀",
+    "4. 结尾一句互动引导(提问/求评论区讨论)",
+    "5. 最后附 3-5 个话题标签,格式 #标签",
+    "6. 不要照抄原文长段落,不是摘要压缩,而是重写成小红书口吻",
+    "",
+    "## 输出格式(只输出 JSON)",
+    '{"caption":"..."}',
+    "",
+    `## 文章标题\n${article.title}`,
+    "",
+    `## 文章正文\n${article.content.slice(0, 6000)}`,
+  ].join("\n");
+
+  try {
+    const raw = await callLlm(prompt);
+    const caption = (raw as Record<string, unknown>)?.caption;
+    if (typeof caption === "string" && caption.trim().length > 50) {
+      const trimmed = caption.trim();
+      // LLM 也可能超长,兜底再截一次
+      return trimmed.length <= XHS_CAPTION_LIMIT
+        ? trimmed
+        : smartTruncate(trimmed, XHS_CAPTION_LIMIT);
+    }
+    log("warn", "server", "xhs_caption_llm_invalid", undefined, { title: article.title });
+  } catch (err) {
+    log("warn", "server", "xhs_caption_llm_failed", undefined, {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  return smartTruncate(article.content, XHS_CAPTION_LIMIT);
+}
+
 // ── 版式解析 ─────────────────────────────────────────────────────────────────
 
 export interface CardLayout {
@@ -628,6 +700,18 @@ async function ensureImageTextChild(
         "utf-8",
       );
     }
+  }
+
+  // 小红书配文:LLM 提炼全文(LLM 失败回退句边界截断),存 cards/caption.txt,
+  // 发布链路 buildPublishInput 优先读取 —— 不再 slice(0,1000) 腰斩原文
+  try {
+    const caption = await generateXhsCaption(article);
+    await mkdir(childCardsDir, { recursive: true });
+    await writeFile(join(childCardsDir, "caption.txt"), caption, "utf-8");
+  } catch (err) {
+    log("warn", "server", "xhs_caption_write_failed", parent.id, {
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 
   // 公众号草稿封面:由封面卡转出 output/cover.jpg(thumb_media 只收 JPEG;
