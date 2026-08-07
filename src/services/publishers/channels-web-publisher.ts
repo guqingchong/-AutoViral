@@ -24,8 +24,28 @@ export class ChannelsWebPublisher extends PlaywrightPublisher {
 
   protected override async checkLoggedIn(page: Page): Promise<boolean> {
     await page.goto(this.uploadUrl, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(2000);
-    return !page.url().includes("login");
+    // 视频号控制台/微前端初始化慢(实测 10-30s),只等 2s 会把加载中的
+    // 空白页/登录墙残影误判为未登录——扫码验证阶段因此被弹回二维码
+    // (2026-08-07 实测)。改为 15s 内轮询:出现登录墙→false;
+    // 出现已登录信号(发表/上传入口)→true;超时按当前页面文本判定。
+    const deadline = Date.now() + 15000;
+    let wallSince = 0;
+    while (Date.now() < deadline) {
+      if (page.url().includes("login")) return false;
+      const loginWall = await page.locator("text=/登录视频号助手|扫码登录|微信扫码/").count().catch(() => 0);
+      if (loginWall > 0) {
+        // 握手过渡期登录墙可能短暂渲染后消失:持续 3s 以上才认作真未登录
+        if (wallSince === 0) wallSince = Date.now();
+        else if (Date.now() - wallSince > 3000) return false;
+      } else {
+        wallSince = 0;
+      }
+      const signedIn = await page.locator("text=/发表动态|视频描述|上传视频|选择视频/").count().catch(() => 0);
+      if (signedIn > 0) return true;
+      await page.waitForTimeout(1000);
+    }
+    console.log(`[login:channels] checkLoggedIn 15s 超时,按未登录处理 url=${page.url()}`);
+    return false;
   }
 
   /** 轮询等待微前端 frame 出现（wujie iframe 初始化慢，最长 90 秒） */

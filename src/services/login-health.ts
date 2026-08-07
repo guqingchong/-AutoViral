@@ -1,5 +1,7 @@
 import { chromium, type Browser } from "playwright";
 import { getCredential } from "../db/platform-credentials-repo.js";
+import { dataDir } from "../config.js";
+import { join } from "node:path";
 
 /**
  * 各平台登录态健康检查。
@@ -29,9 +31,66 @@ const RPA_CHECKS: Record<string, { url: string; loginPattern: RegExp; loginConte
   // 抖音现在会在上传 URL 原地渲染登录表单(不跳转 /login),仅查 URL 会误判有效(2026-08-06 实证)
   douyin: { url: "https://creator.douyin.com/creator-micro/content/upload", loginPattern: /\/login/, loginContentPattern: /扫码登录|验证码登录|我是创作者/ },
   xiaohongshu: { url: "https://creator.xiaohongshu.com/publish/publish", loginPattern: /\/login/ },
-  channels: { url: "https://channels.weixin.qq.com/platform/post/create", loginPattern: /login/ },
+  // channels 不在此表:微信把会话绑在设备指纹上,必须用持久画像检测(见 verifyChannels)
   zhihu: { url: "https://zhuanlan.zhihu.com/write", loginPattern: /signin|login/ },
 };
+
+/**
+ * 视频号专用健康检查:复用发布器的持久画像(browser-profiles/channels)。
+ * 微信系把登录会话绑在设备指纹(localStorage/IndexedDB)上,全新无头上下文
+ * 只带 cookie 会被判"新设备"而弹登录墙 —— 扫码刚成功、画像内会话有效,
+ * 裸 cookie 检测却报失效(2026-08-07 实测)。与 ChannelsWebPublisher.checkLoggedIn
+ * 同标准:登录墙持续 3s+ → 失效;出现已登录信号 → 有效。
+ */
+async function verifyChannels(): Promise<PlatformHealth> {
+  const platform = "channels";
+  const raw = getCredential(platform, "session_cookie");
+  if (!raw) return { platform, configured: false, valid: null, detail: "未配置 Cookie" };
+  const profileDir = join(dataDir, "browser-profiles", platform);
+  let context: import("playwright").BrowserContext | null = null;
+  try {
+    context = await chromium.launchPersistentContext(profileDir, {
+      headless: true,
+      userAgent: UA,
+      viewport: { width: 1280, height: 800 },
+    });
+    const page = await context.newPage();
+    await page.goto("https://channels.weixin.qq.com/platform/post/create", {
+      waitUntil: "domcontentloaded",
+      timeout: 60000,
+    });
+    const deadline = Date.now() + 20000;
+    let wallSince = 0;
+    while (Date.now() < deadline) {
+      if (page.url().includes("login")) {
+        return { platform, configured: true, valid: false, detail: "登录态已失效，请重新浏览器登录" };
+      }
+      const wall = await page.locator("text=/登录视频号助手|扫码登录|微信扫码/").count().catch(() => 0);
+      if (wall > 0) {
+        if (wallSince === 0) wallSince = Date.now();
+        else if (Date.now() - wallSince > 3000) {
+          return { platform, configured: true, valid: false, detail: "登录态已失效，请重新浏览器登录" };
+        }
+      } else {
+        wallSince = 0;
+      }
+      const signedIn = await page.locator("text=/发表动态|视频描述|上传视频|选择视频/").count().catch(() => 0);
+      if (signedIn > 0) {
+        // 画像内 cookie 可能已刷新,顺便回写凭证库保持同步
+        const cookies = await context.cookies();
+        const { setCredential } = await import("../db/platform-credentials-repo.js");
+        setCredential(platform, "session_cookie", JSON.stringify(cookies));
+        return { platform, configured: true, valid: true, detail: "登录态有效" };
+      }
+      await page.waitForTimeout(1000);
+    }
+    return { platform, configured: true, valid: null, detail: "检测超时：发表页 20 秒内未完成初始化，请重试" };
+  } catch (err) {
+    return { platform, configured: true, valid: null, detail: `检测失败：${err instanceof Error ? err.message : String(err)}` };
+  } finally {
+    await context?.close().catch(() => {});
+  }
+}
 
 async function verifyRpa(platform: string, browser: Browser): Promise<PlatformHealth> {
   const check = RPA_CHECKS[platform];
@@ -145,6 +204,7 @@ export async function verifyAllPlatforms(force = false): Promise<Record<string, 
     const b = browser;
     const checks = await Promise.all([
       ...Object.keys(RPA_CHECKS).map((p) => verifyRpa(p, b)),
+      verifyChannels(),
       verifyWechat(),
       verifyBilibili(),
       verifyKuaishou(),

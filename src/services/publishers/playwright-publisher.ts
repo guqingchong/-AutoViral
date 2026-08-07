@@ -36,24 +36,28 @@ export abstract class PlaywrightPublisher implements Publisher {
     }
   }
 
-  async ensureBrowser(): Promise<{ browser: Browser; context: BrowserContext; page: Page }> {
-    if (!this.browser) {
-      this.browser = await chromium.launch({
-        headless: this.options.headless ?? true,
-        slowMo: this.options.slowMo,
-      });
-    }
+  async ensureBrowser(): Promise<{ browser: Browser | null; context: BrowserContext; page: Page }> {
     if (!this.context) {
-      this.context = await this.browser.newContext({
+      // 每平台持久化浏览器画像:指纹(localStorage/IndexedDB)跨次稳定,
+      // 避免微信系平台把"每次都是全新设备"判定为异常而强制下线
+      // (视频号 cookie 4 小时内即失效的根因 —— 2026-08-07 实证)。
+      // 首次启动画像为空时从凭证库播种 cookie(历史兼容)。
+      const profileDir = join(dataDir, "browser-profiles", this.platform);
+      await mkdir(profileDir, { recursive: true });
+      this.context = await chromium.launchPersistentContext(profileDir, {
+        headless: this.options.headless ?? true,
         userAgent: this.getUserAgent(),
         viewport: { width: 1280, height: 800 },
       });
-      const cred = getCredential(this.platform, "session_cookie");
-      if (cred) {
-        try {
-          const cookies = JSON.parse(cred);
-          if (Array.isArray(cookies)) await this.context.addCookies(cookies);
-        } catch { /* malformed cookie — ignore */ }
+      const existing = await this.context.cookies();
+      if (existing.length === 0) {
+        const cred = getCredential(this.platform, "session_cookie");
+        if (cred) {
+          try {
+            const cookies = JSON.parse(cred);
+            if (Array.isArray(cookies)) await this.context.addCookies(cookies);
+          } catch { /* malformed cookie — ignore */ }
+        }
       }
     }
     const page = await this.context.newPage();
@@ -110,8 +114,10 @@ export abstract class PlaywrightPublisher implements Publisher {
   }
 
   async login(): Promise<boolean> {
-    // 登录必须打开可见浏览器（用户要扫码/输密码），强制有头模式
+    // 登录必须打开可见浏览器（用户要扫码/输密码），强制有头模式。
+    // 若已有无头持久画像在跑,先关掉再以有头模式重开同一画像(指纹一致)。
     this.options = { ...this.options, headless: false };
+    await this.close();
     const { context, page } = await this.ensureBrowser();
     try {
       // 用 domcontentloaded 而非 networkidle：扫码登录页有长轮询，networkidle 永远不触发
@@ -130,14 +136,32 @@ export abstract class PlaywrightPublisher implements Publisher {
         const stillOnLogin =
           url === loginStartUrl || /login|signin|passport/i.test(url);
         if (!stillOnLogin) {
-          // URL 已离开登录页，再跳上传页二次确认登录态真实有效
-          const loggedIn = await this.checkLoggedIn(page).catch(() => false);
-          if (loggedIn) {
-            await this.saveCookies(context);
-            return true;
+          // URL 已离开登录页。但扫码成功后 ticket 换 cookie、控制台初始化需要时间
+          // (视频号微前端实测 10-30s),立刻 goto 上传页验证会打断握手,把用户
+          // 弹回二维码页造成"扫了又刷"死循环(2026-08-07 实测复现)。
+          // 改为耐心验证:最长 60s 内每 8s 验证一次,期间不额外导航;
+          // 若页面自己回到登录页(真失败)则立即退出验证,重新等扫码。
+          console.log(`[login:${this.platform}] URL 离开登录页 → ${url}，开始耐心验证登录态`);
+          const verifyDeadline = Date.now() + 60000;
+          let verified = false;
+          while (Date.now() < verifyDeadline) {
+            const loggedIn = await this.checkLoggedIn(page).catch(() => false);
+            console.log(`[login:${this.platform}] 验证结果=${loggedIn} url=${page.url()}`);
+            if (loggedIn) {
+              await this.saveCookies(context);
+              return true;
+            }
+            const u = page.url();
+            if (u === loginStartUrl || /login|signin|passport/i.test(u)) {
+              console.log(`[login:${this.platform}] 页面自行回到登录页，判定验证失败，重新等待扫码`);
+              break;
+            }
+            await page.waitForTimeout(8000);
           }
-          // 验证失败:回到登录页继续等用户扫码,绝不能留在上传页反复刷新
-          await page.goto(this.loginUrl, { waitUntil: "domcontentloaded" }).catch(() => {});
+          if (!verified) {
+            // 验证失败:回到登录页继续等用户扫码,绝不能留在上传页反复刷新
+            await page.goto(this.loginUrl, { waitUntil: "domcontentloaded" }).catch(() => {});
+          }
         }
         await page.waitForTimeout(2000);
       }
