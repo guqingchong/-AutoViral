@@ -150,16 +150,20 @@ export class ChannelsWebPublisher extends PlaywrightPublisher {
       return { success: false, error: "视频注入文件输入失败（页面无可用 input）" };
     }
 
-    // 等待上传完成:封面预览/删除按钮出现,或进度条消失。视频越大越慢,最长 5 分钟。
+    // 等待上传真正完成:进度条/"取消上传"/封面"生成中"全部消失,且出现
+    // 成品操作(删除按钮)。旧判定只看"封面预览"标签 —— 该标签上传中也存在,
+    // 导致上传 14% 就点发表,点击被吞,60s 超时假失败(2026-08-07 实测)。
     const uploadDeadline = Date.now() + 300_000;
     let uploadDone = false;
     while (Date.now() < uploadDeadline) {
       const text = await this.frameText(frame);
-      if (/删除|封面预览|编辑/.test(text) && /视频描述/.test(text)) { uploadDone = true; break; }
+      const uploading = /取消上传|生成中|上传中/.test(text);
+      const ready = /删除/.test(text) && /视频描述/.test(text);
+      if (!uploading && ready) { uploadDone = true; break; }
       await page.waitForTimeout(3000);
     }
     if (!uploadDone) {
-      console.log("[publish:channels] 上传完成信号 5 分钟未出现,按既有流程继续尝试填表");
+      return { success: false, error: "视频号视频上传 5 分钟未完成（进度条未消失）" };
     }
     await this.clickButtonByText(frame, ["我知道了", "取消", "暂不"]);
 
@@ -191,10 +195,20 @@ export class ChannelsWebPublisher extends PlaywrightPublisher {
     }
     await page.waitForTimeout(1000);
 
-    // 发表 + 可能的二次确认
+    // 发表 + 可能的二次确认。首次点击若被吞(上传刚完成按钮状态未刷新),
+    // 10s 后仍在原页则补点一次。
     await this.clickButtonByText(frame, ["发表"]);
-    await page.waitForTimeout(1500);
-    await this.clickButtonByText(frame, ["发表", "确定"]);
+    await page.waitForTimeout(3000);
+    await this.clickButtonByText(frame, ["确定", "确认", "发表"]);
+    await page.waitForTimeout(7000);
+    if (page.url().includes("post/create")) {
+      const text = await this.frameText(frame);
+      if (!/发表成功|发布成功|审核中/.test(text)) {
+        await this.clickButtonByText(frame, ["发表"]);
+        await page.waitForTimeout(2000);
+        await this.clickButtonByText(frame, ["确定", "确认", "发表"]);
+      }
+    }
 
     // 真实校验发布结果:跳转动态列表/成功提示 → 成功;错误提示 → 失败;超时按失败。
     const deadline = Date.now() + 60_000;

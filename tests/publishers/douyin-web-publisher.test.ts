@@ -31,6 +31,9 @@ class MockPage {
     this.currentUrl = "https://creator.douyin.com/creator-micro/content/manage";
   }
   async close() {}
+  // doUpload 的 evaluate 调用:草稿检测/上传完成文本/自主声明。
+  // 返回含"重新上传"的文本使上传完成轮询立即通过;其余返回值不被使用。
+  async evaluate() { return "重新上传 更换视频"; }
   locator(selector: string) {
     // 结果校验只针对 text=/…/ 成功/失败提示；上传阶段的 waitFor 不受影响
     const waitFails = !this.confirmSuccess && selector.startsWith("text=");

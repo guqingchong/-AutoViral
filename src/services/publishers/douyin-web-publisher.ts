@@ -23,12 +23,42 @@ export class DouyinWebPublisher extends PlaywrightPublisher {
     //（2026-08-06 实测：goto 30s 超时导致发布失败）
     await page.goto(this.uploadUrl, { waitUntil: "domcontentloaded" });
 
+    // 草稿提示处理:「你还有上次未发布的视频」条会干扰新上传(草稿只存文字
+    // 不存视频,曾导致视频丢失型假成功 —— 2026-08-07 实测)。
+    // 一律放弃旧草稿,从干净状态上传。注意入口是 span 不是 button。
+    const draftDropped = await page.evaluate(() => {
+      const giveUp = document.querySelector('span[class*="give-up"]');
+      if (giveUp && giveUp.getClientRects().length > 0) { (giveUp as HTMLElement).click(); return true; }
+      return false;
+    }).catch(() => false);
+    if (draftDropped) {
+      // 放弃草稿可能有确认弹窗
+      await page.waitForTimeout(1500);
+      await page.evaluate(() => {
+        const btn = Array.from(document.querySelectorAll("button"))
+          .find((b) => /确定|放弃/.test(b.textContent ?? "") && !/取消/.test(b.textContent ?? ""));
+        btn?.click();
+      }).catch(() => {});
+      await page.waitForTimeout(2000);
+    }
+
     const fileInput = page.locator('input[type="file"]').first();
     await fileInput.waitFor({ state: "attached", timeout: 60000 });
     await fileInput.setInputFiles(input.videoPath);
 
-    // 等待上传进度出现并稳定
-    await page.waitForSelector('.upload-progress, [class*="progress"]', { state: "hidden", timeout: 120000 }).catch(() => {});
+    // 等待上传真正完成:进度百分比消失且出现"重新上传/更换视频"
+    // (旧逻辑只等 progress 隐藏,上传未完成就填表点发布 → 草稿假成功)
+    const uploadDeadline = Date.now() + 480_000;
+    let uploadDone = false;
+    while (Date.now() < uploadDeadline) {
+      const text = await page.evaluate(() => document.body?.innerText ?? "").catch(() => "");
+      const uploading = /上传中|处理中|转码中|\d+%/.test(text);
+      if (!uploading && /重新上传|更换视频/.test(text)) { uploadDone = true; break; }
+      await page.waitForTimeout(4000);
+    }
+    if (!uploadDone) {
+      return { success: false, error: "抖音视频上传 8 分钟未完成（进度未消失）" };
+    }
 
     // 填写标题：选择首个可编辑 div（等它真正出现，上传未完成时不可见）
     const titleBox = page.locator('div[contenteditable="true"]').first();
@@ -43,6 +73,31 @@ export class DouyinWebPublisher extends PlaywrightPublisher {
         await tagInput.press("Enter");
       }
     }
+
+    // 自主声明:选"内容由AI生成"(本系统视频为 AI 生成,平台规则要求声明;
+    // 弹窗内精确匹配,避免误点导航"AI分身" —— 2026-08-07 实测踩坑)
+    await page.evaluate(() => {
+      const sel = Array.from(document.querySelectorAll('[class*="select"], [role="combobox"], [class*="Select"]'))
+        .find((e) => /请选择自主声明/.test(e.textContent ?? "") && (e.textContent ?? "").length < 30);
+      if (sel) (sel as HTMLElement).click();
+    }).catch(() => {});
+    await page.waitForTimeout(2000);
+    await page.evaluate(() => {
+      const dialog = Array.from(document.querySelectorAll('[class*="modal"], [role="dialog"], [class*="Modal"], [class*="drawer"], [class*="Drawer"]'))
+        .find((d) => /声明类型/.test(d.textContent ?? "") && d.getClientRects().length > 0);
+      if (!dialog) return;
+      const opt = Array.from(dialog.querySelectorAll("label, span, div"))
+        .find((e) => (e.textContent ?? "").trim() === "内容由AI生成");
+      if (opt) (opt as HTMLElement).click();
+    }).catch(() => {});
+    await page.waitForTimeout(1200);
+    await page.evaluate(() => {
+      const dialog = Array.from(document.querySelectorAll('[class*="modal"], [role="dialog"], [class*="Modal"], [class*="drawer"], [class*="Drawer"]'))
+        .find((d) => /声明类型/.test(d.textContent ?? "") && d.getClientRects().length > 0);
+      const btn = dialog && Array.from(dialog.querySelectorAll("button")).find((b) => b.textContent.trim() === "确定");
+      btn?.click();
+    }).catch(() => {});
+    await page.waitForTimeout(1500);
 
     // 点击发布：必须用精确文本匹配 —— button:has-text("发布") 会先命中左侧导航的
     // 「作品发布」菜单按钮(.first()),根本没提交,等 60 秒成功信号只能超时
