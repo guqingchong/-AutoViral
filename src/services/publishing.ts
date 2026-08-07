@@ -128,6 +128,8 @@ export async function publishToPlatform(workId: string, platform: string, input:
     recordsRepo.updatePublishRecord(recordId, {
       status: "published",
       platform_post_id: result.platformPostId ?? undefined,
+      // 清掉上次失败的错误文本,避免"published 但带错误信息"的困惑(2026-08-07 实测)
+      error_message: null as unknown as undefined,
       metadata: JSON.stringify({ postUrl: result.postUrl }),
       published_at: new Date().toISOString(),
     });
