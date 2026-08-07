@@ -1,5 +1,5 @@
 import { join, extname, resolve } from "node:path";
-import { stat, readdir } from "node:fs/promises";
+import { stat, readdir, readFile } from "node:fs/promises";
 import { dataDir } from "../config.js";
 import { getPublisher } from "./publishers/factory.js";
 import { DouyinPublisher } from "./publishers/douyin-publisher.js";
@@ -251,8 +251,18 @@ export async function buildPublishInput(work: DbWork, platform: string): Promise
     const cards = await collectCardImages(outputDir);
     if (cards.length > 0) {
       options.imagePaths = cards;
+      // 配文优先读派生时生成的 caption.txt(LLM 提炼,≤1000 字);
+      // 没有则句边界智能截断 —— 不再 slice(0,1000) 断在半句(2026-08-07 实证)
+      const { generateXhsCaption, smartTruncate } = await import("./dual-output.js");
+      let caption: string | undefined;
+      try {
+        caption = (await readFile(join(outputDir, "cards", "caption.txt"), "utf-8")).trim() || undefined;
+      } catch { /* 无 caption 文件 */ }
       const article = listArticlesByWork(work.id)[0];
-      if (article?.content) options.description = article.content.slice(0, 1000);
+      if (!caption && article?.content) {
+        caption = smartTruncate(article.content);
+      }
+      if (caption) options.description = caption;
     }
   }
 
