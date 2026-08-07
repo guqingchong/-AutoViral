@@ -293,6 +293,8 @@ export interface CardHtmlInput {
   /** 内容卡序号（1 起）与总数，serial_number 装饰用 */
   index?: number;
   total?: number;
+  /** 素材图 URL（file:// 或 http）：提供时卡片渲染为「图+文」形态 */
+  imageUrl?: string;
 }
 
 /** 把一张卡片的文案 + LayoutSpec 渲染成独立 HTML 文档（截图出 PNG 用） */
@@ -305,10 +307,13 @@ export function buildCardHtml(input: CardHtmlInput): string {
   const accent = cs.accent ?? "#FF2E4D";
   const deco = new Set(spec.decorations);
   const isCenter = kind === "cover" || /center/.test(spec.layout);
+  const hasImage = Boolean(input.imageUrl);
 
-  const titleSize = spec.fontSize;
-  const bodySize = Math.max(28, Math.round(spec.fontSize * 0.55));
+  // 图+文形态:图片约占版面 45%(内容卡)/55%(封面),文字区相应压缩字号
+  const titleSize = hasImage ? Math.round(spec.fontSize * 0.78) : spec.fontSize;
+  const bodySize = Math.max(28, Math.round(spec.fontSize * (hasImage ? 0.42 : 0.55)));
   const subSize = Math.max(24, Math.round(spec.fontSize * 0.38));
+  const imgHeight = Math.round(canvas.height * (kind === "cover" ? 0.55 : 0.45));
 
   const parts: string[] = [];
 
@@ -319,6 +324,10 @@ export function buildCardHtml(input: CardHtmlInput): string {
     parts.push(
       `<div class="serial">${String(input.index).padStart(2, "0")} / ${String(input.total).padStart(2, "0")}</div>`,
     );
+  }
+
+  if (hasImage) {
+    parts.push(`<div class="img-wrap"><img src="${input.imageUrl}" alt=""/></div>`);
   }
 
   if (kind === "cover") {
@@ -334,6 +343,8 @@ export function buildCardHtml(input: CardHtmlInput): string {
     parts.push(`<div class="body">${escapeHtml(input.body ?? "").replace(/\n/g, "<br/>")}</div>`);
   }
 
+  // 图+文形态:图片置顶通栏,文字区居中偏下;无图时维持原纯文版式
+  const textPadding = hasImage ? "48px 72px" : "90px 80px";
   return `<!DOCTYPE html>
 <html><head><meta charset="utf-8"/><style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -343,22 +354,26 @@ body {
   color: ${text};
   font-family: "${spec.font}", "PingFang SC", "Microsoft YaHei", sans-serif;
   display: flex; flex-direction: column;
-  justify-content: ${isCenter ? "center" : "flex-start"};
+  justify-content: ${hasImage ? "flex-start" : isCenter ? "center" : "flex-start"};
   align-items: ${isCenter ? "center" : "stretch"};
   text-align: ${isCenter ? "center" : "left"};
-  padding: 90px 80px;
+  padding: ${hasImage ? "0" : textPadding};
   position: relative;
   overflow: hidden;
 }
+${hasImage ? `.img-wrap { width: 100%; height: ${imgHeight}px; overflow: hidden; flex: 0 0 auto; }
+.img-wrap img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.cover-title, .cover-subtitle, .heading, .body, .accent-bar, .divider { margin-left: 72px; margin-right: 72px; }
+.cover-title { margin-top: 48px; } .heading { margin-top: 40px; }` : ""}
 ${deco.has("texture") ? `body::before { content: ""; position: absolute; inset: 0; pointer-events: none;
   background: repeating-linear-gradient(45deg, transparent 0 18px, ${accent}11 18px 20px); }` : ""}
-.accent-bar { width: 120px; height: 12px; background: ${accent}; border-radius: 6px; margin-bottom: 48px; }
+.accent-bar { width: 120px; height: 12px; background: ${accent}; border-radius: 6px; margin-bottom: ${hasImage ? "28px" : "48px"}; ${hasImage ? "margin-top: 40px;" : ""} }
 .cover-title { color: ${primary}; font-size: ${titleSize}px; font-weight: 800; line-height: 1.3; word-break: break-word; }
-.cover-subtitle { color: ${text}; font-size: ${subSize}px; line-height: 1.6; margin-top: 40px; opacity: 0.85; }
-.heading { color: ${primary}; font-size: ${titleSize}px; font-weight: 700; line-height: 1.35; margin-bottom: 32px; }
-.divider { width: 100%; height: 2px; background: ${accent}55; margin: 8px 0 40px; }
+.cover-subtitle { color: ${text}; font-size: ${subSize}px; line-height: 1.6; margin-top: 28px; opacity: 0.85; }
+.heading { color: ${primary}; font-size: ${titleSize}px; font-weight: 700; line-height: 1.35; margin-bottom: 24px; }
+.divider { width: calc(100% - 144px); height: 2px; background: ${accent}55; margin: 8px 0 32px; }
 .body { color: ${text}; font-size: ${bodySize}px; line-height: 1.9; word-break: break-word; white-space: normal; }
-.serial { position: absolute; top: 48px; right: 64px; color: ${accent}; font-size: 30px; font-weight: 600; letter-spacing: 2px; }
+.serial { position: absolute; top: 48px; right: 64px; color: ${accent}; font-size: 30px; font-weight: 600; letter-spacing: 2px; ${hasImage ? "background: rgba(255,255,255,0.85); border-radius: 6px; padding: 2px 10px;" : ""} }
 .corner { position: absolute; width: 44px; height: 44px; border: 6px solid ${accent}; }
 .corner.tl { top: 28px; left: 28px; border-right: none; border-bottom: none; }
 .corner.tr { top: 28px; right: 28px; border-left: none; border-bottom: none; }
@@ -385,6 +400,10 @@ async function renderWithPlaywright(
     const page = await browser.newPage({ viewport: { width: canvas.width, height: canvas.height } });
     for (const p of pages) {
       await page.setContent(p.html, { waitUntil: "load" });
+      // 卡片含素材图(file://)时等图片真正加载完再截图
+      await page
+        .waitForFunction(() => Array.from(document.images).every((i) => i.complete), { timeout: 15000 })
+        .catch(() => {});
       await page.screenshot({ path: p.outPath, type: "png" });
     }
     await page.close();
@@ -409,8 +428,26 @@ export async function renderCardsToPng(
   layout: CardLayout,
   outDir: string,
   render?: CardRenderer,
+  images?: string[],
 ): Promise<RenderedCards> {
   await mkdir(outDir, { recursive: true });
+
+  const { readFile: readFileBuf } = await import("node:fs/promises");
+  const { extname } = await import("node:path");
+  // about:blank 文档加载 file:// 子资源会被 Chromium 拦截(Not allowed to load
+  // local resource),图片统一内联为 data URI
+  const MIME: Record<string, string> = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif" };
+  const dataUriCache = new Map<string, string>();
+  const toUrl = async (p: string): Promise<string> => {
+    const cached = dataUriCache.get(p);
+    if (cached) return cached;
+    const mime = MIME[extname(p).toLowerCase()] ?? "image/png";
+    const uri = `data:${mime};base64,${(await readFileBuf(p)).toString("base64")}`;
+    dataUriCache.set(p, uri);
+    return uri;
+  };
+  const imageAt = async (i: number): Promise<string | undefined> =>
+    images && images.length > 0 ? toUrl(images[i % images.length]) : undefined;
 
   const jobs: Array<{ html: string; outPath: string }> = [];
   jobs.push({
@@ -420,10 +457,11 @@ export async function renderCardsToPng(
       kind: "cover",
       title: copy.coverTitle,
       subtitle: copy.coverSubtitle,
+      imageUrl: await imageAt(0),
     }),
     outPath: join(outDir, "01-cover.png"),
   });
-  copy.pages.forEach((p, i) => {
+  for (const [i, p] of copy.pages.entries()) {
     jobs.push({
       html: buildCardHtml({
         spec: layout.content,
@@ -433,10 +471,11 @@ export async function renderCardsToPng(
         body: p.body,
         index: i + 1,
         total: copy.pages.length,
+        imageUrl: await imageAt(i + 1),
       }),
       outPath: join(outDir, `${String(i + 2).padStart(2, "0")}-card.png`),
     });
-  });
+  }
 
   if (render) {
     for (const j of jobs) await render(j.html, j.outPath, layout.canvas);
@@ -529,17 +568,31 @@ async function ensureImageTextChild(
     await cp(srcImages, join(childWorkDir, "assets", "images"), { recursive: true });
   } catch { /* 父作品无素材图,纯文本图文也成立 */ }
 
-  // 卡片:父作品已有渲染产物(回填场景)直接复制;否则 LLM 文案 + 渲染到子目录
+  // 收集素材图(卡片「图+文」形态用,绝对路径按文件名排序)
+  let materialImages: string[] = [];
+  try {
+    const IMG_EXTS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif"]);
+    const entries = await readdir(join(childWorkDir, "assets", "images"));
+    materialImages = entries
+      .filter((f) => IMG_EXTS.has(f.slice(f.lastIndexOf(".")).toLowerCase()))
+      .sort()
+      .map((f) => join(childWorkDir, "assets", "images", f));
+  } catch { /* 无素材目录 */ }
+
+  // 卡片:仅「新建子作品且父作品已有渲染产物」(存量回填场景)直接复制;
+  // 其余(刷新/强制)都重新渲染,避免拿过期的旧文章卡片
   const childCardsDir = join(childWorkDir, "output", "cards");
   const parentCardsDir = join(parentWorkDir, "output", "cards");
   let cardFiles: string[] = [];
-  try {
-    const parentCards = (await readdir(parentCardsDir)).filter((f) => f.endsWith(".png"));
-    if (parentCards.length > 0) {
-      await cp(parentCardsDir, childCardsDir, { recursive: true });
-      cardFiles = parentCards.sort().map((f) => join(childCardsDir, f));
-    }
-  } catch { /* 父目录无卡片,走渲染 */ }
+  if (!existing && !deps.forceRender) {
+    try {
+      const parentCards = (await readdir(parentCardsDir)).filter((f) => f.endsWith(".png"));
+      if (parentCards.length > 0) {
+        await cp(parentCardsDir, childCardsDir, { recursive: true });
+        cardFiles = parentCards.sort().map((f) => join(childCardsDir, f));
+      }
+    } catch { /* 父目录无卡片,走渲染 */ }
+  }
 
   if (cardFiles.length === 0) {
     const layout = resolveCardLayout(parent.template_id);
@@ -549,7 +602,7 @@ async function ensureImageTextChild(
     if (copy.pages.length === 0) {
       log("warn", "server", "dual_output_empty_card_copy", parent.id, {});
     } else {
-      const rendered = await renderCardsToPng(copy, layout, childCardsDir, deps.render);
+      const rendered = await renderCardsToPng(copy, layout, childCardsDir, deps.render, materialImages);
       cardFiles = rendered.files;
       await writeFile(
         join(childCardsDir, "cards.json"),
@@ -588,6 +641,8 @@ export interface DeriveDualOutputsResult {
 export interface DeriveDualOutputsDeps {
   generateCopy?: (article: { title: string; content: string }) => Promise<CardCopy>;
   render?: CardRenderer;
+  /** 强制重渲染卡片(忽略父作品已有卡片复制快路径),版式/素材策略升级后回填用 */
+  forceRender?: boolean;
 }
 
 /**
