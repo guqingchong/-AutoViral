@@ -11,8 +11,9 @@ class MockLocator {
   fills: string[] = [];
   constructor(private label = "", private waitFails = false) {}
   first() { return this; }
+  last() { return this; }
   async fill(v: string) { this.fills.push(v); }
-  async click() { this.clicks.push(this.label); }
+  async click(_opts?: unknown) { this.clicks.push(this.label); }
   async count() { return 1; }
   async isEnabled() { return true; }
   async getAttribute(name: string) { return name === "submit-disabled" ? "false" : null; }
@@ -37,6 +38,7 @@ class MockPage {
     this.currentUrl = "https://creator.xiaohongshu.com/publish/success";
   }
   async close() {}
+  async evaluate() { return null; }
   locator(selector: string) {
     const waitFails = !this.confirmSuccess && selector.startsWith("text=/");
     const l = new MockLocator(selector, waitFails);

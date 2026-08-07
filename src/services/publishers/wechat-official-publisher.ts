@@ -224,7 +224,10 @@ export class WechatOfficialPublisher implements Publisher {
         }),
       });
       const draftJson = (await draftRes.json()) as WxDraftResponse;
-      if (draftJson.errcode !== 0 || !draftJson.media_id) {
+      // adddraft 成功时返回 {"media_id":"...","item":[]} —— 没有 errcode 字段！
+      // 旧判定 errcode !== 0 把 undefined 当失败,草稿已创建却报错(2026-08-07 实测)
+      const draftErr = draftJson.errcode !== undefined && draftJson.errcode !== 0;
+      if (draftErr || !draftJson.media_id) {
         return { success: false, error: `公众号创建草稿失败：${draftJson.errmsg ?? JSON.stringify(draftJson)}` };
       }
 
@@ -236,6 +239,16 @@ export class WechatOfficialPublisher implements Publisher {
       });
       const pubJson = (await pubRes.json()) as WxPublishResponse;
       if (pubJson.errcode !== 0 && pubJson.errcode !== undefined) {
+        // 48001 api unauthorized:freepublish(自动发布)接口仅对已微信认证的
+        // 公众号开放;未认证订阅号草稿已建好,引导人工一键发布(2026-08-07 实测)
+        if (pubJson.errcode === 48001 || /api unauthorized|未授权/i.test(pubJson.errmsg ?? "")) {
+          return {
+            success: false,
+            error:
+              `草稿已创建成功并存入公众号草稿箱（media_id: ${draftJson.media_id}），但自动发布接口未授权——` +
+              "微信公众平台规定 freepublish 接口仅对已认证公众号开放。请到 mp.weixin.qq.com → 草稿箱 找到该文章，手动点击「发布」即可（一键完成）；如需全自动发布，需完成公众号微信认证。",
+          };
+        }
         return { success: false, error: `公众号发布失败：${pubJson.errmsg ?? JSON.stringify(pubJson)}` };
       }
 
