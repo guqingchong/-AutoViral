@@ -150,6 +150,12 @@ export class ZhihuWebPublisher extends PlaywrightPublisher {
     await page.locator('button:text-is("发布")').first().click();
     await page.waitForTimeout(2000);
 
+    // 风控可能在填表/点发布途中触发(请求过密累积),页面会整体跳成
+    // 40362 JSON 错误页(2026-08-07 实测:确认按钮 30s 超时,截图是 JSON)。
+    // 每个关键动作后都复查,给出可操作指引而非 locator 超时。
+    const blockedMidway = await this.checkRiskControl(page);
+    if (blockedMidway) return blockedMidway;
+
     // 确认面板中再次点击「确认并发布」/「发布」
     const confirmBtn = page.locator('button:has-text("确认并发布"), button:has-text("确认发布")').first();
     if (await confirmBtn.count() > 0) {
@@ -158,6 +164,9 @@ export class ZhihuWebPublisher extends PlaywrightPublisher {
       await page.locator('.Modal button:has-text("发布"), [role="dialog"] button:has-text("发布")').first().click();
     }
     await page.waitForTimeout(2000);
+
+    const blockedAfter = await this.checkRiskControl(page);
+    if (blockedAfter) return blockedAfter;
 
     // 发布后知乎跳转到文章页（zhuanlan.zhihu.com/p/<id>）。
     // 真实校验：拿不到文章 ID 一律按失败处理 —— 此前无条件 success 属于假成功。
