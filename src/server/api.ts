@@ -1012,6 +1012,32 @@ apiRoutes.post("/api/assets/data-card", async (c) => {
   }
 });
 
+// POST /api/assets/code-scene - 程序化动画场景(A3 代码渲染素材,2026-08-14)
+// 结构图/流程图/逻辑链条镜头:模板参数化渲染 mp4 段,替代静态图兜底
+apiRoutes.post("/api/assets/code-scene", async (c) => {
+  const body = await c.req.json().catch(() => null);
+  if (!body) return c.json({ success: false, error: "invalid JSON body" }, 400);
+  const { renderCodeScene, validateCodeSceneInput } = await import("../services/code-scene.js");
+  const errors = validateCodeSceneInput(body);
+  if (errors.length) return c.json({ success: false, error: errors.join("; "), code: "INVALID_PARAMS" }, 400);
+  const result = await renderCodeScene(body);
+  return c.json(result, result.success ? 200 : 500);
+});
+
+// GET /api/assets/code-scene/templates - 可用场景模板清单(agent 发现入口)
+apiRoutes.get("/api/assets/code-scene/templates", (c) => {
+  return c.json({
+    templates: [
+      { name: "structure-growth", label: "中心辐射结构图", params: "title, center, branches[2-4]{text,label,color?}", bestFor: "中心-分支结构(资金闭环/三段论)" },
+      { name: "flow-steps", label: "流程步骤推进", params: "title, steps[2-5]{title,desc?}", bestFor: "流程/标准/步骤(退出三标准)" },
+      { name: "logic-chain", label: "逻辑链条递进", params: "title, chain[2-4]string", bestFor: "因果/递进链条(政策→影响→应对)" },
+    ],
+    themes: ["finance_dark", "warm_gold", "ink_green", "minimal_light"],
+    duration: "1-30s,建议 4-8s",
+    note: "精确数据镜头仍走 /api/assets/chart|data-card;本端点服务结构/流程/逻辑镜头",
+  });
+});
+
 // GET /api/assets/library - 素材资产库检索(C5,2026-08-14):q 模糊匹配名称/标签,按使用频次优先
 apiRoutes.get("/api/assets/library", async (c) => {
   const type = c.req.query("type");
