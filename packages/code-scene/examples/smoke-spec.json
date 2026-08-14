@@ -1,0 +1,17 @@
+{
+  "jobId": "smoke",
+  "scene": "structure-growth",
+  "params": {
+    "title": "专项债资金闭环",
+    "center": "专项债券",
+    "branches": [
+      { "text": "项目建设", "label": "资金投入" },
+      { "text": "运营收益", "label": "收益归集" },
+      { "text": "还本付息", "label": "本息偿付" }
+    ],
+    "theme": "finance_dark"
+  },
+  "duration": 6,
+  "outFile": "smoke.mp4",
+  "outDir": "./out"
+}
