@@ -33,4 +33,22 @@ describe("asset library API", () => {
     const res3 = await apiRoutes.request(`/api/assets/${asset.id}`, { method: "DELETE" });
     expect(res3.status).toBe(200);
   });
+
+  it("code-scene 参数校验:非法模板名返回 400", async () => {
+    const res = await apiRoutes.request("/api/assets/code-scene", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workId: "w_x", filename: "f", template: { name: "hologram", params: {} } }),
+    });
+    expect(res.status).toBe(400);
+    const data = await res.json();
+    expect(data.error).toContain("未知场景模板");
+  });
+
+  it("code-scene 模板清单可发现", async () => {
+    const res = await apiRoutes.request("/api/assets/code-scene/templates");
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.templates.map((t: any) => t.name)).toContain("flow-steps");
+  });
 });
