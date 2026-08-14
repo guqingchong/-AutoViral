@@ -75,10 +75,10 @@ export async function runQualityGate(videoPath: string, opts?: { subtitlePath?: 
 
   const info = await probeMedia(videoPath);
 
-  // 1. 时长
+  // 1. 时长(中间段 expectAudio=false 时短时长属正常,不告警)
   const dur = info.duration ?? 0;
   if (dur <= 0) add("duration", "时长", "fail", "无法读取时长");
-  else if (dur < 5) add("duration", "时长", "warn", `${dur.toFixed(1)}s 过短,平台分发价值低`);
+  else if (dur < 5 && expectAudio) add("duration", "时长", "warn", `${dur.toFixed(1)}s 过短,平台分发价值低`);
   else if (dur > 600) add("duration", "时长", "warn", `${(dur / 60).toFixed(1)} 分钟偏长,短视频建议 ≤3 分钟`);
   else add("duration", "时长", "pass", `${dur.toFixed(1)}s`);
 
@@ -99,7 +99,11 @@ export async function runQualityGate(videoPath: string, opts?: { subtitlePath?: 
     else add("audio", "音轨", "pass", "无声段(模板图解/中间段),按预期无音轨");
   } else {
     const vol = await meanVolume(videoPath);
-    if (vol === null) add("audio", "响度", "warn", "响度检测失败");
+    // 中间段(Revideo/模板图解)导出器会带静默音轨:expectAudio=false 时静默属预期,不判 fail
+    if (!expectAudio && vol !== null && vol < -60) {
+      add("audio", "响度", "pass", "无声中间段(静默音轨),按预期不检查响度");
+    }
+    else if (vol === null) add("audio", "响度", "warn", "响度检测失败");
     else if (vol < -60) add("audio", "响度", "fail", `平均响度 ${vol.toFixed(1)}dB,接近静音`);
     else if (vol < -45) add("audio", "响度", "warn", `平均响度 ${vol.toFixed(1)}dB 偏低`);
     else add("audio", "响度", "pass", `平均响度 ${vol.toFixed(1)}dB`);
