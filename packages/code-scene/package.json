@@ -1,0 +1,19 @@
+{
+  "name": "@autoviral/code-scene",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "smoke": "node worker.mjs ./examples/smoke-spec.json"
+  },
+  "dependencies": {
+    "@motion-canvas/2d": "^3.17.2",
+    "@motion-canvas/core": "^3.17.2",
+    "@revideo/2d": "^0.11.0",
+    "@revideo/core": "^0.11.0",
+    "@revideo/ffmpeg": "^0.11.0",
+    "@revideo/renderer": "^0.11.0",
+    "@revideo/ui": "^0.11.0",
+    "@revideo/vite-plugin": "^0.11.0"
+  }
+}
