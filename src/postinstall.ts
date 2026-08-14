@@ -114,6 +114,22 @@ async function main(): Promise<void> {
 
     // Install skill-creator from official repo if not present
     await installSkillCreator();
+
+    // code-scene 子项目依赖(代码渲染素材层,2026-08-14):缺失则自动安装
+    try {
+      const codeSceneDir = join(__dirname, "..", "packages", "code-scene");
+      if (await exists(codeSceneDir) && !await exists(join(codeSceneDir, "node_modules"))) {
+        console.log("autocode: installing code-scene subproject dependencies...");
+        const { execSync } = await import("node:child_process");
+        execSync("npm install", {
+          cwd: codeSceneDir,
+          stdio: "inherit",
+          env: { ...process.env, PUPPETEER_SKIP_DOWNLOAD: "true" },
+        });
+      }
+    } catch (err) {
+      console.warn("autocode: code-scene subproject install warning:", err instanceof Error ? err.message : err);
+    }
   } catch (err) {
     console.warn("autocode: postinstall warning:", err instanceof Error ? err.message : err);
     // Don't crash the install
