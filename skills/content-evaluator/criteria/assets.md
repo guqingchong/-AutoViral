@@ -96,3 +96,12 @@ ffprobe -v error -show_entries stream=width,height,codec_name,r_frame_rate,codec
 - 角色面部严重畸变
 - 素材数量严重不足（缺少超过50%的镜头）
 - 所有素材风格完全不一致（每张图看起来是不同世界的）
+
+### 程序化动画覆盖 (code_scene_coverage)
+- 分镜中的结构图/流程图/逻辑链条镜头是否调用了 /api/assets/code-scene 生成动态场景?
+- 仍用静态图(chart/snapshot)充当结构镜头的,降档处理(除非分镜明确说明理由)
+**评分标准:**
+- 9-10: 结构类镜头全部动态化,模板选择与内容匹配
+- 7-8: 部分动态化,剩余静态图有合理理由
+- 5-6: 大量结构镜头静态图兜底
+- 1-4: 结构镜头用 AI 生图(违反铁律)
