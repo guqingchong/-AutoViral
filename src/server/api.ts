@@ -1034,7 +1034,7 @@ apiRoutes.get("/api/assets/code-scene/templates", (c) => {
     ],
     themes: ["finance_dark", "warm_gold", "ink_green", "minimal_light"],
     duration: "1-30s,建议 4-8s",
-    note: "精确数据镜头仍走 /api/assets/chart|data-card;本端点服务结构/流程/逻辑镜头",
+    note: "精确数据镜头仍走 /api/assets/chart|data-card;本端点服务结构/流程/逻辑镜头;模板按 1080x1920 竖版设计,非默认尺寸可能导致布局错位",
   });
 });
 

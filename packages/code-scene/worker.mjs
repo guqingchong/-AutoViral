@@ -14,6 +14,7 @@ const W = spec.width ?? 1080, H = spec.height ?? 1920;
 
 if (spec.scene === "custom") {
   if (!spec.customCode) { console.error(JSON.stringify({ ok: false, error: "custom scene requires customCode" })); process.exit(1); }
+  await mkdir("src/custom", { recursive: true });
   await writeFile("src/custom/current.tsx", spec.customCode, "utf-8");
 }
 
