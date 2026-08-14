@@ -56,9 +56,17 @@ describe("renderer command builder", () => {
     const args = buildFilterComplexArgs(tl, inputs, 60, "/tmp/out.mp4");
     const fcIndex = args.indexOf("-filter_complex");
     const fc = args[fcIndex + 1];
-    // C1: comma between chain and overlay (may have additional filters like format between setsar and overlay)
-    expect(fc).toMatch(/setsar=1[^;]*,overlay=/);
-    // C2: no invalid :format=yuva420p on overlay
+    // 2026-08-13 修复后结构:overlay 媒体流独立成段贴标签,再 overlay 到 [base]
+    // (旧结构 `[base][1:v]trim=...` 使 trim 拿到两个输入标签,ffmpeg 必失败)
+    // C1: overlay 流独立成段
+    expect(fc).toMatch(/\[1:v\]trim=[^;]*setsar=1[^;]*\[ovl_logo\]/);
+    // C2: 合成段引用标签 overlay 到 base
+    expect(fc).toContain("[base][ovl_logo]overlay=");
+    // C3: overlay 流段内不得出现 [base](trim 双输入 bug 的回归防护)
+    const ovlSegment = fc.split(";").find((s) => s.includes("[ovl_logo]") && s.includes("trim"));
+    expect(ovlSegment).toBeDefined();
+    expect(ovlSegment).not.toContain("[base]");
+    // C4: no invalid :format=yuva420p on overlay
     expect(fc).not.toMatch(/overlay=[^\[;]*:format=yuva420p/);
   });
 

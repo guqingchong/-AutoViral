@@ -38,17 +38,19 @@ ffprobe -v error -show_entries format=duration,size -show_entries stream=width,h
 - 1-4: 整体节奏混乱或极度拖沓
 
 ### 3. 音画协调 (audio_visual_sync)
-- BGM风格是否与内容氛围匹配？
-- BGM音量是否合适（不压过人声）？
-- 音乐是否有淡入/淡出处理？
-- 如果是卡点视频，画面切换是否与节拍对齐？
-- 是否有突兀的音频断裂或杂音？
+评审依据：content-assembly/modules/audio-spec.md（评审前必读）
+
+- **响度实测（必做）**：`ffmpeg -i final.mp4 -af ebur128=peak=true -f null -` 实测 I 值命中 -16~-14 LUFS、TP ≤ -1dBTP？
+- BGM 是否盖过人声（抽开头/中段/结尾三段核对人声可懂度）？BGM 是否做了响度锚定（I=-34）或闪避？
+- SFX 音效层是否存在且克制（≤8 处、对齐画面事件）？还是全片只有干巴巴的旁白+BGM？
+- BGM 风格与内容氛围匹配？淡入淡出处理？开头 1 秒内是否有声音？
+- 卡点视频的画面切换是否与节拍对齐？有无突兀音频断裂或杂音？
 
 **评分标准：**
-- 9-10: 音画完美配合，音乐增强了视觉体验
-- 7-8: 音画协调，BGM选择得当
-- 5-6: 有音乐但匹配度一般
-- 1-4: 音画严重不协调或无BGM
+- 9-10: 响度实测达标、三层混音清晰（人声/SFX/BGM 各就其位）、有 ducking 或等效处理
+- 7-8: 音画协调、响度达标，SFX 层缺失但听感不单调
+- 5-6: BGM 局部盖过人声，或响度偏离平台区间
+- 1-4: 音画严重不协调/无 BGM/响度严重超标（外放刺耳或听不清人声）
 
 ### 4. 字幕质量 (subtitle_quality)
 - 字幕是否与画面同步？
@@ -94,3 +96,6 @@ ffprobe -v error -show_entries format=duration,size -show_entries stream=width,h
 - 时长严重偏离方案（误差>50%）
 - 缺少发布文案（publish-text.md不存在）
 - 视频中出现了不属于此内容的画面（素材错误）
+- BGM 盖过人声（人声不可懂）或响度实测严重偏离 -16~-14 LUFS
+- 开头 1 秒静音（播放事故）
+- 静态数据卡/图表镜头出现肉眼可见抖动（裸 zoompan 亚像素抖动）

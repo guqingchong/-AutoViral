@@ -1,5 +1,5 @@
 import { checkHealth } from "./heygem-client.js";
-import { ensureTunnel } from "./tunnel-service.js";
+import { ensureTunnel, rotateTunnel } from "./tunnel-service.js";
 import { getConfig } from "../config.js";
 
 /**
@@ -63,6 +63,13 @@ async function probe(): Promise<void> {
     }
     // 探测失败：可能是 SSH 隧道掉线。配置了 heygem 时尝试重建隧道并重试一次。
     if (getConfig().heygem?.baseUrl && (await ensureTunnel()) && (await checkHealth())) {
+      const cameOnline = state !== "ready";
+      state = "ready";
+      if (cameOnline) notifyInstanceReady();
+      return;
+    }
+    // 隧道通但服务不响应(假通:目标实例上 HeyGem 没启动)→ 切下一个候选实例
+    if (getConfig().heygem?.baseUrl && (await rotateTunnel()) && (await checkHealth())) {
       const cameOnline = state !== "ready";
       state = "ready";
       if (cameOnline) notifyInstanceReady();

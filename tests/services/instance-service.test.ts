@@ -5,6 +5,7 @@ vi.mock("../../src/services/heygem-client.js", () => ({
 }));
 vi.mock("../../src/services/tunnel-service.js", () => ({
   ensureTunnel: vi.fn(),
+  rotateTunnel: vi.fn(),
 }));
 vi.mock("../../src/db/digital-human-jobs-repo.js", () => ({
   countActiveJobs: vi.fn(),
@@ -37,6 +38,7 @@ describe("instance-service (manual control)", () => {
     (configModule.loadConfig as any).mockResolvedValue(cfg);
     (configModule.getConfig as any).mockReturnValue(cfg);
     (tunnel.ensureTunnel as any).mockResolvedValue(false);
+    (tunnel.rotateTunnel as any).mockResolvedValue(false);
   });
   afterEach(() => {
     stopHealthLoop();

@@ -1,11 +1,12 @@
-import { mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { getTemplate, incrementTemplateUsage } from "../db/templates-repo.js";
 import { createRenderJob, updateRenderJob, getRenderJob, listRenderJobs } from "../db/render-jobs-repo.js";
 import { updateWork, getWork } from "../work-store.js";
 import { renderTimeline } from "../video/renderer.js";
 import { applyVariables, validateVariableValues } from "../video/variables.js";
+import { brandingToImageLayer } from "../video/branding.js";
 import { dataDir } from "../config.js";
 import type { Timeline } from "../video/types.js";
 import type { DbTemplate } from "../db/templates-repo.js";
@@ -14,8 +15,10 @@ import type { DbRenderJob } from "../db/render-jobs-repo.js";
 export interface RenderRequest {
   workId: string;
   templateId: string;
-  digitalHumanVideo: string;
-  voiceAudio: string;
+  /** 数字人口播视频:仅当模板声明了 host_video 变量时必填(2026-08-13 变量通用化) */
+  digitalHumanVideo?: string;
+  /** 配音音频:仅当模板声明了 voice_audio 变量时必填 */
+  voiceAudio?: string;
   subtitlePath?: string;
   bgmPath?: string;
   assets: Record<string, string>; // variable name -> file path
@@ -108,10 +111,18 @@ async function runRenderLoop(jobId: string, template: DbTemplate, req: RenderReq
 
   try {
     const variableValues = validateVariableValues(template.variables, { ...req.assets, ...(req.variables ?? {}) });
-    variableValues.host_video = req.digitalHumanVideo;
-    variableValues.voice_audio = req.voiceAudio;
-    if (req.bgmPath) variableValues.bgm = req.bgmPath;
-    if (req.subtitlePath) variableValues.subtitle_ass = req.subtitlePath;
+    // 变量通用化(2026-08-13 模板契约修复):约定变量仅当模板声明时才注入;
+    // 声明了但请求未提供 → 可读错误,而非静默注入 undefined 导致渲染出坏片
+    const declared = new Set(template.variables.map((v) => v.name));
+    const bindOptional = (name: string, value: string | undefined) => {
+      if (!declared.has(name)) return;
+      if (!value) throw new Error(`缺少变量 ${name}:模板声明了该变量但渲染请求未提供`);
+      variableValues[name] = value;
+    };
+    bindOptional("host_video", req.digitalHumanVideo);
+    bindOptional("voice_audio", req.voiceAudio);
+    bindOptional("bgm", req.bgmPath);
+    bindOptional("subtitle_ass", req.subtitlePath);
 
     const tlInput: Record<string, unknown> = {
       canvas: template.canvas,
@@ -124,7 +135,20 @@ async function runRenderLoop(jobId: string, template: DbTemplate, req: RenderReq
     }
     const timeline = applyVariables(tlInput, variableValues) as unknown as Timeline;
 
-    const result = await renderTimeline(timeline, {
+    // 素材驱动时长(2026-08-13 用户决策:模板取消时长约束):每幕时长=该幕
+    // 主素材实际时长,幕内图层保持相对节奏;成片时长=各幕素材时长之和,
+    // 完全由脚本规划的素材决定,不再被模板写死。
+    const { adaptTimelineToAssets } = await import("./timeline-adapt.js");
+    const adaptedTimeline = await adaptTimelineToAssets(timeline);
+
+    // 模板级品牌 logo:转为 image layer 追加(2026-08-13 模板库改造 功能 c)
+    // 时长取主内容各层 end 的最大值(logo 只覆盖内容期,不拖长成片)
+    if (template.branding?.logoAsset) {
+      const contentDuration = Math.max(1, ...adaptedTimeline.layers.map((l) => (l.start ?? 0) + (l.duration ?? 0)));
+      adaptedTimeline.layers.push(brandingToImageLayer(template.branding, template.canvas, contentDuration));
+    }
+
+    const result = await renderTimeline(adaptedTimeline, {
       outputPath,
       onProgress: updateProgress,
     });
@@ -135,6 +159,42 @@ async function runRenderLoop(jobId: string, template: DbTemplate, req: RenderReq
       progress: 100,
       duration: result.duration,
     });
+
+    // C5 素材沉淀:成片自动登记进资产库,供后续作品复用(2026-08-14)
+    try {
+      const { createAsset } = await import("../db/assets-repo.js");
+      const work = await getWork(req.workId);
+      createAsset({
+        name: work?.title ?? `成片 ${req.workId}`,
+        file_path: outputPath,
+        category: "general",
+        type: "video",
+        tags: [work?.title, work?.contentForm, "成片"].filter((t): t is string => !!t),
+        source: "self-generated",
+        license: "unknown",
+        compliance_status: "pending",
+        metadata: { workId: req.workId, duration: result.duration, assetKind: "final_video" },
+        usage_count: 0,
+      });
+    } catch { /* 登记失败(如路径重复)不阻断渲染结果 */ }
+
+    // 精品化质量门禁:渲染完成自动体检出片报告(2026-08-14)
+    try {
+      const { runQualityGate } = await import("./quality-gate.js");
+      const report = await runQualityGate(outputPath, {
+        subtitlePath: req.subtitlePath,
+        expectedWidth: template.canvas?.width,
+        expectedHeight: template.canvas?.height,
+        // 模板图解段(未传配音/字幕/BGM)按无声中间段处理,不强制音轨(2026-08-14 误报修复)
+        expectAudio: !!(req.subtitlePath || (req as unknown as Record<string, unknown>).voiceAudio || (req as unknown as Record<string, unknown>).voice_audio || (req as unknown as Record<string, unknown>).bgm),
+      });
+      await writeFile(join(dirname(outputPath), "quality-report.json"), JSON.stringify(report, null, 2), "utf-8");
+      if (!report.passed) {
+        console.warn(`[quality-gate] ${req.workId} 未通过:`, report.checks.filter((c) => c.level === "fail").map((c) => c.label).join(","));
+      }
+    } catch (err) {
+      console.error("[quality-gate] 门禁执行失败:", err instanceof Error ? err.message : err);
+    }
   } catch (err) {
     failed = true;
     renderFinished = true;

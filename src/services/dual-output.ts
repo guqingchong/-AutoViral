@@ -17,12 +17,14 @@
  */
 
 import { mkdir, writeFile, cp, readdir, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
+import { join, extname } from "node:path";
 import { dataDir } from "../config.js";
 import { log } from "../logger.js";
 import { getWork, getChildWorkByParent, createWork } from "../db/works-repo.js";
 import { listArticlesByWork, createArticle, updateArticle } from "../db/articles-repo.js";
-import { getTemplate, listTemplates, type DbTemplate, type TemplateCanvas } from "../db/templates-repo.js";
+import { getTemplate, listTemplates, type DbTemplate, type TemplateCanvas, type TemplateBranding } from "../db/templates-repo.js";
+import { brandingAssetPath } from "../video/branding.js";
 import { normalizeLayoutSpec, type LayoutSpec } from "./image-text-template-generator.js";
 import { runJsonPrompt } from "./llm-json.js";
 import type { DbWork } from "../db/types.js";
@@ -279,6 +281,8 @@ export interface CardLayout {
   content: LayoutSpec;
   canvas: { width: number; height: number };
   templateId?: string;
+  /** 模板级品牌 logo(2026-08-13):有则每张卡片右上角等位置叠加 */
+  branding?: TemplateBranding;
 }
 
 const DEFAULT_COVER_SPEC: LayoutSpec = {
@@ -321,7 +325,7 @@ export function resolveCardLayout(workTemplateId?: string): CardLayout {
     const tpl = getTemplate(workTemplateId);
     if (tpl) {
       const specs = layoutSpecsFromTemplate(tpl);
-      if (specs) return { ...specs, canvas: tplCanvas(tpl), templateId: tpl.id };
+      if (specs) return { ...specs, canvas: tplCanvas(tpl), templateId: tpl.id, branding: tpl.branding };
     }
   }
 
@@ -329,7 +333,7 @@ export function resolveCardLayout(workTemplateId?: string): CardLayout {
     const tpl = listTemplates(status, undefined, "image-text", 1)[0];
     if (tpl) {
       const specs = layoutSpecsFromTemplate(tpl);
-      if (specs) return { ...specs, canvas: tplCanvas(tpl), templateId: tpl.id };
+      if (specs) return { ...specs, canvas: tplCanvas(tpl), templateId: tpl.id, branding: tpl.branding };
     }
   }
 
@@ -367,6 +371,26 @@ export interface CardHtmlInput {
   total?: number;
   /** 素材图 URL（file:// 或 http）：提供时卡片渲染为「图+文」形态 */
   imageUrl?: string;
+  /** 模板级品牌 logo:提供时按九宫格位置叠加(2026-08-13) */
+  branding?: TemplateBranding;
+}
+
+/** logo 文件 → data URI(模块级缓存,logo 通常 <100KB,同步读可接受) */
+const brandingLogoCache = new Map<string, string | null>();
+function brandingLogoDataUri(logoAsset: string): string | null {
+  const cached = brandingLogoCache.get(logoAsset);
+  if (cached !== undefined) return cached;
+  let uri: string | null = null;
+  try {
+    const p = brandingAssetPath(logoAsset);
+    const ext = extname(p).toLowerCase();
+    const mime = ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" : ext === ".webp" ? "image/webp" : "image/png";
+    uri = `data:${mime};base64,${readFileSync(p).toString("base64")}`;
+  } catch {
+    uri = null; // logo 文件缺失时静默降级:卡片照常出,不带 logo
+  }
+  brandingLogoCache.set(logoAsset, uri);
+  return uri;
 }
 
 /** 把一张卡片的文案 + LayoutSpec 渲染成独立 HTML 文档（截图出 PNG 用） */
@@ -413,6 +437,26 @@ export function buildCardHtml(input: CardHtmlInput): string {
     }
     if (deco.has("divider")) parts.push(`<div class="divider"></div>`);
     parts.push(`<div class="body">${escapeHtml(input.body ?? "").replace(/\n/g, "<br/>")}</div>`);
+  }
+
+  // 品牌 logo 叠加(九宫格 → CSS 绝对定位;2026-08-13 模板库改造 功能 c)
+  // 注意:必须内联 data URI——Chromium 对 about:blank 文档拦截 file:// 子资源
+  if (input.branding?.logoAsset) {
+    const b = input.branding;
+    const logoUri = brandingLogoDataUri(b.logoAsset);
+    if (logoUri) {
+      const m = b.margin ?? 48;
+      const w = b.width ?? 160;
+      const o = b.opacity ?? 1;
+      const posCss: string[] = [];
+      if (b.position.endsWith("left")) posCss.push(`left:${m}px`);
+      else if (b.position.endsWith("right")) posCss.push(`right:${m}px`);
+      else posCss.push(`left:50%;margin-left:${-w / 2}px`);
+      if (b.position.startsWith("top")) posCss.push(`top:${m}px`);
+      else if (b.position.startsWith("bottom")) posCss.push(`bottom:${m}px`);
+      else posCss.push(`top:50%;transform:translateY(-50%)`);
+      parts.push(`<img class="brand-logo" src="${logoUri}" alt="" style="position:absolute;${posCss.join(";")};width:${w}px;opacity:${o};z-index:10;"/>`);
+    }
   }
 
   // 图+文形态:图片置顶通栏,文字区居中偏下;无图时维持原纯文版式
@@ -537,6 +581,7 @@ export async function renderCardsToPng(
       title: copy.coverTitle,
       subtitle: copy.coverSubtitle,
       imageUrl: await imageAt(0),
+      branding: layout.branding,
     }),
     outPath: join(outDir, "01-cover.png"),
   });
@@ -551,6 +596,7 @@ export async function renderCardsToPng(
         index: i + 1,
         total: copy.pages.length,
         imageUrl: await imageAt(i + 1),
+        branding: layout.branding,
       }),
       outPath: join(outDir, `${String(i + 2).padStart(2, "0")}-card.png`),
     });

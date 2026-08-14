@@ -26,6 +26,23 @@ export const HEYGEM_TUNNEL_DEFAULTS: HeygemTunnelConfig = {
   remotePort: 6008,
 };
 
+export interface H3TunnelConfig {
+  host: string;        // SSH 跳板主机（AutoDL 实例 SSH 地址）
+  port: number;        // SSH 端口
+  user: string;        // SSH 用户
+  localPort: number;   // 本地转发端口（h3.baseUrl 指向它）
+  remotePort: number;  // 实例内 ComfyUI API 端口
+}
+
+/** H3 隧道默认值：与 heygem 共用同一 AutoDL 实例（2026-08-10 实例 9be34da8eb），ComfyUI 监听 8188 */
+export const H3_TUNNEL_DEFAULTS: H3TunnelConfig = {
+  host: "connect.nmb1.seetacloud.com",
+  port: 27128,
+  user: "root",
+  localPort: 8188,
+  remotePort: 8188,
+};
+
 export interface Config {
   port: number;
   model: string;
@@ -41,6 +58,17 @@ export interface Config {
     gpuHourlyRateYuan: number;    // GPU 时价，用于成本估算
     idleReminderMinutes: number;  // 空闲提醒阈值（默认 15）
     tunnel?: HeygemTunnelConfig;  // SSH 隧道（缺省时按 HEYGEM_TUNNEL_DEFAULTS 补全）
+    /** 多实例候选:常开多台 AutoDL 实例时全部列入,隧道按序尝试、哪个能用用哪个。优先于单数 tunnel */
+    tunnels?: HeygemTunnelConfig[];
+  };
+  /** MiniMax H3 本地视频生成（AutoDL ComfyUI）。不配则不注册 local-h3 provider */
+  h3?: {
+    baseUrl?: string;              // ComfyUI API 地址（SSH 隧道模式默认 http://localhost:8188）
+    gpuHourlyRateYuan?: number;    // GPU 时价，用于成本估算（默认 2.18）
+    idleReminderMinutes?: number;  // 空闲提醒阈值（默认 30）
+    tunnel?: H3TunnelConfig;       // SSH 隧道（缺省时按 H3_TUNNEL_DEFAULTS 补全）
+    /** 多实例候选:常开多台 AutoDL 实例时全部列入,隧道按序尝试、哪个能用用哪个。优先于单数 tunnel */
+    tunnels?: H3TunnelConfig[];
   };
   pexels?: { apiKey: string };
   pixabay?: { apiKey: string };
@@ -194,8 +222,23 @@ export async function loadConfig(): Promise<Config> {
     // SSH 隧道模式下 baseUrl 为空时默认指向本地隧道端口
     if (config.heygem) {
       config.heygem.tunnel = { ...HEYGEM_TUNNEL_DEFAULTS, ...(config.heygem.tunnel ?? {}) };
+      if (config.heygem.tunnels) {
+        config.heygem.tunnels = config.heygem.tunnels.map((t) => ({ ...HEYGEM_TUNNEL_DEFAULTS, ...t }));
+      }
       if (!config.heygem.baseUrl) {
         config.heygem.baseUrl = `http://localhost:${config.heygem.tunnel.localPort}`;
+      }
+    }
+
+    // h3 与 heygem 同理：补隧道默认值，baseUrl 缺省指向本地隧道端口。
+    // 用户只写 `h3: {}` 即可启用（默认值指向 PoC 验证过的实例 9be34da8eb）。
+    if (config.h3) {
+      config.h3.tunnel = { ...H3_TUNNEL_DEFAULTS, ...(config.h3.tunnel ?? {}) };
+      if (config.h3.tunnels) {
+        config.h3.tunnels = config.h3.tunnels.map((t) => ({ ...H3_TUNNEL_DEFAULTS, ...t }));
+      }
+      if (!config.h3.baseUrl) {
+        config.h3.baseUrl = `http://localhost:${config.h3.tunnel.localPort}`;
       }
     }
 

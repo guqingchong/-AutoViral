@@ -44,7 +44,7 @@ export type ContentCategory = "anxiety" | "conflict" | "comedy" | "envy" | "othe
 export type VideoSource = "upload" | "search" | "ai-generate";
 /** 素材三维（批量制作）：形态 / 来源 / 成本档 */
 export type AssetForm = "video-mix" | "image-carousel" | "slides" | "auto";
-export type AssetSource = "stock" | "ai" | "user" | "auto";
+export type AssetSource = "stock" | "ai" | "user" | "auto" | "smart";
 export type AssetBudget = "eco" | "premium";
 
 export interface Work {

@@ -1,12 +1,12 @@
 import { Hono } from "hono";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { readFile, writeFile, appendFile, mkdir, readdir, rm, rename, unlink, stat } from "node:fs/promises";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { join, extname, basename, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import yaml from "js-yaml";
-import { loadConfig, saveConfig, dataDir, getConfigDir, HEYGEM_TUNNEL_DEFAULTS, type AnalyticsSource } from "../config.js";
+import { loadConfig, saveConfig, dataDir, getConfigDir, HEYGEM_TUNNEL_DEFAULTS, H3_TUNNEL_DEFAULTS, type AnalyticsSource, type HeygemTunnelConfig, type H3TunnelConfig } from "../config.js";
 import { getDb } from "../db/connection.js";
 import { exportBackup, importBackup } from "../db/backup.js";
 import { migrateLegacyWorks } from "../db/migrate-legacy.js";
@@ -36,6 +36,11 @@ import {
   isValidAvatarId,
 } from "../services/digital-human.js";
 import { getInstanceView } from "../services/instance-service.js";
+import { getH3InstanceView } from "../services/h3-instance-service.js";
+import { pushPublicKey } from "../services/ssh-key-service.js";
+import { refineTemplate } from "../services/template-refine.js";
+import { scoreTemplate } from "../services/template-score.js";
+import { cloneTemplate, routeCloneUrl } from "../services/template-clone.js";
 import type { TemplateElements } from "../services/template-dna.js";
 import { researchTemplates } from "../services/template-research.js";
 import { listSkills, deleteSkill } from "../db/template-skills-repo.js";
@@ -67,11 +72,12 @@ import { collectTrends, listTopics, getTopic } from "../services/trend-research.
 import { getAccount } from "../db/accounts-repo.js";
 import { buildTonePrompt } from "../services/tone-profile.js";
 import { updateTopic, deleteTopic } from "../db/topics-repo.js";
+import * as worksRepo from "../db/works-repo.js";
 import { createArticle, listArticlesByWork, updateArticle, listAllArticles } from "../db/articles-repo.js";
 import { createScript, listScriptsByWork } from "../db/scripts-repo.js";
 import { generateArticleFromTopic, generateScriptFromArticle } from "../services/content-generator.js";
 import { randomUUID } from "node:crypto";
-import { createTemplate, getTemplate, listTemplates, updateTemplate, deleteTemplate, type DbTemplate } from "../db/templates-repo.js";
+import { createTemplate, getTemplate, listTemplates, updateTemplate, deleteTemplate, sanitizeBranding, type DbTemplate } from "../db/templates-repo.js";
 import { generateTemplates } from "../services/template-generator.js";
 import { generateImageTextTemplates } from "../services/image-text-template-generator.js";
 import { deriveDualOutputs } from "../services/dual-output.js";
@@ -229,6 +235,17 @@ apiRoutes.get("/api/config", async (c) => {
     heygemIdleReminderMinutes: config.heygem?.idleReminderMinutes ?? 15,
     heygemTunnelHost: config.heygem?.tunnel?.host ?? HEYGEM_TUNNEL_DEFAULTS.host,
     heygemTunnelPort: config.heygem?.tunnel?.port ?? HEYGEM_TUNNEL_DEFAULTS.port,
+    // 多实例候选(tunnels 优先;无则由单数 tunnel 合成单候选,保持前端模型统一)
+    heygemTunnels: config.heygem?.tunnels?.length
+      ? config.heygem.tunnels
+      : [{ ...HEYGEM_TUNNEL_DEFAULTS, ...(config.heygem?.tunnel ?? {}) }],
+    // H3 本地视频生成:h3 段存在即启用
+    h3Enabled: !!config.h3,
+    h3Tunnels: config.h3?.tunnels?.length
+      ? config.h3.tunnels
+      : [{ ...H3_TUNNEL_DEFAULTS, ...(config.h3?.tunnel ?? {}) }],
+    h3GpuHourlyRateYuan: config.h3?.gpuHourlyRateYuan ?? 2.18,
+    h3IdleReminderMinutes: config.h3?.idleReminderMinutes ?? 30,
     pexelsApiKey: config.pexels?.apiKey ?? "",
     pixabayApiKey: config.pixabay?.apiKey ?? "",
     unsplashAccessKey: config.unsplash?.accessKey ?? "",
@@ -236,9 +253,18 @@ apiRoutes.get("/api/config", async (c) => {
   });
 });
 
+/** 校验前端提交的隧道候选数组:逐条补默认值,丢弃缺 host/port 的无效行 */
+function sanitizeTunnels<T extends { host: string; port: number }>(raw: unknown, defaults: T): T[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((t): t is Record<string, unknown> => !!t && typeof t === "object")
+    .map((t) => ({ ...defaults, ...t }) as T)
+    .filter((t) => typeof t.host === "string" && t.host.length > 0 && Number.isFinite(Number(t.port)) && Number(t.port) > 0)
+    .map((t) => ({ ...t, port: Number(t.port) }));
+}
+
 // PUT /api/config
-apiRoutes.put("/api/config", async (c) => {
-  const body = await c.req.json<Record<string, unknown>>();
+apiRoutes.put("/api/config", async (c) => {  const body = await c.req.json<Record<string, unknown>>();
   const config = await loadConfig();
 
   // Map flat frontend fields to nested config structure
@@ -302,6 +328,31 @@ apiRoutes.put("/api/config", async (c) => {
       config.heygem.tunnel = { ...HEYGEM_TUNNEL_DEFAULTS, ...(config.heygem.tunnel ?? {}) };
       if (body.heygemTunnelHost !== undefined) config.heygem.tunnel.host = body.heygemTunnelHost as string;
       if (body.heygemTunnelPort !== undefined) config.heygem.tunnel.port = Number(body.heygemTunnelPort);
+    }
+  }
+  // 多实例候选:前端传整组数组(host/port/user/localPort/remotePort),覆盖式更新
+  if (body.heygemTunnels !== undefined) {
+    if (!config.heygem) config.heygem = { apiToken: "", baseUrl: "", gpuHourlyRateYuan: 1.78, idleReminderMinutes: 15 };
+    const list = sanitizeTunnels<HeygemTunnelConfig>(body.heygemTunnels, HEYGEM_TUNNEL_DEFAULTS);
+    if (list.length > 0) {
+      config.heygem.tunnels = list;
+      delete config.heygem.tunnel;  // tunnels 优先,清掉单数避免歧义
+    }
+  }
+  // H3 本地视频生成:h3Enabled=false 时删除 h3 段(provider 随之不注册)
+  if (body.h3Enabled === false) {
+    delete config.h3;
+  } else if (body.h3Enabled === true || body.h3Tunnels !== undefined
+    || body.h3GpuHourlyRateYuan !== undefined || body.h3IdleReminderMinutes !== undefined) {
+    if (!config.h3) config.h3 = {};
+    if (body.h3GpuHourlyRateYuan !== undefined) config.h3.gpuHourlyRateYuan = Number(body.h3GpuHourlyRateYuan);
+    if (body.h3IdleReminderMinutes !== undefined) config.h3.idleReminderMinutes = Number(body.h3IdleReminderMinutes);
+    if (body.h3Tunnels !== undefined) {
+      const list = sanitizeTunnels<H3TunnelConfig>(body.h3Tunnels, H3_TUNNEL_DEFAULTS);
+      if (list.length > 0) {
+        config.h3.tunnels = list;
+        delete config.h3.tunnel;
+      }
     }
   }
   if (body.pexelsApiKey !== undefined) {
@@ -554,8 +605,15 @@ apiRoutes.get("/api/works/:id/assets/*", async (c) => {
 
   try {
     // nestedPath maps directly to workspace subdirectory (e.g. "images/xxx.png", "output/xxx.png")
-    const filePath = getAssetPath(id, nestedPath);
+    // 兼容两种磁盘布局:老结构 workDir/clips/x.mp4 直命中;
+    // 现行结构 workDir/assets/clips/x.mp4(provider 产物都写在 assets/ 下)需回退拼接
     const { stat } = await import("node:fs/promises");
+    let filePath = getAssetPath(id, nestedPath);
+    try {
+      await stat(filePath);
+    } catch {
+      filePath = getAssetPath(id, `assets/${nestedPath}`);
+    }
     const fileStat = await stat(filePath);
     const fileSize = fileStat.size;
     const mimeType = getMimeType(filePath);
@@ -715,9 +773,16 @@ apiRoutes.post("/api/generate/image", async (c) => {
 apiRoutes.post("/api/generate/video", async (c) => {
   const body = await c.req.json();
   const { workId, prompt, firstFrame, lastFrame, resolution, filename, provider: providerName,
-    referenceImages, referenceVideos, ratio, durationHint, language, duration, modelVersion } = body;
+    referenceImages, referenceVideos, ratio, durationHint, language, duration, modelVersion, shotType } = body;
   if (!workId || !prompt || !filename) {
     return c.json({ success: false, error: "Missing required fields", code: "INVALID_PARAMS" }, 400);
+  }
+  if (looksLikeMojibake(prompt)) {
+    return c.json({
+      success: false,
+      error: "prompt 字符序列疑似 GBK→UTF-8 mojibake(常见于 Windows shell + curl 传中文字面量)。请改用脚本文件或 python/node 发请求,并在 header 加 'Content-Type: application/json; charset=utf-8'。",
+      code: "INVALID_PARAMS",
+    }, 400);
   }
   const provider = providerName ? getProvider(providerName) : getDefaultProvider("video");
   if (!provider) {
@@ -726,7 +791,7 @@ apiRoutes.post("/api/generate/video", async (c) => {
   try {
     const result = await provider.generateVideo({
       prompt, firstFrame, lastFrame, resolution, workId, filename,
-      referenceImages, referenceVideos, ratio, durationHint, language, duration, modelVersion,
+      referenceImages, referenceVideos, ratio, durationHint, language, duration, modelVersion, shotType,
     });
     return c.json(result);
   } catch (err: any) {
@@ -827,6 +892,163 @@ apiRoutes.get("/api/generate/providers", (c) => c.json(listProviders()));
 apiRoutes.get("/api/shared-assets", async (c) => {
   const assets = await listSharedAssetsWithMeta();
   return c.json(assets);
+});
+
+// GET /api/shared-assets/charts/:file - serve rendered chart PNGs (A1 数据图表素材)
+apiRoutes.get("/api/shared-assets/charts/:file", async (c) => {
+  const file = c.req.param("file");
+  if (!/^[a-zA-Z0-9._-]+$/.test(file)) return c.json({ error: "Invalid filename" }, 400);
+  try {
+    const filePath = join(dataDir, "shared-assets", "charts", file);
+    const data = await readFile(filePath);
+    return new Response(data, {
+      headers: { "Content-Type": "image/png", "Cache-Control": "public, max-age=3600" },
+    });
+  } catch (e: any) {
+    if (e.code === "ENOENT") return c.json({ error: "File not found" }, 404);
+    return c.json({ error: "Failed to read file" }, 500);
+  }
+});
+
+// POST /api/assets/chart - ECharts option → 图表 PNG(A1 数据图表素材,2026-08-14)
+apiRoutes.post("/api/assets/chart", async (c) => {
+  const body = await c.req.json<{
+    option?: Record<string, unknown>;
+    theme?: string; width?: number; height?: number; scale?: number;
+    title?: string; source?: string;
+  }>().catch(() => ({}) as { option?: Record<string, unknown>; theme?: string; width?: number; height?: number; scale?: number; title?: string; source?: string });
+  if (!body.option) return c.json({ error: "option is required (ECharts option JSON)" }, 400);
+  try {
+    const { renderChart } = await import("../services/chart-render.js");
+    const result = await renderChart({
+      option: body.option,
+      theme: body.theme, width: body.width, height: body.height, scale: body.scale,
+      title: body.title, source: body.source,
+    });
+    return c.json(result);
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : "图表渲染失败" }, 400);
+  }
+});
+
+// GET /api/assets/chart/themes - 图表主题列表
+apiRoutes.get("/api/assets/chart/themes", async (c) => {
+  const { CHART_THEMES } = await import("../services/chart-render.js");
+  return c.json({ themes: CHART_THEMES.map((t) => ({ key: t.key, label: t.label, background: t.background, palette: t.palette })) });
+});
+
+// GET /api/shared-assets/snapshots/:file - serve snapshot card PNGs (A2 快照卡素材)
+apiRoutes.get("/api/shared-assets/snapshots/:file", async (c) => {
+  const file = c.req.param("file");
+  if (!/^[a-zA-Z0-9._-]+$/.test(file)) return c.json({ error: "Invalid filename" }, 400);
+  try {
+    const data = await readFile(join(dataDir, "shared-assets", "snapshots", file));
+    return new Response(data, { headers: { "Content-Type": "image/png", "Cache-Control": "public, max-age=3600" } });
+  } catch (e: any) {
+    if (e.code === "ENOENT") return c.json({ error: "File not found" }, 404);
+    return c.json({ error: "Failed to read file" }, 500);
+  }
+});
+
+// POST /api/assets/snapshot-card - 网页/图片 → 高亮标注快照卡(A2,2026-08-14)
+apiRoutes.post("/api/assets/snapshot-card", async (c) => {
+  const body = await c.req.json<{
+    url?: string; imagePath?: string;
+    highlights?: Array<{ left: number; top: number; width: number; height: number; color?: string; label?: string }>;
+    title?: string; source?: string; width?: number; height?: number; style?: "dark" | "light";
+  }>().catch(() => ({}) as any);
+  if (!body.url && !body.imagePath) return c.json({ error: "url 或 imagePath 必须提供一个" }, 400);
+  try {
+    const { renderSnapshotCard } = await import("../services/snapshot-card.js");
+    const result = await renderSnapshotCard(body);
+    return c.json(result);
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : "快照卡渲染失败" }, 400);
+  }
+});
+
+// GET /api/assets/icons/search?q= - 图标搜索(A3,2026-08-14)
+apiRoutes.get("/api/assets/icons/search", async (c) => {
+  const q = c.req.query("q") ?? "";
+  if (!q.trim()) return c.json({ error: "q is required" }, 400);
+  const { searchIcons } = await import("../services/icon-service.js");
+  return c.json({ icons: searchIcons(q.trim()) });
+});
+
+// GET /api/assets/icons/sets - 图标集清单
+apiRoutes.get("/api/assets/icons/sets", async (c) => {
+  const { listIconSets } = await import("../services/icon-service.js");
+  return c.json({ sets: listIconSets() });
+});
+
+// GET /api/assets/icons/:set/:name?name.svg&color=&size= - 图标 SVG 直出
+apiRoutes.get("/api/assets/icons/:set/:name", async (c) => {
+  const set = c.req.param("set");
+  const name = (c.req.param("name") ?? "").replace(/\.svg$/i, "");
+  const { getIconSvg } = await import("../services/icon-service.js");
+  const svg = getIconSvg(set, name, {
+    color: c.req.query("color"),
+    size: c.req.query("size") ? Number(c.req.query("size")) : undefined,
+  });
+  if (!svg) return c.json({ error: "Icon not found" }, 404);
+  return new Response(svg, { headers: { "Content-Type": "image/svg+xml", "Cache-Control": "public, max-age=86400" } });
+});
+
+// POST /api/assets/data-card - 结构化数据 → 图表 PNG(B4,2026-08-14)
+// 便捷封装:传 [{label,value}] 即可,不用手写 ECharts option
+apiRoutes.post("/api/assets/data-card", async (c) => {
+  const body = await c.req.json<{
+    data?: Array<{ label: string; value: number }>;
+    chartType?: "auto" | "bar" | "line" | "pie";
+    title?: string; source?: string; unit?: string; theme?: string;
+    width?: number; height?: number;
+  }>().catch(() => ({}) as any);
+  if (!body.data) return c.json({ error: "data is required: [{label, value}, ...]" }, 400);
+  try {
+    const { renderDataCard } = await import("../services/data-card.js");
+    return c.json(await renderDataCard(body));
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : "数据卡渲染失败" }, 400);
+  }
+});
+
+// GET /api/assets/library - 素材资产库检索(C5,2026-08-14):q 模糊匹配名称/标签,按使用频次优先
+apiRoutes.get("/api/assets/library", async (c) => {
+  const type = c.req.query("type");
+  const q = c.req.query("q")?.toLowerCase();
+  const limit = c.req.query("limit") ? Number(c.req.query("limit")) : 50;
+  let assets = assetsRepo.listAssets({ type: type as any, limit: 500 });
+  if (q) {
+    assets = assets.filter((a) =>
+      a.name.toLowerCase().includes(q) || a.tags.some((t) => t.toLowerCase().includes(q)),
+    );
+  }
+  // 使用频次高的=验证过的,优先推荐
+  assets.sort((a, b) => b.usage_count - a.usage_count || b.updated_at.localeCompare(a.updated_at));
+  return c.json({ assets: assets.slice(0, limit) });
+});
+
+// GET /api/works/:id/quality - 出片质量门禁报告(2026-08-14 精品化)
+apiRoutes.get("/api/works/:id/quality", async (c) => {
+  const workId = c.req.param("id");
+  const reportPath = join(dataDir, "works", workId, "output", "quality-report.json");
+  if (existsSync(reportPath)) {
+    try {
+      return c.json(JSON.parse(await readFile(reportPath, "utf-8")));
+    } catch { /* 报告损坏时重新跑 */ }
+  }
+  // 报告不存在(旧作品)→ 找到成片现场跑一次(取最新修改的 final)
+  const outDir = join(dataDir, "works", workId, "output");
+  const finals = existsSync(outDir)
+    ? (await readdir(outDir)).filter((f) => f.endsWith("_final.mp4"))
+    : [];
+  if (finals.length === 0) return c.json({ error: "无成片可检查" }, 404);
+  const withMtime = await Promise.all(finals.map(async (f) => ({ f, m: (await stat(join(outDir, f))).mtimeMs })));
+  withMtime.sort((a, b) => b.m - a.m);
+  const { runQualityGate } = await import("../services/quality-gate.js");
+  const report = await runQualityGate(join(outDir, withMtime[0].f));
+  await writeFile(reportPath, JSON.stringify(report, null, 2), "utf-8").catch(() => {});
+  return c.json(report);
 });
 
 // GET /api/shared-assets/templates/:id/:file - serve template-specific assets (poster.png, preview.mp4)
@@ -1483,10 +1705,15 @@ export async function startWorkSession(id: string, extraInstruction?: string): P
     `目标平台: ${work.platforms.map((p: any) => typeof p === "string" ? p : p.platform).join(", ")}。`,
     work.topicHint ? `选题方向: ${work.topicHint}` : "",
     // 素材三维约束（批量制作传入并落库 works.asset_*，会话启动时拼入指令）
-    buildAssetConstraintSection(work.assetForm, work.assetSource, work.assetBudget),
+    buildAssetConstraintSection(work.assetForm, work.assetSource, work.assetBudget, hasDigitalHuman),
     work.dualOutput ? `双产物: 本作品需同时产出短视频与图文（内容一致、素材共用），视频合成完成后派生图文产物` : "",
-    hasTemplate ? `使用模板: ${work.templateId}` : "",
+    hasTemplate ? buildTemplateSection(work.templateId) : "",
     hasDigitalHuman ? `使用数字人: ${work.digitalHumanId}` : "",
+    // 未选数字人时显式禁用(2026-08-14):此前只在选了才提数字人,agent 看到 smart 路由里
+    // "口播→数字人"就自行绑定 avatar 渲染,违背用户"不用数字人"的选择
+    work.type === "short-video" && !hasDigitalHuman
+      ? `数字人: 用户未选择数字人——全片禁止出现数字人/虚拟人口播镜头,不得自行绑定 avatar 或调用数字人渲染接口;口播内容用克隆配音+字幕/图解/实拍画面呈现`
+      : "",
     digitalHumanDone
       ? `数字人口播已渲染完成（见数字人任务列表），素材准备步骤直接使用，无需重复渲染`
       : hasDigitalHuman
@@ -1501,7 +1728,9 @@ export async function startWorkSession(id: string, extraInstruction?: string): P
     `当前步骤: "${stepName}"（key: ${currentStepKey}）。流水线阶段顺序: ${stepKeys.join(" → ")}。`,
     hasTemplate || hasDigitalHuman
       ? [
-          `**自动化模式**：用户已预先设定好模板和数字人，请直接执行当前步骤，不要询问用户确认。`,
+          // 如实声明用户预设了哪些(此前无论是否选数字人都声称"已设定好模板和数字人",
+          // 导致 agent 在未选数字人时自行绑定 avatar —— 2026-08-14 bug)
+          `**自动化模式**：用户已预先设定好${[hasTemplate ? "模板" : "", hasDigitalHuman ? "数字人" : ""].filter(Boolean).join("和")}，请直接执行当前步骤，不要询问用户确认。`,
           `完成当前步骤后，必须调用以下命令推进流水线（把 NEXT_STEP 替换为下一阶段 key）：`,
           `curl -X POST http://localhost:3271/api/works/${id}/pipeline/advance -H "Content-Type: application/json" -d '{"completedStep":"${currentStepKey}","nextStep":"NEXT_STEP"}'`,
           `推进后系统会自动给你发送继续指令，请接着执行下一阶段，如此循环直到最后一个阶段完成。`,
@@ -1593,7 +1822,7 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
       work.contentCategory ? `Content category: ${work.contentCategory}.` : "",
       `Platforms: ${work.platforms.map((p: any) => typeof p === "string" ? p : p.platform).join(", ")}.`,
       work.topicHint ? `Topic hint: ${work.topicHint}` : "",
-      work.templateId ? `Template: ${work.templateId}` : "",
+      work.templateId ? buildTemplateSection(work.templateId) : "",
       work.digitalHumanId ? `Digital Human: ${work.digitalHumanId}` : "",
       autoModeDirective,
       ``,
@@ -1870,6 +2099,22 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
         );
       }
       if (step === "assembly" && work.type === "short-video") {
+        // 绑定视频模板的作品:走模板渲染引擎(2026-08-13 模板契约修复),跳过自由 ffmpeg 教学
+        const boundTemplate = work.templateId ? getTemplate(work.templateId) : undefined;
+        if (boundTemplate && boundTemplate.kind !== "image-text") {
+          promptParts.push(
+            ``,
+            `## 模板渲染模式(本作品已绑定视频模板,必须走此路径,禁止手写 ffmpeg 自由合成)`,
+            `1. 获取完整模板 JSON: \`curl -s http://localhost:3271/api/templates/${boundTemplate.id}\`,确认变量槽位(variables)与图层结构`,
+            `2. 把前序步骤产出的素材映射为变量值(本地绝对路径):视频片段/图片填素材变量,配音填 voice_audio(若声明),BGM 填 bgm(若声明),字幕填 subtitle_ass(若声明)`,
+            `3. 提交渲染(异步任务):`,
+            `   \`curl -X POST http://localhost:3271/api/works/${id}/render -H "Content-Type: application/json" -d '{"templateId":"${boundTemplate.id}","variables":{...},"assets":{...}}'\``,
+            `   返回 { jobId };模板若声明了 host_video/voice_audio 变量,必须额外传 digitalHumanVideo/voiceAudio 字段`,
+            `4. 轮询 \`curl -s http://localhost:3271/api/render-jobs/{jobId}\` 直至 status=completed;failed 时读 error 修正变量后重试`,
+            `5. 产物在 output/ 目录;不要对产物再做二次合成`,
+            `6. 渲染完成后必须写 output/copytext.md 发布文案:首句 2 秒内抓人(好奇缺口/大胆断言/痛点),正文 2-3 句,结尾自然 CTA(关注/收藏/评论),附 5-10 个话题标签(2-3 热门 + 2-3 垂类 + 1-2 品牌),语言匹配目标平台(抖音/小红书用中文)`,
+          );
+        } else {
         promptParts.push(
           ``,
           `## CRITICAL: Horizontal-to-Vertical Video Conversion`,
@@ -1890,11 +2135,23 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
           `- Subject is not cropped unless Strategy A was deliberately chosen`,
           `\`ffmpeg -i final.mp4 -ss 3 -frames:v 1 -y /tmp/verify.png\``,
           ``,
-          `## BGM 配乐与布局安全（强制）`,
-          `- BGM 只能来自：公共素材库 music、/api/generate/music（MiniMax）、yt-dlp 免版权音乐。**禁止用 ffmpeg 合成正弦波/白噪声/棕噪声充当 BGM**——属于静默降质`,
-          `- BGM 时长必须 ≥ 视频时长；循环素材单段不得短于 60 秒且接缝交叉淡化；混音音量 0.10–0.15（约 -16~-20dB），不得盖过人声`,
+          `## BGM 配乐与混音红线（强制）`,
+          `- BGM 只能来自：公共素材库 music、/api/generate/music（MiniMax music-2.6，duration 参数自动补齐时长）、yt-dlp 免版权音乐。**禁止用 ffmpeg 合成正弦波/白噪声/棕噪声充当 BGM**——属于静默降质`,
+          `- **混音必须用响度锚定，禁止拍脑袋 volume 比例**（实测 volume=0.15 也会盖过人声）：`,
+          `  1. 旁白轨先归一化：\`loudnorm=I=-15:TP=-1.5:LRA=11\``,
+          `  2. BGM 轨压到旁白以下约 19dB：\`loudnorm=I=-34:TP=-3:LRA=11\`，再 amix 混入`,
+          `  3. 参考命令：\`ffmpeg -i narration.mp3 -i bgm.mp3 -filter_complex "[0:a]loudnorm=I=-15:TP=-1.5:LRA=11[v];[1:a]loudnorm=I=-34:TP=-3:LRA=11[bgm];[v][bgm]amix=inputs=2:duration=first:dropout_transition=2[a]" -map 0:v -map "[a]" ...\``,
+          `  4. BGM 能量强（重鼓点/重低频）时再降 3dB（I=-37）；旁白清晰度永远优先于氛围`,
+          `- BGM 时长必须 ≥ 视频时长（/api/generate/music 传 duration 自动循环补齐）；接缝处交叉淡化`,
+          `- 合成后必须验证：对成片跑 volumedetect，并抽一段旁白间隙确认 BGM 不喧宾夺主；有条件时用 sidechaincompress 让 BGM 随旁白自动闪避`,
+          `- **静态卡防抖红线（强制）**：数据卡/图表/快照卡等静态图片转视频时，禁止裸用 zoompan 快速推镜（亚像素步进必然抖动）。只许三种呈现：①纯静态展示 + 淡入淡出转场；②必须推镜时先把图片 scale 到 ≥3 倍分辨率再 zoompan（如 \`scale=3240:-2,zoompan=z='min(zoom+0.0008,1.05)'\`，总变倍 ≤5%）；③走模板渲染。合成后抽相邻两帧比对，肉眼可见抖动即重做`,
           `- **布局安全区断言（必做）**：数字人窗口/字卡 overlay 的坐标矩形 与 字幕带矩形 不得相交。先确定字幕带的 y 区间（含字号行高），再选 overlay 坐标使其完全避开；二者由同一份布局常量计算，禁止分别拍脑袋写坐标`,
           `- 合成完成后抽帧复核：在 10%/50%/90% 三个时间点抽帧检查字幕与数字人/字卡无遮挡`,
+          `- **出片质感红线（强制，2026-08-14）**：`,
+          `  1. 统一调色：所有实拍素材混入前做基础色彩统一（\`eq=contrast=1.06:saturation=0.92:brightness=-0.02\` + 轻微冷色偏移 \`colorbalance=bs=0.06\`），避免各来源素材色温/曝光打架；与深蓝模板同片时画面整体偏冷`,
+          `  2. 转场：镜头间用 0.3–0.5s 交叉淡化（xfade），禁止全片生硬硬切（hook 后的第一次切换可硬切保留冲击感）`,
+          `  3. 收尾：结尾 0.8–1s 画面与音频同步淡出（fade=t=out + afade），禁止戛然而止`,
+          `  4. 实拍素材过暗/过灰必须先校正再用；横版素材竖屏裁切时主体必须在画面中上 2/3 区域`,
           ``,
           `## REQUIRED: Generate Publishing Copytext & Tags`,
           `After producing the final video, you MUST also generate a publishing copytext file.`,
@@ -1924,6 +2181,7 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
           `The copytext language should match the target platform (Chinese for 抖音/小红书).`,
           `Tailor the tone to the content category and platform style.`,
         );
+        }
       }
       // Inject emotion-driven directives based on content category
       const emotionMap: Record<string, string> = {
@@ -2985,7 +3243,7 @@ const CONTENT_FORM_LABELS: Record<string, string> = {
 
 /** 素材三维合法值（非法值静默丢弃，不阻断批量任务） */
 const ASSET_FORMS = new Set(["video-mix", "image-carousel", "slides", "auto"]);
-const ASSET_SOURCES = new Set(["stock", "ai", "user", "auto"]);
+const ASSET_SOURCES = new Set(["stock", "ai", "user", "auto", "smart"]);
 const ASSET_BUDGETS = new Set(["eco", "premium"]);
 
 const ASSET_FORM_LABELS: Record<string, string> = {
@@ -2999,9 +3257,10 @@ const ASSET_SOURCE_LABELS: Record<string, string> = {
   ai: "仅 AI 生成",
   user: "仅用用户指定素材",
   auto: "不限制",
+  smart: "精品混合(按镜头内容自动路由:数据→程序化素材、氛围→AI、真实画面→素材库)",
 };
 const ASSET_BUDGET_LABELS: Record<string, string> = {
-  eco: "禁止 AI 生成视频（只允许 AI 图片，控制成本）",
+  eco: "仅使用本地 H3 生成视频（provider=local-h3），禁用一切云端视频生成（即梦/Seedance/Dreamina 均不可用）。若 local-h3 不可用（AutoDL 实例离线），不得改用云端视频，应阻塞并显著提醒用户开机 AutoDL 实例",
   premium: "不限制",
 };
 
@@ -3009,12 +3268,95 @@ function sanitizeAssetForm(v?: string): string | undefined { return v && ASSET_F
 function sanitizeAssetSource(v?: string): string | undefined { return v && ASSET_SOURCES.has(v) ? v : undefined; }
 function sanitizeAssetBudget(v?: string): string | undefined { return v && ASSET_BUDGETS.has(v) ? v : undefined; }
 
-/** 素材三维 → prompt 约束段（三维全空时返回空串） */
-function buildAssetConstraintSection(assetForm?: string, assetSource?: string, assetBudget?: string): string {
+/**
+ * 模板契约段落（2026-08-13 模板修复）:作品绑定模板时注入会话 prompt。
+ * 此前只注入 templateId 字符串,agent 从不知道模板内容,导致"选了模板但没按模板呈现"。
+ * 边界(用户确认):模板只约束视觉呈现(版式/配色/动效/图层),不约束选题/文案/素材内容。
+ */
+export function buildTemplateSection(templateId?: string): string {
+  if (!templateId) return "";
+  const t = getTemplate(templateId);
+  if (!t) return `模板: ${templateId}(⚠️ 模板不存在,按无模板流程执行)`;
+
   const lines: string[] = [];
+  lines.push(`模板契约(视觉呈现必须严格遵守;选题、文案、素材内容保持创作自由):`);
+  lines.push(`- 模板: ${t.name}(id: ${t.id}, 类型: ${t.kind === "image-text" ? "图文" : "视频"})`);
+
+  if (t.kind === "image-text") {
+    // 图文模板:layers 里是 cover/content 两条 LayoutSpec
+    for (const layer of t.layers ?? []) {
+      const l = layer as Record<string, unknown>;
+      if (l.type === "image-text-layout") {
+        const cs = (l.colorScheme ?? {}) as Record<string, string>;
+        lines.push(
+          `- ${l.page === "cover" ? "封面" : "内容页"}版式: ${l.layout} | 字体 ${l.font} 主标题 ${l.fontSize}px` +
+          ` | 配色 底${cs.background} 主${cs.primary} 文${cs.text} 缀${cs.accent}` +
+          ` | 装饰 ${(l.decorations as string[] | undefined)?.join("/") || "无"}`,
+        );
+      }
+    }
+    lines.push(`- 执行规则: 图文产物由系统在派生阶段自动套用此模板版式,无需手动渲染;文案内容按策划自由创作`);
+  } else {
+    const canvas = t.canvas as unknown as Record<string, unknown> | undefined;
+    lines.push(`- 画布: ${canvas?.width ?? "?"}x${canvas?.height ?? "?"}@${canvas?.fps ?? "?"}fps`);
+    if (t.variables?.length) {
+      lines.push(`- 变量槽位(渲染时必须填充):`);
+      for (const v of t.variables) {
+        lines.push(`  - {{${v.name}}} (${v.type})${v.label ? ` ${v.label}` : ""}${v.default !== undefined ? ` 默认:${v.default}` : ""}`);
+      }
+    }
+    const layers = (t.layers ?? []) as Record<string, unknown>[];
+    if (layers.length) {
+      lines.push(`- 结构摘要(${layers.length} 层):`);
+      for (const l of layers.slice(0, 20)) {
+        const desc = String(l.content ?? l.source ?? l.text ?? "").slice(0, 40);
+        lines.push(`  - ${l.id} [${l.type}] t=${l.start ?? 0}s+${l.duration ?? "?"}s${desc ? ` — ${desc}` : ""}`);
+      }
+    }
+    lines.push(`- 执行规则:`);
+    lines.push(`  1. 本作品视觉结构必须严格按此模板,禁止自由发挥版式/配色/动效`);
+    lines.push(`  2. 完整模板 JSON: curl -s http://localhost:3271/api/templates/${t.id}`);
+    lines.push(`  3. 视频合成(assembly)步骤必须调用模板渲染引擎 POST /api/works/{workId}/render,把素材映射进变量槽位,禁止手写 ffmpeg 自由合成`);
+  }
+  return lines.join("\n");
+}
+
+/** 素材三维 → prompt 约束段（三维全空时返回空串）；hasDigitalHuman=false 时口播路由禁用数字人 */
+function buildAssetConstraintSection(assetForm?: string, assetSource?: string, assetBudget?: string, hasDigitalHuman?: boolean): string {  const lines: string[] = [];
   if (assetForm) lines.push(`- 素材形态: ${ASSET_FORM_LABELS[assetForm] ?? assetForm}`);
   if (assetSource) lines.push(`- 素材来源: ${ASSET_SOURCE_LABELS[assetSource] ?? assetSource}`);
   if (assetBudget) lines.push(`- 成本档: ${ASSET_BUDGET_LABELS[assetBudget] ?? assetBudget}`);
+  // 程序化精确素材铁律(2026-08-14):任何获取策略下都生效。
+  // 程序化素材本地程序化渲染(零生成成本、秒级出图),不属于"外部素材来源",
+  // 因此 stock/user 等受限策略下同样允许且必须使用——它替代的是"AI 生图伪造数据"这条死路。
+  lines.push(
+    `- 程序化素材铁律(无条件生效): 凡涉及精确数据(数值/对比/趋势/占比)、政策文件/新闻原文、结构关系的镜头,禁止 AI 生图(数字必错、文字乱码)。` +
+      `必须调用本地程序化素材 API: 数据图表 POST /api/assets/data-card(简单数据)或 /api/assets/chart(复杂 ECharts);` +
+      `政策/网页原文快照 POST /api/assets/snapshot-card;图标 GET /api/assets/icons。主题配色须与作品模板一致,数据来源必须署名。` +
+      `快照卡必须传 highlights 红框标注关键条款/段落(禁止整页裸截,截正文区避开广告与侧栏);` +
+      `图表数值与旁白口径必须一致——旁白说"超六成",图表须标">60%"或"超60%",禁止写成精确值 60%;` +
+      `结构/流程/逻辑镜头调用 POST /api/assets/code-scene 生成程序化动画(三模板:structure-growth/flow-steps/logic-chain,先 GET /api/assets/code-scene/templates 查参数);`,
+  );
+  // smart 精品混合:按镜头内容路由到最优来源,是"出品即精品"的默认策略
+  if (assetSource === "smart") {
+    lines.push(
+      `- 镜头路由(smart): 数据/对比/趋势→程序化素材(data-card/chart);政策/文件原文→snapshot-card;` +
+        `氛围/场景感画面→AI 生图后 i2v;真实事件/实拍画面→素材库搜索(优先 Pexels 竖版视频),搜不到再 AI 生成;` +
+        (hasDigitalHuman === false
+          ? `口播/讲解内容→配音+字幕卡/图解呈现(本作品未选数字人,禁用数字人镜头)`
+          : `口播/讲解人→数字人或 H3 t2v(dialogue)`),
+    );
+  }
+  // AI 生成来源下的 H3 本地生成路由规则（MiniMax H3,成本约 ¥0.13/条,远低于云端)
+  if (assetSource === "ai" || assetSource === "auto" || assetSource === "smart") {
+    lines.push(
+      `- 视频生成路由: AI 生成的视频镜头优先走本地 H3(provider=local-h3,调 /api/generate/video 时显式传 provider:"local-h3")。` +
+        `broll 氛围/空镜、narration 解说配图、dialogue 对白播报等常规镜头一律用 H3;` +
+        (assetBudget === "eco"
+          ? `eco 档下 hero 精品镜头也用 H3;H3 离线时不得改用云端,阻塞并提醒用户开机 AutoDL 实例`
+          : `仅 hero 精品镜头(海报级画面)可用云端 Seedance/即梦;H3 离线时常规镜头可降级: broll 用素材库搜索补位,其余用云端 provider`),
+    );
+  }
   // 口播类长视频的质量底线:纯图片轮播观感廉价,video-mix/auto 下必须以真实视频混剪为主
   if (assetForm === "video-mix" || assetForm === "auto" || !assetForm) {
     lines.push(`- 质量底线: 超过 60 秒的口播类视频必须以真实视频混剪为主(优先 Pexels 竖版视频,type=video 搜索),禁止全片纯图片轮播+Ken Burns;图片仅作为信息补充(数据卡/示意图),占比不超过 30%`);
@@ -3048,9 +3390,10 @@ async function runBatchConvert(
   if (workType === "short-video") {
     controlLines.push(`视频时长: 约${duration}秒`);
     if (body.contentForm) controlLines.push(`视频风格: ${CONTENT_FORM_LABELS[body.contentForm] ?? body.contentForm}`);
-    if (body.videoSource) controlLines.push(`素材样式: ${body.videoSource === "ai-generate" ? "AI 生成素材" : "素材库搜索"}`);
+    // 旧 videoSource 字段的"素材样式"行仅在没有新 assetSource 时输出,避免与素材约束段语义冲突
+    if (body.videoSource && !assetSource) controlLines.push(`素材样式: ${body.videoSource === "ai-generate" ? "AI 生成素材" : "素材库搜索"}`);
     if (dualOutput) controlLines.push(`双产物: 本作品需同时产出短视频与图文（内容一致、素材共用），视频合成完成后派生图文产物`);
-    const assetSection = buildAssetConstraintSection(assetForm, assetSource, assetBudget);
+    const assetSection = buildAssetConstraintSection(assetForm, assetSource, assetBudget, !!body.digitalHumanId);
     if (assetSection) controlLines.push(assetSection);
     if (body.voiceStyle) {
       const modeLabel = body.voiceMode === "cloned" ? "克隆真人音色" : "AI 合成音色";
@@ -3102,6 +3445,38 @@ async function runBatchConvert(
           updateTopic(topic.id, { status: "converted", work_id: work.id });
         } catch (err) {
           console.error(`[batch-convert] DB write failed for topic ${item.topicId}:`, err);
+        }
+
+        // 调研产物落盘(2026-08-14):批量模式 research 自动完成但磁盘无报告,
+        // 下游分镜/评审无据可依。把选题数据+文案+脚本写入 research/report.md
+        try {
+          const { mkdir: mkResearchDir, writeFile: writeResearchFile } = await import("node:fs/promises");
+          const researchDir = join(dataDir, "works", work.id, "research");
+          await mkResearchDir(researchDir, { recursive: true });
+          const topicAny = topic as unknown as Record<string, unknown>;
+          const report = [
+            `# 调研报告:${topic.title}`,
+            ``,
+            `> 本报告由批量转换流程自动生成(选题趋势数据 + LLM 文案/脚本),供分镜/素材/评审阶段取数与核实。`,
+            ``,
+            `## 选题数据`,
+            `- 情绪: ${(topicAny.emotion_type as string) ?? "-"}`,
+            `- 标签: ${((topicAny.tags as string[]) ?? []).join(", ") || "-"}`,
+            topicAny.summary ? `- 摘要: ${topicAny.summary}` : "",
+            Array.isArray(topicAny.content_angles) && topicAny.content_angles.length ? `- 内容角度: ${(topicAny.content_angles as string[]).join(";")}` : "",
+            ``,
+            `## 文案(article)`,
+            `### ${article.title}`,
+            article.content,
+            ``,
+            `## 脚本(script, 约${script.duration}s)`,
+            "```json",
+            JSON.stringify(script, null, 2).slice(0, 4000),
+            "```",
+          ].filter((l) => l !== "").join("\n");
+          await writeResearchFile(join(researchDir, "report.md"), report, "utf-8");
+        } catch (err) {
+          console.warn(`[batch-convert] research report write failed for ${work.id}:`, err);
         }
 
         // Mark research as done, plan as active
@@ -3318,6 +3693,72 @@ apiRoutes.get("/api/digital-humans/config-status", async (c) => {
 // GET /api/digital-humans/instance/status - current GPU instance view
 apiRoutes.get("/api/digital-humans/instance/status", async (c) => {
   return c.json(await getInstanceView());
+});
+
+// GET /api/h3/instance/status - H3 本地视频生成实例（AutoDL ComfyUI）状态
+apiRoutes.get("/api/h3/instance/status", async (c) => {
+  return c.json(await getH3InstanceView());
+});
+
+// GET /api/autodl/reminders - 作品页 AutoDL 开机提醒聚合（2026-08-14）
+// 在素材准备阶段开始前提醒开机：
+//   数字人渲染(HeyGem 实例): 作品绑定了 digitalHumanId 且尚无 done 任务
+//   H3 视频生成: 分镜已产出 → 扫描 storyboard.md 的素材路由精确判断(confirmed);
+//               分镜未产出 → assetSource∈{ai,auto,smart} 预估(possible)
+apiRoutes.get("/api/autodl/reminders", async (c) => {
+  interface NeedItem { id: string; title: string; certainty?: "confirmed" | "possible" }
+  const h3NeededBy: NeedItem[] = [];
+  const heygemNeededBy: NeedItem[] = [];
+  try {
+    const works = worksRepo.listWorks();
+    for (const w of works) {
+      if (w.type !== "short-video") continue;
+      if (w.status === "published" || w.status === "draft") continue;
+      // 素材阶段已完成的作品无需提醒
+      const steps = worksRepo.getWorkSteps(w.id);
+      const assetsStep = steps.find((s) => s.step_key === "assets");
+      if (assetsStep && assetsStep.status === "done") continue;
+
+      if (w.digital_human_id) {
+        const done = dhJobsRepo.listJobs(w.id).some((j) => j.status === "done");
+        if (!done) heygemNeededBy.push({ id: w.id, title: w.title });
+      }
+
+      const sbPath = join(dataDir, "works", w.id, "plan", "storyboard.md");
+      if (existsSync(sbPath)) {
+        try {
+          const sb = readFileSync(sbPath, "utf-8");
+          if (/ai_video|i2v|local-h3|H3|AI\s*生(成)?视频/i.test(sb)) {
+            h3NeededBy.push({ id: w.id, title: w.title, certainty: "confirmed" });
+          }
+        } catch { /* 读取失败按无需求处理 */ }
+      } else if (w.asset_source && ["ai", "auto", "smart"].includes(w.asset_source)) {
+        h3NeededBy.push({ id: w.id, title: w.title, certainty: "possible" });
+      }
+    }
+  } catch (err) {
+    console.error("[autodl-reminders] scan failed:", err);
+  }
+  const [h3, heygem] = await Promise.all([getH3InstanceView(), getInstanceView()]);
+  return c.json({
+    h3: { state: h3.state, consoleUrl: h3.consoleUrl, neededBy: h3NeededBy },
+    heygem: { state: heygem.state, consoleUrl: heygem.consoleUrl, neededBy: heygemNeededBy },
+  });
+});
+
+// POST /api/ssh/push-key — 设置页"一键免密":密码认证推送本机公钥到实例
+apiRoutes.post("/api/ssh/push-key", async (c) => {
+  const body = await c.req.json();
+  const { host, port, user, password } = body;
+  if (!host || !port || !password) {
+    return c.json({ success: false, error: "Missing required fields: host, port, password" }, 400);
+  }
+  try {
+    const message = await pushPublicKey({ host, port: Number(port), user: user || "root", password });
+    return c.json({ success: true, message });
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 400);
+  }
 });
 
 apiRoutes.get("/api/digital-humans/avatars", async (c) => {
@@ -3630,11 +4071,14 @@ function templateToApi(t: DbTemplate) {
     audio: t.audio,
     subtitles: t.subtitles,
     transitions: t.transitions,
+    branding: t.branding,
     previewUrl: t.preview_url,
     posterUrl,
     status: t.status,
     kind: t.kind ?? "video",
     usageCount: t.usage_count ?? 0,
+    // 模板质量评分(0-100,template-score):批量弹窗据此排序/打精品标
+    score: scoreTemplate(t).score,
     createdAt: t.created_at,
     updatedAt: t.updated_at,
   };
@@ -3709,6 +4153,106 @@ apiRoutes.get("/api/templates/generate/active", async (c) => {
   } catch {
     return c.json({ active: false });
   }
+});
+
+// ---------------------------------------------------------------------------
+// 模板二次加工(2026-08-13 模板库改造 功能 b)
+// ---------------------------------------------------------------------------
+
+interface RefineJob {
+  status: "running" | "done" | "error";
+  templateId?: string;
+  diffSummary?: string;
+  copied?: boolean;
+  error?: string;
+}
+const refineJobs = new Map<string, RefineJob>();
+
+// POST /api/templates/:id/refine - 自然语言二次加工模板(异步)
+apiRoutes.post("/api/templates/:id/refine", async (c) => {
+  const id = c.req.param("id");
+  if (!getTemplate(id)) return c.json({ error: "Template not found" }, 404);
+  const body = await c.req.json<{ instruction?: string; saveAsCopy?: boolean }>().catch(() => ({} as { instruction?: string; saveAsCopy?: boolean }));
+  if (!body.instruction?.trim()) return c.json({ error: "instruction is required" }, 400);
+
+  const jobId = "tplrefine_" + Date.now();
+  refineJobs.set(jobId, { status: "running" });
+  refineTemplate(id, body.instruction, body.saveAsCopy ?? false)
+    .then((r) => refineJobs.set(jobId, { status: "done", templateId: r.templateId, diffSummary: r.diffSummary, copied: r.copied }))
+    .catch((err) => refineJobs.set(jobId, { status: "error", error: err instanceof Error ? err.message : String(err) }));
+  return c.json({ jobId, status: "running" });
+});
+
+// GET /api/templates/refine/status/:jobId
+apiRoutes.get("/api/templates/refine/status/:jobId", async (c) => {
+  const job = refineJobs.get(c.req.param("jobId"));
+  if (!job) return c.json({ error: "Job not found" }, 404);
+  return c.json(job);
+});
+
+// ---------------------------------------------------------------------------
+// 优秀作品模板克隆(2026-08-13 模板库改造 功能 a,二期)
+// ---------------------------------------------------------------------------
+
+interface CloneJob {
+  status: "running" | "done" | "error";
+  stage?: string;
+  templateId?: string;
+  name?: string;
+  kind?: string;
+  error?: string;
+}
+const cloneJobs = new Map<string, CloneJob>();
+
+// POST /api/templates/clone - 粘贴优秀作品链接克隆模板(异步)
+function startCloneJob(opts: { url: string; name?: string; hint?: string; cleanupSource?: boolean }): string {
+  const jobId = "tplclone_" + Date.now();
+  cloneJobs.set(jobId, { status: "running", stage: "download" });
+  cloneTemplate({
+    ...opts,
+    onStage: (stage) => {
+      const job = cloneJobs.get(jobId);
+      if (job) cloneJobs.set(jobId, { ...job, stage });
+    },
+  })
+    .then((r) => cloneJobs.set(jobId, { status: "done", templateId: r.templateId, name: r.name, kind: r.kind }))
+    .catch((err) => cloneJobs.set(jobId, { status: "error", error: err instanceof Error ? err.message : String(err) }));
+  return jobId;
+}
+
+apiRoutes.post("/api/templates/clone", async (c) => {
+  const body = await c.req.json<{ url?: string; name?: string; hint?: string }>().catch(() => ({} as { url?: string; name?: string; hint?: string }));
+  if (!body.url?.trim()) return c.json({ error: "url is required" }, 400);
+  try {
+    routeCloneUrl(body.url);
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : "不支持的链接" }, 400);
+  }
+  const jobId = startCloneJob({ url: body.url, name: body.name, hint: body.hint });
+  return c.json({ jobId, status: "running" });
+});
+
+// POST /api/templates/clone/upload - 上传本地视频文件克隆(2026-08-13:视频号等
+// 无视频流平台的通路——用户用 res-downloader 嗅探/录屏拿到 mp4 后直接上传)
+apiRoutes.post("/api/templates/clone/upload", async (c) => {
+  const body = await c.req.parseBody();
+  const file = body["file"];
+  if (!(file instanceof File)) return c.json({ error: "缺少 file 字段(multipart)" }, 400);
+  const ext = (file.name.match(/\.(mp4|mov|webm|mkv|avi)$/i)?.[0] ?? ".mp4").toLowerCase();
+  const uploadDir = join(dataDir, "uploads");
+  await mkdir(uploadDir, { recursive: true });
+  const savedPath = join(uploadDir, `clone-upload-${Date.now()}${ext}`);
+  await writeFile(savedPath, Buffer.from(await file.arrayBuffer()));
+  const hint = typeof body["hint"] === "string" ? body["hint"] : undefined;
+  const jobId = startCloneJob({ url: savedPath, hint, cleanupSource: true });
+  return c.json({ jobId, status: "running" });
+});
+
+// GET /api/templates/clone/status/:jobId
+apiRoutes.get("/api/templates/clone/status/:jobId", async (c) => {
+  const job = cloneJobs.get(c.req.param("jobId"));
+  if (!job) return c.json({ error: "Job not found" }, 404);
+  return c.json(job);
 });
 
 // ---------------------------------------------------------------------------
@@ -3812,6 +4356,23 @@ apiRoutes.get("/api/templates/:id", async (c) => {
 apiRoutes.post("/api/templates", async (c) => {
   try {
     const body = await c.req.json();
+    // 图文模板不走视频时间线校验(layers 是 LayoutSpec 而非时间线层)
+    if (body.kind === "image-text") {
+      const template = createTemplate({
+        id: body.id ?? `tpl_it_${randomUUID().slice(0, 8)}`,
+        name: body.name ?? "未命名图文模板",
+        content_form: body.contentForm ?? "image-text",
+        canvas: body.canvas ?? { width: 1080, height: 1440, fps: 30 },
+        variables: body.variables ?? [],
+        layers: body.layers ?? [],
+        audio: [],
+        transitions: [],
+        branding: sanitizeBranding(body.branding),
+        status: (body.status as DbTemplate["status"]) ?? "draft",
+        kind: "image-text",
+      });
+      return c.json(templateToApi(template), 201);
+    }
     const validated = validateTemplate({ id: body.id ?? `tpl_${randomUUID().slice(0, 8)}`, ...body });
     const template = createTemplate({
       id: validated.id,
@@ -3852,8 +4413,11 @@ apiRoutes.put("/api/templates/:id", async (c) => {
         if (!l.id || typeof l.id !== "string") l.id = `layer_${i}`;
         if (typeof l.start !== "number") l.start = 0;
         if (typeof l.duration !== "number") l.duration = 10;
-        if (!l.position || typeof l.position !== "object") l.position = { x: 0, y: 0 };
-        else {
+        if (!l.position) l.position = { x: 0, y: 0 };
+        else if (typeof l.position === "string") {
+          // 保留合法方位词(center/top/bottom/left/right),只归零非法字符串
+          if (!["center", "top", "bottom", "left", "right"].includes(l.position)) l.position = { x: 0, y: 0 };
+        } else {
           if (typeof l.position.x !== "number") l.position.x = 0;
           if (typeof l.position.y !== "number") l.position.y = 0;
         }
@@ -3888,6 +4452,26 @@ apiRoutes.put("/api/templates/:id", async (c) => {
         return l;
       });
     }
+    // branding:显式传 null 清除;传对象则规范化;未传保留原值
+    const branding = body.branding === null ? undefined
+      : body.branding !== undefined ? sanitizeBranding(body.branding)
+      : existing.branding;
+    if (branding && !existsSync(join(dataDir, "shared-assets", branding.logoAsset))) {
+      return c.json({ error: `logo 文件不存在: ${branding.logoAsset}(请先上传到共享素材 branding 类)` }, 400);
+    }
+    // 图文模板不走视频时间线校验(layers 是 LayoutSpec;此前 PUT 必 400)
+    if (existing.kind === "image-text") {
+      const updated = updateTemplate(id, {
+        name: body.name ?? existing.name,
+        content_form: body.contentForm ?? existing.content_form,
+        canvas: body.canvas ?? existing.canvas,
+        layers: body.layers ?? existing.layers,
+        branding,
+        status: (body.status as DbTemplate["status"]) ?? existing.status,
+      });
+      if (!updated) return c.json({ error: "Template update failed" }, 500);
+      return c.json(templateToApi(updated));
+    }
     const validated = validateTemplate({ ...existing, ...body, id });
     const updated = updateTemplate(id, {
       name: validated.name,
@@ -3898,6 +4482,7 @@ apiRoutes.put("/api/templates/:id", async (c) => {
       audio: validated.timeline.audio as unknown as Record<string, unknown>[],
       subtitles: validated.timeline.subtitles as unknown as Record<string, unknown> | undefined,
       transitions: (validated.timeline.transitions ?? []) as unknown as Record<string, unknown>[],
+      branding,
       status: (body.status as DbTemplate["status"]) ?? existing.status,
     });
     if (!updated) return c.json({ error: "Template update failed" }, 500);
@@ -3915,7 +4500,51 @@ apiRoutes.delete("/api/templates/:id", async (c) => {
   return c.json({ deleted: true });
 });
 
+// GET /api/templates/:id/score - 模板质量评分(2026-08-14 模板精品化)
+apiRoutes.get("/api/templates/:id/score", async (c) => {
+  const template = getTemplate(c.req.param("id"));
+  if (!template) return c.json({ error: "Template not found" }, 404);
+  const { scoreTemplate } = await import("../services/template-score.js");
+  return c.json(scoreTemplate(template as any));
+});
+
 // GET /api/templates/:id/poster - generate a rich poster from template layers
+/** 模板带品牌 logo 时叠加到 poster 图(兜底 poster 路径不经 renderTimeline,需单独叠加) */
+async function overlayBrandingOnPoster(template: DbTemplate, posterPath: string): Promise<void> {
+  if (!template.branding?.logoAsset) return;
+  const { brandingAssetPath, brandingPixelPosition } = await import("../video/branding.js");
+  const logoPath = brandingAssetPath(template.branding.logoAsset);
+  if (!existsSync(logoPath)) return;
+  const pos = brandingPixelPosition(template.branding, template.canvas);
+  const w = template.branding.width ?? 160;
+  const o = template.branding.opacity ?? 1;
+  const tmpPoster = posterPath + ".tmp.png";
+  try {
+    await execFileAsync("ffmpeg", [
+      "-i", posterPath, "-i", logoPath,
+      "-filter_complex", `[1:v]scale=${w}:-1,format=rgba,colorchannelmixer=aa=${o}[logo];[0:v][logo]overlay=${pos.x}:${pos.y}`,
+      "-frames:v", "1", "-y", tmpPoster,
+    ], { timeout: 10000 });
+    await unlink(posterPath);
+    await rename(tmpPoster, posterPath);
+  } catch (err) {
+    try { await unlink(tmpPoster); } catch {}
+    console.error("[poster] logo overlay failed:", err);
+  }
+}
+
+/** 模板目录下已生成的分幕单帧(scene-N.png)URL 列表,前端灯箱逐张查看 */
+function storyboardFrameUrls(id: string): string[] {
+  try {
+    return readdirSync(join(TEMPLATE_DIR, id))
+      .filter((f) => /^scene-\d+\.png$/.test(f))
+      .sort((a, b) => parseInt(a.match(/\d+/)![0]) - parseInt(b.match(/\d+/)![0]))
+      .map((f) => `/api/shared-assets/templates/${id}/${f}`);
+  } catch {
+    return [];
+  }
+}
+
 apiRoutes.get("/api/templates/:id/poster", async (c) => {
   const id = c.req.param("id");
   if (!/^[a-zA-Z0-9_-]+$/.test(id)) return c.json({ error: "Invalid template id" }, 400);
@@ -3932,7 +4561,7 @@ apiRoutes.get("/api/templates/:id/poster", async (c) => {
     // Extract a mid-clip frame as PNG (first frame may predate layer entrance animations)
     try {
       await execFileAsync("ffmpeg", ["-ss", "2.5", "-i", videoPosterPath, "-frames:v", "1", "-y", posterPath], { timeout: 10000 });
-      return c.json({ posterUrl: `/api/shared-assets/templates/${id}/poster.png` });
+      return c.json({ posterUrl: `/api/shared-assets/templates/${id}/poster.png`, frameUrls: storyboardFrameUrls(id) });
     } catch {}
   }
   // If poster exists AND is newer than template's last update, serve cached version
@@ -3940,12 +4569,56 @@ apiRoutes.get("/api/templates/:id/poster", async (c) => {
     try {
       const posterStat = await stat(posterPath);
       const tplUpdatedAt = template.updated_at ? new Date(template.updated_at).getTime() : 0;
-      if (posterStat.mtimeMs > tplUpdatedAt) {
-        return c.json({ posterUrl: `/api/shared-assets/templates/${id}/poster.png` });
+      // 缓存有效且分幕单帧齐全才直接返回(旧缓存只有 poster 没有 scene-*.png,需重生成)
+      if (posterStat.mtimeMs > tplUpdatedAt && storyboardFrameUrls(id).length > 0) {
+        return c.json({ posterUrl: `/api/shared-assets/templates/${id}/poster.png`, frameUrls: storyboardFrameUrls(id) });
       }
     } catch {}
     // Poster is stale, delete and regenerate
     try { await unlink(posterPath); } catch {}
+  }
+
+  // 图文模板(2026-08-13):用 LayoutSpec + 示例文案跑卡片渲染出封面 poster
+  // (此前图文模板无预览图基建,preview_url 一直留空;顺带呈现 logo 效果)
+  if (template.kind === "image-text") {
+    try {
+      const { layoutSpecsFromTemplate, buildCardHtml } = await import("../services/dual-output.js");
+      const specs = layoutSpecsFromTemplate(template);
+      if (!specs) return c.json({ error: "图文模板缺少 cover/content 版式" }, 400);
+      const canvas = { width: template.canvas.width ?? 1080, height: template.canvas.height ?? 1440 };
+      const html = buildCardHtml({
+        spec: specs.cover,
+        canvas,
+        kind: "cover",
+        title: template.name || "示例标题",
+        subtitle: "封面预览示例文案",
+        branding: template.branding,
+      });
+      const { chromium } = await import("playwright");
+      const browser = await chromium.launch({ headless: true });
+      try {
+        const page = await browser.newPage({ viewport: { width: canvas.width, height: canvas.height } });
+        await page.setContent(html, { waitUntil: "load" });
+        await page.screenshot({ path: posterPath });
+      } finally {
+        await browser.close();
+      }
+      return c.json({ posterUrl: `/api/shared-assets/templates/${id}/poster.png` });
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : "图文 poster 渲染失败" }, 500);
+    }
+  }
+
+  // 视频模板:分幕故事板 poster(2026-08-13 克隆模板"无法预览全部"修复)。
+  // 旧方案只渲染前 5 秒抽一帧——多幕长模板(克隆产出可达数分钟)只能看到
+  // 第一幕;故事板沿总时长均匀采 6 个时刻、每刻只画可见图层再拼 3×2 网格。
+  try {
+    const { renderStoryboardPoster } = await import("../services/template-storyboard.js");
+    await renderStoryboardPoster(template, posterDir);
+    await overlayBrandingOnPoster(template, posterPath);
+    return c.json({ posterUrl: `/api/shared-assets/templates/${id}/poster.png`, frameUrls: storyboardFrameUrls(id) });
+  } catch (sbErr) {
+    console.error("[poster] storyboard failed, falling back to 5s render:", sbErr instanceof Error ? sbErr.message : sbErr);
   }
 
   // Try rendering a proper preview using the template's layers
@@ -4031,6 +4704,7 @@ apiRoutes.get("/api/templates/:id/poster", async (c) => {
       "-frames:v", "1",
       "-y", posterPath,
     ], { timeout: 15000 });
+    await overlayBrandingOnPoster(template, posterPath);
     return c.json({ posterUrl: `/api/shared-assets/templates/${id}/poster.png` });
   } catch (err) {
     // Last resort: solid color
@@ -4039,6 +4713,7 @@ apiRoutes.get("/api/templates/:id/poster", async (c) => {
         "-f", "lavfi", "-i", "color=c=" + bgColor + ":s=" + width + "x" + height,
         "-frames:v", "1", "-y", posterPath,
       ], { timeout: 10000 });
+      await overlayBrandingOnPoster(template, posterPath);
       return c.json({ posterUrl: `/api/shared-assets/templates/${id}/poster.png` });
     } catch {
       return c.json({ error: "Failed to generate poster" }, 500);
@@ -4121,6 +4796,8 @@ apiRoutes.post("/api/templates/:id/preview", async (c) => {
         ], { timeout: 10000 });
       }
       updateTemplate(id, { preview_url: `/api/shared-assets/templates/${id}/poster.png` });
+      // 模板带品牌 logo 时叠加到兜底 poster(此路径不经 renderTimeline,需单独处理)
+      await overlayBrandingOnPoster(template, posterPath);
       return c.json({ previewUrl: `/api/shared-assets/templates/${id}/poster.png` });
     }
   } catch (err) {
@@ -4159,8 +4836,18 @@ apiRoutes.post("/api/works/:id/render", async (c) => {
     variables?: Record<string, string | number>;
   }>().catch(() => ({} as any));
 
-  if (!body.templateId || !body.digitalHumanVideo || !body.voiceAudio) {
-    return c.json({ error: "templateId, digitalHumanVideo, and voiceAudio are required" }, 400);
+  if (!body.templateId) {
+    return c.json({ error: "templateId is required" }, 400);
+  }
+  // 变量通用化:digitalHumanVideo/voiceAudio 仅当模板声明了对应变量时必填
+  const renderTemplate = getTemplate(body.templateId);
+  if (!renderTemplate) return c.json({ error: "Template not found" }, 404);
+  const declaredVars = new Set((renderTemplate.variables ?? []).map((v) => v.name));
+  if (declaredVars.has("host_video") && !body.digitalHumanVideo) {
+    return c.json({ error: "digitalHumanVideo is required (template declares host_video)" }, 400);
+  }
+  if (declaredVars.has("voice_audio") && !body.voiceAudio) {
+    return c.json({ error: "voiceAudio is required (template declares voice_audio)" }, 400);
   }
 
   try {
@@ -4213,7 +4900,4 @@ apiRoutes.route("/api/publish", publishRoutes);
 apiRoutes.route("/api/works/:id/publish", publishWorkRoutes);
 apiRoutes.route("/api/accounts", accountsRoutes);
 apiRoutes.route("/api/queue", queueRoutes);
-apiRoutes.route("/api/calendar", calendarRoutes);
-apiRoutes.route("/api/budget", budgetRoutes);
-apiRoutes.route("/api/data-sources", dataSourceRoutes);
-apiRoutes.route("/api/stock-assets", stockAssetRoutes);
+apiRoutes.rout

@@ -42,6 +42,7 @@ export function validateLayer(layer: unknown): TimelineLayer {
         source: assertString(l.source, "layer.source"),
         size: validateSize(l.size),
         animations: validateAnimations(l.animations),
+        sourceStart: l.sourceStart !== undefined ? assertNumber(l.sourceStart as number, "layer.sourceStart", 0) : undefined,
       } as TimelineLayer;
     case "text":
       return {
@@ -53,6 +54,7 @@ export function validateLayer(layer: unknown): TimelineLayer {
         align: (l.align as "left" | "center" | "right") ?? "center",
         // text 层 size 可选：提供时用于自动换行与对齐计算
         size: l.size ? validateSize(l.size) : undefined,
+        stroke: validateStroke(l.stroke),
         animations: validateAnimations(l.animations),
       } as TimelineLayer;
     case "shape":
@@ -62,6 +64,7 @@ export function validateLayer(layer: unknown): TimelineLayer {
         shape: (l.shape as "rect" | "circle") ?? "rect",
         fill: (l.fill as string) ?? "#FFFFFF",
         size: validateSize(l.size),
+        stroke: validateStroke(l.stroke),
         animations: validateAnimations(l.animations),
       } as TimelineLayer;
     default:
@@ -76,6 +79,14 @@ function validateSize(size: unknown): { width: number; height: number } {
     width: assertNumber(s.width as number, "size.width", 1),
     height: assertNumber(s.height as number, "size.height", 1),
   };
+}
+
+/** 描边(空心边框):{width:px, color}。text/shape 层均支持;非法输入静默丢弃 */
+function validateStroke(stroke: unknown): { width: number; color: string } | undefined {
+  if (!stroke || typeof stroke !== "object") return undefined;
+  const s = stroke as Record<string, unknown>;
+  if (typeof s.width !== "number" || s.width <= 0) return undefined;
+  return { width: s.width, color: typeof s.color === "string" && s.color ? s.color : "#FFFFFF" };
 }
 
 function validateAnimations(animations: unknown): { type: string; duration: number }[] | undefined {

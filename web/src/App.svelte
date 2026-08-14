@@ -76,6 +76,53 @@
   let heygemGpuHourlyRateYuan: number = $state(1.78);
   let heygemTunnelHost: string = $state("");
   let heygemTunnelPort: number = $state(28830);
+  /** 隧道候选实例(多实例 failover,与后端 tunnels 数组对应) */
+  interface TunnelRow { host: string; port: number; user: string; localPort: number; remotePort: number }
+  let heygemTunnels: TunnelRow[] = $state([]);
+  let h3Enabled: boolean = $state(false);
+  let h3Tunnels: TunnelRow[] = $state([]);
+  let h3GpuHourlyRateYuan: number = $state(2.18);
+  /** H3 实例实时状态(ready/offline),打开设置时探测 */
+  let h3InstanceState: string = $state("");
+  /** 每行候选的公钥推送状态:rowKey(host:port) → 提示文本 */
+  let pushKeyMessages: Record<string, string> = $state({});
+  let pushKeyBusy: Record<string, boolean> = $state({});
+  /** 每行候选的实例密码(仅推送公钥时一次性使用,不保存) */
+  let pushKeyPasswords: Record<string, string> = $state({});
+
+  function tunnelRowKey(t: TunnelRow): string { return `${t.host}:${t.port}`; }
+
+  async function pushSshKey(t: TunnelRow) {
+    const key = tunnelRowKey(t);
+    const password = pushKeyPasswords[key] ?? "";
+    if (!password) {
+      pushKeyMessages = { ...pushKeyMessages, [key]: "请先输入实例密码(AutoDL 控制台「快捷登录」中查看)" };
+      return;
+    }
+    pushKeyBusy = { ...pushKeyBusy, [key]: true };
+    pushKeyMessages = { ...pushKeyMessages, [key]: "" };
+    try {
+      const res = await fetch("/api/ssh/push-key", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ host: t.host, port: t.port, user: t.user || "root", password }),
+      });
+      const data = await res.json();
+      pushKeyMessages = { ...pushKeyMessages, [key]: data.success ? `✓ ${data.message}` : `✗ ${data.error}` };
+      if (data.success) pushKeyPasswords = { ...pushKeyPasswords, [key]: "" };
+    } catch (err) {
+      pushKeyMessages = { ...pushKeyMessages, [key]: `✗ ${err instanceof Error ? err.message : String(err)}` };
+    } finally {
+      pushKeyBusy = { ...pushKeyBusy, [key]: false };
+    }
+  }
+
+  async function refreshH3Status() {
+    try {
+      const res = await fetch("/api/h3/instance/status");
+      if (res.ok) h3InstanceState = (await res.json()).state ?? "";
+    } catch { h3InstanceState = ""; }
+  }
   let showHeygemToken: boolean = $state(false);
   let showPexelsKey: boolean = $state(false);
   let showPixabayKey: boolean = $state(false);
@@ -193,6 +240,8 @@
           zhihuDataSecret,
           heygemBaseUrl, heygemApiToken, heygemGpuHourlyRateYuan,
           heygemTunnelHost, heygemTunnelPort,
+          heygemTunnels,
+          h3Enabled, h3Tunnels, h3GpuHourlyRateYuan,
         }),
       });
       // 检查 HTTP 状态：此前 500 也显示"已保存"，掩盖了保存失败
@@ -251,6 +300,10 @@
         heygemGpuHourlyRateYuan = data.heygemGpuHourlyRateYuan ?? 1.78;
         heygemTunnelHost = data.heygemTunnelHost ?? "";
         heygemTunnelPort = data.heygemTunnelPort ?? 28830;
+        heygemTunnels = data.heygemTunnels ?? [];
+        h3Enabled = data.h3Enabled ?? false;
+        h3Tunnels = data.h3Tunnels ?? [];
+        h3GpuHourlyRateYuan = data.h3GpuHourlyRateYuan ?? 2.18;
       }
     } catch {}
   }
@@ -268,7 +321,7 @@
   // 每次打开设置弹窗时重新拉取最新配置——防止"页面停留时的旧空值
   // 覆盖别处刚保存的新 key"（2026-07-21 Pexels key 丢失根因之一）
   $effect(() => {
-    if (showSettings) loadSettings();
+    if (showSettings) { loadSettings(); refreshH3Status(); }
   });
 
   const navItems = [
@@ -523,9 +576,71 @@
               <span class="field-label-sm">SSH 隧道端口</span>
               <input type="number" min="1" max="65535" bind:value={heygemTunnelPort} placeholder="28830" class="key-input" />
             </label>
-            <p class="hint-sm">HeyGem 用于数字人视频生成。实例需在 AutoDL 控制台手动开关机；个人用户通过 SSH 隧道访问实例（隧道由 AutoViral 自动管理），实例地址填 http://localhost:6006。</p>
+
+            <!-- 多实例候选(failover):按序尝试,哪个能用用哪个 -->
+            <div class="tunnel-list">
+              <span class="field-label-sm">候选实例(多实例自动切换,按序尝试)</span>
+              {#each heygemTunnels as t, i (tunnelRowKey(t) + i)}
+                <div class="tunnel-row">
+                  <input type="text" bind:value={t.host} placeholder="SSH 主机" class="key-input tunnel-host" />
+                  <input type="number" min="1" max="65535" bind:value={t.port} placeholder="端口" class="key-input tunnel-port" />
+                  <button class="tunnel-del" onclick={() => heygemTunnels = heygemTunnels.filter((_, j) => j !== i)} title="删除该候选">×</button>
+                </div>
+              {/each}
+              <button class="tunnel-add" onclick={() => heygemTunnels = [...heygemTunnels, { host: "", port: 0, user: "root", localPort: 6006, remotePort: 6008 }]}>+ 添加候选实例</button>
+            </div>
+            <p class="hint-sm">HeyGem 用于数字人视频生成。实例需在 AutoDL 控制台手动开关机；个人用户通过 SSH 隧道访问实例（隧道由 AutoViral 自动管理），实例地址填 http://localhost:6006。配多个候选实例时，一台被占用/关机会自动切换到下一台。</p>
           </div>
         </div>
+
+        <!-- H3 本地视频生成(MiniMax H3,AutoDL ComfyUI) -->
+        <div class="field-group">
+          <span class="field-label-upper">
+            H3 本地视频生成(MiniMax H3)
+            {#if h3Enabled && h3InstanceState}
+              <span class="h3-status" class:h3-ready={h3InstanceState === "ready"}>
+                {h3InstanceState === "ready" ? "● 实例在线" : "● 实例离线"}
+              </span>
+            {/if}
+          </span>
+          <div class="stack">
+            <label class="field-row">
+              <span class="field-label-sm">启用本地 H3(约 ¥0.13/条,替代云端 ¥1.4/条)</span>
+              <input type="checkbox" bind:checked={h3Enabled} class="h3-toggle" />
+            </label>
+            {#if h3Enabled}
+              <label class="field-row">
+                <span class="field-label-sm">GPU 时价(元/小时)</span>
+                <input type="number" step="0.01" min="0" bind:value={h3GpuHourlyRateYuan} class="key-input" />
+              </label>
+
+              <div class="tunnel-list">
+                <span class="field-label-sm">候选实例(SSH 隧道,按序尝试,哪个能用用哪个)</span>
+                {#each h3Tunnels as t, i (tunnelRowKey(t) + i)}
+                  <div class="tunnel-row-block">
+                    <div class="tunnel-row">
+                      <input type="text" bind:value={t.host} placeholder="SSH 主机(connect.xxx.seetacloud.com)" class="key-input tunnel-host" />
+                      <input type="number" min="1" max="65535" bind:value={t.port} placeholder="端口" class="key-input tunnel-port" />
+                      <button class="tunnel-del" onclick={() => h3Tunnels = h3Tunnels.filter((_, j) => j !== i)} title="删除该候选">×</button>
+                    </div>
+                    <div class="tunnel-row">
+                      <input type="password" bind:value={pushKeyPasswords[tunnelRowKey(t)]} placeholder="实例密码(仅推送公钥时用,不保存)" class="key-input tunnel-pass" />
+                      <button class="tunnel-push" disabled={pushKeyBusy[tunnelRowKey(t)]} onclick={() => pushSshKey(t)}>
+                        {pushKeyBusy[tunnelRowKey(t)] ? "推送中…" : "一键免密"}
+                      </button>
+                    </div>
+                    {#if pushKeyMessages[tunnelRowKey(t)]}
+                      <p class="hint-sm tunnel-msg">{pushKeyMessages[tunnelRowKey(t)]}</p>
+                    {/if}
+                  </div>
+                {/each}
+                <button class="tunnel-add" onclick={() => h3Tunnels = [...h3Tunnels, { host: "", port: 0, user: "root", localPort: 8188, remotePort: 8188 }]}>+ 添加候选实例</button>
+              </div>
+              <p class="hint-sm">
+                使用步骤:① AutoDL 控制台开机实例(选择带 ComfyUI+H3 模型的镜像)② 「快捷登录」复制 SSH 主机/端口填入上方 ③ 输入实例密码点「一键免密」④ 保存。
+                实例关机时 eco 档任务会阻塞并提醒开机;保存后需重启 AutoViral 生效。
+              </p>
+            {/if}
 
         {#if settingsMessage}
           <p class="msg-success">{settingsMessage}</p>
@@ -1010,6 +1125,24 @@
   .key-input { flex: 1; padding: 0.35rem 0.5rem; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-inset); color: var(--text); font-size: 0.8rem; }
   .key-toggle { padding: 0.3rem 0.5rem; border: 1px solid var(--border); border-radius: 4px; background: none; cursor: pointer; font-size: 0.8rem; }
   .hint-sm { font-size: 0.72rem; color: var(--text-dim); margin: 0.25rem 0 0; }
+
+  /* H3 / 隧道候选实例列表 */
+  .tunnel-list { display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.4rem; }
+  .tunnel-row { display: flex; gap: 0.4rem; align-items: center; }
+  .tunnel-row-block { display: flex; flex-direction: column; gap: 0.3rem; padding: 0.4rem; border: 1px solid var(--border-subtle); border-radius: 6px; }
+  .tunnel-host { flex: 1; min-width: 0; }
+  .tunnel-port { width: 5.5rem; }
+  .tunnel-pass { flex: 1; min-width: 0; }
+  .tunnel-del { background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 1rem; padding: 0 0.3rem; }
+  .tunnel-del:hover { color: #e5534b; }
+  .tunnel-add { background: none; border: 1px dashed var(--border); color: var(--text-secondary); border-radius: 6px; padding: 0.35rem; cursor: pointer; font-size: 0.75rem; }
+  .tunnel-add:hover { border-color: var(--text-secondary); }
+  .tunnel-push { background: var(--bg-hover); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 0.35rem 0.6rem; cursor: pointer; font-size: 0.75rem; white-space: nowrap; }
+  .tunnel-push:disabled { opacity: 0.5; cursor: default; }
+  .tunnel-msg { word-break: break-all; }
+  .h3-toggle { width: 1rem; height: 1rem; accent-color: #4a9eff; }
+  .h3-status { font-size: 0.7rem; color: #e5534b; margin-left: 0.5rem; text-transform: none; letter-spacing: 0; }
+  .h3-status.h3-ready { color: #3fb950; }
 
   /* Buttons */
   .btn-primary {

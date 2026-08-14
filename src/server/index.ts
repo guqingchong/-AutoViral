@@ -33,6 +33,7 @@ import { migrateLegacyWorks } from "../db/migrate-legacy.js";
 import { recoverStuckJobs, startPublishCron } from "../services/publish-service.js";
 import { recoverStuckRenderJobs } from "../services/video-factory.js";
 import { startHealthLoop, stopHealthLoop } from "../services/instance-service.js";
+import { startH3HealthLoop, stopH3HealthLoop } from "../services/h3-instance-service.js";
 import { reconcileWorkStates } from "../services/reconcile.js";
 import { registerAllPublishers } from "../services/publishers/factory.js";
 
@@ -234,11 +235,13 @@ export async function startServer(port: number): Promise<{ server: Server }> {
   startMetricsScheduler(config.analytics);
   // 实例手动控制模式：30 秒健康探测驱动 ready/offline 状态，供前端提醒
   startHealthLoop();
+  startH3HealthLoop();
 
   // 8. Graceful shutdown: drain pending chat saves on SIGTERM/SIGINT
   const shutdown = async (signal: string) => {
     console.log(`\n[server] Received ${signal}, draining pending saves...`);
     stopHealthLoop();
+    stopH3HealthLoop();
     stopRunner();
     stopWatchdog();
     stopRenderPoolScheduler();

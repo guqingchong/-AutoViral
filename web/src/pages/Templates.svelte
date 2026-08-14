@@ -138,6 +138,96 @@
   /** preview_url 可能是 /preview-file 视频端点（img 无法渲染），仅图片扩展名可直接用 <img> */
   const isImageUrl = (u?: string) => !!u && /\.(png|jpe?g|webp|gif)(\?|$)/i.test(u);
 
+  // ── 克隆优秀作品模板(2026-08-13 二期) ──
+  let cloneUrl = $state("");
+  let cloneHint = $state("");
+  let cloning = $state(false);
+  let cloneMessage = $state("");
+  let clonePollTimer: ReturnType<typeof setInterval> | null = null;
+
+  const CLONE_STAGE_LABELS: Record<string, string> = {
+    download: "下载/抓取作品",
+    frames: "抽帧",
+    analyze: "AI 视觉分析版式",
+    build: "组装模板",
+  };
+
+  async function cloneFromUrl() {
+    if (!cloneUrl.trim()) {
+      cloneMessage = "请先粘贴作品链接";
+      return;
+    }
+    cloning = true;
+    cloneMessage = "";
+    try {
+      const res = await fetch("/api/templates/clone", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: cloneUrl.trim(), hint: cloneHint.trim() || undefined }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.jobId) {
+        cloneMessage = "✗ " + (data.error ?? "克隆启动失败");
+        cloning = false;
+        return;
+      }
+      startClonePolling(data.jobId);
+    } catch (err) {
+      cloneMessage = "✗ " + (err instanceof Error ? err.message : String(err));
+      cloning = false;
+    }
+  }
+
+  /** 上传本地视频文件克隆(视频号等无视频流平台的通路:先嗅探/录屏拿到 mp4) */
+  let cloneFileInput: HTMLInputElement;
+  function pickCloneFile() { cloneFileInput?.click(); }
+  async function cloneFromUpload(e: Event) {
+    const input = e.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = "";
+    if (!file) return;
+    cloning = true;
+    cloneMessage = "上传中… " + file.name;
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      if (cloneHint.trim()) fd.append("hint", cloneHint.trim());
+      const res = await fetch("/api/templates/clone/upload", { method: "POST", body: fd });
+      const data = await res.json();
+      if (!res.ok || !data.jobId) {
+        cloneMessage = "✗ " + (data.error ?? "上传失败");
+        cloning = false;
+        return;
+      }
+      startClonePolling(data.jobId);
+    } catch (err) {
+      cloneMessage = "✗ " + (err instanceof Error ? err.message : String(err));
+      cloning = false;
+    }
+  }
+
+  function startClonePolling(jobId: string) {
+    clonePollTimer = setInterval(async () => {
+      try {
+        const st = await (await fetch(`/api/templates/clone/status/${jobId}`)).json();
+        if (st.status === "done") {
+          if (clonePollTimer) { clearInterval(clonePollTimer); clonePollTimer = null; }
+          cloning = false;
+          cloneMessage = `✓ 克隆完成:「${st.name}」已入库(草稿),预览确认后可启用;还可以用「再加工」继续打磨`;
+          cloneUrl = "";
+          cloneHint = "";
+          await load();
+        } else if (st.status === "error") {
+          if (clonePollTimer) { clearInterval(clonePollTimer); clonePollTimer = null; }
+          cloning = false;
+          cloneMessage = "✗ " + (st.error ?? "克隆失败") + "(可换链接重试)";
+        } else {
+          cloneMessage = `克隆中… ${CLONE_STAGE_LABELS[st.stage] ?? st.stage ?? ""}`;
+        }
+      } catch {}
+    }, 4000);
+  }
+
   async function generateTemplates() {
     generating = true;
     genMessage = "模板生成中... 可以切换页面，生成完成后会自动刷新";
@@ -210,6 +300,29 @@
     await load();
   }
 
+  // ── 分幕灯箱预览(2026-08-13):点预览看大图,左右切换逐幕查看 ──
+  let lightboxUrls = $state<string[]>([]);
+  let lightboxIdx = $state(0);
+  let lightboxName = $state("");
+
+  function openLightbox(tpl: Template) {
+    if (!tpl.frameUrls || tpl.frameUrls.length === 0) return false;
+    lightboxUrls = tpl.frameUrls;
+    lightboxIdx = 0;
+    lightboxName = tpl.name;
+    return true;
+  }
+  function closeLightbox() { lightboxUrls = []; }
+  function stepLightbox(delta: number) {
+    lightboxIdx = (lightboxIdx + delta + lightboxUrls.length) % lightboxUrls.length;
+  }
+  function onLightboxKeydown(e: KeyboardEvent) {
+    if (lightboxUrls.length === 0) return;
+    if (e.key === "Escape") closeLightbox();
+    else if (e.key === "ArrowLeft") stepLightbox(-1);
+    else if (e.key === "ArrowRight") stepLightbox(1);
+  }
+
   async function preview(tpl: Template) {
     renderingId = tpl.id;
     try {
@@ -217,11 +330,14 @@
       const posterRes = await fetch(`/api/templates/${tpl.id}/poster?t=${Date.now()}`);
       if (posterRes.ok) {
         const posterData = await posterRes.json();
+        if (posterData.frameUrls?.length) tpl.frameUrls = posterData.frameUrls;
         if (posterData.posterUrl) {
           tpl.posterUrl = `${posterData.posterUrl}?t=${Date.now()}`;
           templates = [...templates];
-          return;
         }
+        // 有分幕单帧 → 弹灯箱逐张看;没有则退回旧预览路径
+        if (openLightbox(tpl)) return;
+        if (posterData.posterUrl) return;
       }
       // Fallback: try full video preview
       const defaults: Record<string, string | number> = {};
@@ -257,6 +373,9 @@
           const data = await res.json();
           if (data.posterUrl) {
             tpl.posterUrl = data.posterUrl;
+          }
+          if (data.frameUrls?.length) {
+            tpl.frameUrls = data.frameUrls;
           }
         } else {
           // If poster failed, try preview endpoint
@@ -337,7 +456,29 @@
   }
 </script>
 
+<svelte:window onkeydown={onLightboxKeydown} />
 <div class="templates-root">
+{#if lightboxUrls.length > 0}
+  <!-- 分幕灯箱:大图逐张查看(2026-08-13) -->
+  <div class="lightbox-backdrop" role="button" tabindex="0" onclick={closeLightbox} onkeydown={(e) => e.key === "Enter" && closeLightbox()}>
+    <div class="lightbox-body" role="presentation" onclick={(e) => e.stopPropagation()}>
+      <div class="lightbox-header">
+        <span class="lightbox-title">{lightboxName}</span>
+        <span class="lightbox-counter">第 {lightboxIdx + 1} / {lightboxUrls.length} 幕</span>
+        <button class="lightbox-close" onclick={closeLightbox}>✕</button>
+      </div>
+      <div class="lightbox-stage">
+        {#if lightboxUrls.length > 1}
+          <button class="lightbox-nav prev" onclick={() => stepLightbox(-1)}>‹</button>
+        {/if}
+        <img src={lightboxUrls[lightboxIdx]} alt={`第 ${lightboxIdx + 1} 幕`} class="lightbox-img" />
+        {#if lightboxUrls.length > 1}
+          <button class="lightbox-nav next" onclick={() => stepLightbox(1)}>›</button>
+        {/if}
+      </div>
+    </div>
+  </div>
+{/if}
 {#if editingId}
   <TemplateEditor templateId={editingId} onBack={() => { editingId = undefined; load(); }} />
 {:else}
@@ -422,6 +563,21 @@
             {researching ? "调研中..." : `🔍 调研学习${skillCount > 0 ? `（已存 ${skillCount} 技能）` : ""}`}
           </button>
         </div>
+        <!-- 克隆优秀作品模板(2026-08-13 二期) -->
+        <div class="gen-row clone-row">
+          <input type="text" bind:value={cloneUrl} placeholder="粘贴优秀作品链接克隆模板:小红书图文笔记 / 抖音视频" class="gen-input" />
+          <input type="text" bind:value={cloneHint} placeholder="补充说明(可留空):我特别喜欢它的…" class="gen-input clone-hint" />
+          <button class="btn-primary gen-btn" disabled={cloning} onclick={cloneFromUrl} title="下载/截图优秀作品 → AI 视觉分析 → 克隆其版式/配色/节奏为新模板">
+            {cloning ? "克隆中…" : "🔗 克隆优秀作品"}
+          </button>
+          <button class="btn-research" disabled={cloning} onclick={pickCloneFile} title="视频号等无视频流平台:先用 res-downloader 嗅探或录屏拿到 mp4,再从这里上传克隆">
+            📤 上传视频克隆
+          </button>
+          <input type="file" bind:this={cloneFileInput} accept="video/*,.mp4,.mov,.webm,.mkv" style="display:none" onchange={cloneFromUpload} />
+        </div>
+        {#if cloneMessage}
+          <p class="gen-message">{cloneMessage}</p>
+        {/if}
       </div>
       {#if genMessage}
         <p class="gen-message">{genMessage}</p>
@@ -464,7 +620,8 @@
                 {renderingId === tpl.id ? t("rendering") : t("preview")}
               </button>
               <button class="btn-sm secondary" onclick={() => editingId = tpl.id}>{t("edit")}</button>
-              {#if tpl.status === "candidate"}
+              <button class="btn-sm secondary" title="用自然语言指令让 AI 再加工此模板" onclick={() => editingId = tpl.id}>再加工</button>
+              {#if tpl.status === "draft" || tpl.status === "candidate"}
                 <button class="btn-sm approve" title="设为可用后，批量自动制作可选择此模板" onclick={() => setStatus(tpl, "approved")}>启用</button>
               {:else if tpl.status === "approved"}
                 <button class="btn-sm secondary" title="停用后批量自动制作将不再列出此模板" onclick={() => setStatus(tpl, "candidate")}>停用</button>
@@ -489,7 +646,7 @@
   .template-card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: var(--card-radius); padding: 1rem; display: flex; flex-direction: column; gap: 0.6rem; }
   .preview { aspect-ratio: 9 / 16; background: var(--bg-inset); border-radius: 4px; overflow: hidden; display: grid; place-items: center; }
   .preview video { width: 100%; height: 100%; object-fit: cover; }
-  .poster-img { width: 100%; height: 100%; object-fit: cover; }
+  .poster-img { width: 100%; height: 100%; object-fit: contain; }
   .preview-placeholder { color: var(--text-muted); font-size: var(--size-sm); }
   .meta { display: flex; gap: 0.5rem; align-items: center; }
   .status-badge { font-size: var(--size-xs); padding: 0.15rem 0.4rem; border-radius: 3px; background: var(--bg-inset); color: var(--text-muted); text-transform: capitalize; }
@@ -517,6 +674,19 @@
   .btn-research:disabled { opacity: 0.5; cursor: not-allowed; }
   .gen-message.research { border-left: 3px solid var(--accent); }
   .gen-input { flex: 1; min-width: 200px; }
+  .clone-row { margin-top: 0.25rem; }
+  .clone-hint { flex: 0.6; min-width: 160px; }
   .gen-btn { background: var(--accent-gradient); }
   .gen-message { font-size: 0.82rem; color: var(--text-secondary); margin: 0.5rem 0 0; padding: 0.5rem 0.75rem; background: var(--accent-soft, rgba(0,0,0,0.05)); border-radius: 4px; }
+  /* ── 分幕灯箱 ── */
+  .lightbox-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.75); z-index: 1000; display: grid; place-items: center; }
+  .lightbox-body { background: var(--card-bg); border-radius: 8px; padding: 0.75rem 1rem 1rem; max-width: 92vw; max-height: 92vh; display: flex; flex-direction: column; gap: 0.5rem; }
+  .lightbox-header { display: flex; align-items: center; gap: 1rem; }
+  .lightbox-title { font-weight: 600; font-size: var(--size-sm); }
+  .lightbox-counter { color: var(--text-muted); font-size: var(--size-xs); }
+  .lightbox-close { margin-left: auto; border: none; background: transparent; font-size: 1.1rem; cursor: pointer; color: var(--text); }
+  .lightbox-stage { display: flex; align-items: center; gap: 0.5rem; min-height: 0; }
+  .lightbox-img { max-width: 82vw; max-height: 80vh; object-fit: contain; border-radius: 4px; background: #111; }
+  .lightbox-nav { border: none; border-radius: 50%; width: 2.4rem; height: 2.4rem; font-size: 1.4rem; line-height: 1; cursor: pointer; background: var(--bg-inset); color: var(--text); flex-shrink: 0; }
+  .lightbox-nav:hover { background: var(--accent); color: var(--accent-text); }
 </style>

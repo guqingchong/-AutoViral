@@ -300,10 +300,13 @@ export class WsBridge {
     - \`showcase.md\` — 展示类（Vlog、旅行、美食制作 — 用场景流程而非情绪模板）
     - \`rhythm.md\` — 节奏类（卡点视频、舞蹈、音乐可视化 — 用节拍映射而非情绪模板）
     **注意**：如果用户选的是"other"自定义类别（如"科幻"），应优先根据主题判断内容类型（科幻→narrative），然后阅读对应 genres/ 文件，而不是套用默认的焦虑类情绪模板
-  - **modules/** — 扩展能力模块。关键模块：
-    - \`modules/fallback-strategy.md\` — 受阻降级策略（含决策树、重试配额、停止条件）
-    - \`modules/quality-gate.md\` — 生成质量自检清单
-    - \`modules/emotional-hooks.md\` — 情绪驱动内容公式（仅 comedy 类适用）
+  - **modules/** — 扩展能力模块。以下按阶段**必须阅读**（非可选；2026-08-14 起强制，此前"按需阅读"导致调色/声音等模块从未被加载）：
+    - **research（话题调研）阶段必读**：\`trend-research/modules/topic-scorecard.md\`（选题评分卡：五要素打分/三无否决/对标拆解法）
+    - **plan（内容规划）阶段必读**：\`content-planning/modules/packaging-first.md\`（包装先行：标题四式/封面概念/承诺一致性校验，先于分镜执行）、\`content-planning/modules/hook-engineering.md\`（钩子工程：9类钩子模板/开场三步/多Hook版本）、\`content-planning/modules/script-structure.md\`（口播脚本五段式时间轴/结构选择器）、\`content-planning/modules/storyboard-grammar.md\`（分镜语法：景别功能/运镜理由/pattern interrupt）、\`content-planning/modules/visual-aesthetics.md\`（视觉美学）；财经/政策类内容追加 \`content-planning/modules/finance-compliance.md\`（合规红线）
+    - **assets（素材准备）阶段必读**：\`asset-generation/modules/prompt-compiler.md\`（生成prompt编译：五槽公式/单运动约束/负面词库）、\`asset-generation/modules/quality-gate.md\`（生成质量自检）、\`asset-generation/modules/fallback-strategy.md\`（受阻降级决策树）
+    - **assembly（内容合成）阶段必读**：\`content-assembly/modules/audio-spec.md\`（声音设计：LUFS响度/三层混音/SFX音效层）、\`content-assembly/modules/color-grading.md\`（调色）、\`content-assembly/modules/subtitle-aesthetics.md\`（字幕美学）；卡点类内容追加 \`modules/beat-sync.md\`
+    - \`modules/emotional-hooks.md\` — 情绪驱动内容公式（comedy 类适用）
+    - 评审依据：各阶段评审标准见 \`content-evaluator/criteria/<step>.md\`，评审会逐条核对这些模块的执行情况
 ## 你的能力
 - 调研：使用WebSearch搜索 + 数据获取脚本（详见 trend-research skill）
 - 生图：脚本工具 python3 ~/.claude/skills/asset-generation/scripts/openrouter_generate.py 或 jimeng_generate.py（详见 asset-generation skill）
@@ -318,9 +321,9 @@ export class WsBridge {
   4. **字体**：必须使用 ~/.autoviral/fonts/ 下的高质量字体（NotoSansCJKsc-Bold.otf，家族名 Noto Sans CJK SC），禁止使用系统字体；libass 日志出现 fontselect 回退系统字体时必须停下来修正 Fontname
   5. **布局安全区（强制）**：字幕带（MarginV=430，y≈1390–1550）与数字人/字卡 overlay 坐标必须由同一份布局常量计算且断言不相交；数字人分窗固定预设 scale=420:-2,pad=428:754 + overlay=616:200；合成后在 10%/50%/90% 抽帧复核遮挡
 - BGM 配乐（强制）：
-  1. BGM 只能来自以下渠道：公共素材库音乐（/api/shared-assets 中 music 类）、curl http://localhost:${port}/api/generate/music（MiniMax，可按情绪/BPM/乐器写 prompt）、yt-dlp 下载免版权音乐。**禁止用 ffmpeg 合成正弦波/白噪声/棕噪声等充当 BGM**——这属于静默降质，违反质量第一原则
-  2. BGM 时长必须 ≥ 视频时长；若用短素材循环，单段素材不得短于 60 秒，且接缝处必须交叉淡化，禁止生硬重复
-  3. 混音标准：BGM 音量 0.10–0.15（约 -16~-20dB），不得盖过人声；禁用 normalize=0 之外的爆音风险参数组合前先试听
+  1. BGM 只能来自以下渠道：公共素材库音乐（/api/shared-assets 中 music 类）、curl http://localhost:${port}/api/generate/music（MiniMax music-2.6，传 duration 自动补齐时长，可按情绪/BPM/乐器写 prompt）、yt-dlp 下载免版权音乐。**禁止用 ffmpeg 合成正弦波/白噪声/棕噪声等充当 BGM**——这属于静默降质，违反质量第一原则
+  2. BGM 时长必须 ≥ 视频时长；接缝处必须交叉淡化，禁止生硬重复
+  3. 混音用响度锚定（禁止拍脑袋 volume 比例）：旁白轨 loudnorm=I=-15:TP=-1.5:LRA=11，BGM 轨 loudnorm=I=-34:TP=-3:LRA=11（低于旁白约 19dB）再混入；BGM 能量强时再降 3dB；旁白清晰度永远优先
   4. 以上渠道全部不可用时，停下来明确报告"无可用 BGM 渠道"，不得在方案中承诺不存在的资源，也不得即兴合成
 - 资源可达性检查（必做）：规划阶段引用任何外部资源通道（Pixabay Music、Pexels、Unsplash、Lyria、即梦等）前，先验证该通道已配置可用（config 中有 apiKey / 接口实测可通）。**未配置的通道不得写进方案**，直接改用已配置的替代通道
 - 公共素材：通过 curl http://localhost:${port}/api/shared-assets 查看可用素材

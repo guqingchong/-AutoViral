@@ -53,6 +53,38 @@
   let loadError = $state(false);
   let filter: "all" | "draft" | "published" = $state("all");
 
+  // ── AutoDL 开机提醒（素材阶段需要 H3/数字人且实例未开机时顶部横幅，2026-08-14） ──
+  interface AutodlNeed { id: string; title: string; certainty?: "confirmed" | "possible" }
+  interface AutodlReminders {
+    h3: { state: string; consoleUrl?: string; neededBy: AutodlNeed[] };
+    heygem: { state: string; consoleUrl?: string; neededBy: AutodlNeed[] };
+  }
+  let autodlReminders = $state<AutodlReminders | null>(null);
+  let autodlTimer: ReturnType<typeof setInterval> | null = null;
+
+  async function loadAutodlReminders() {
+    try {
+      const res = await fetch("/api/autodl/reminders");
+      if (res.ok) autodlReminders = await res.json();
+    } catch { /* 静默失败，下轮重试 */ }
+  }
+
+  /** 需要提醒的实例列表：有作品需要 + 实例未 ready */
+  let autodlAlerts = $derived.by(() => {
+    const r = autodlReminders;
+    if (!r) return [] as { kind: string; items: AutodlNeed[]; url?: string; hard: boolean }[];
+    const alerts: { kind: string; items: AutodlNeed[]; url?: string; hard: boolean }[] = [];
+    if (r.heygem.neededBy.length > 0 && r.heygem.state !== "ready") {
+      alerts.push({ kind: lang === "zh" ? "数字人渲染" : "Digital human", items: r.heygem.neededBy, url: r.heygem.consoleUrl, hard: true });
+    }
+    if (r.h3.neededBy.length > 0 && r.h3.state !== "ready") {
+      const hard = r.h3.neededBy.some((n) => n.certainty === "confirmed");
+      alerts.push({ kind: lang === "zh" ? "H3 视频生成" : "H3 video", items: r.h3.neededBy, url: r.h3.consoleUrl, hard });
+    }
+    return alerts;
+  });
+
+
   // ── 任务队列（作品流水线队列面板，8s 静默轮询，与 loadWorks 同节奏） ──
   let queueItems: QueueItemInfo[] = $state([]);
   let queueActionBusy: Record<string, boolean> = $state({});
@@ -411,16 +443,45 @@
     loadConfig();
     // 静默轮询：流水线进展（agent 后台执行）每 8 秒刷新到卡片上；任务队列同节奏
     worksPollTimer = setInterval(() => { loadWorks(true); loadQueue(); }, 8000);
+    // AutoDL 开机提醒：30s 轮询（实例服务自身有 30s 探测循环，无需更密）
+    loadAutodlReminders();
+    autodlTimer = setInterval(loadAutodlReminders, 30_000);
     return () => {
       unsub();
       if (researchTimer) clearInterval(researchTimer);
       if (worksPollTimer) clearInterval(worksPollTimer);
+      if (autodlTimer) clearInterval(autodlTimer);
     };
   });
 </script>
 
 <div class="works-page">
   <AssetLibrary />
+
+  <!-- ═══ AutoDL 开机提醒横幅（素材阶段需要 H3/数字人且实例未开机时） ═══ -->
+  {#each autodlAlerts as a}
+    <div class="autodl-banner" class:autodl-soft={!a.hard}>
+      <span class="autodl-icon">⚠️</span>
+      <div class="autodl-text">
+        <strong>
+          {lang === "zh"
+            ? `${a.kind}需要 AutoDL 实例，当前实例未开机`
+            : `${a.kind} requires the AutoDL instance, currently offline`}
+        </strong>
+        <span>
+          {a.items.map((i) => `《${i.title || i.id}》`).join(lang === "zh" ? "、" : ", ")}
+          {lang === "zh"
+            ? a.hard ? " 即将进入素材准备阶段，请尽快开机" : " 可能需要该实例（分镜确认前预估）"
+            : a.hard ? " will enter the assets stage soon" : " may need it (estimated)"}
+        </span>
+      </div>
+      {#if a.url}
+        <a class="autodl-link" href={a.url} target="_blank" rel="noopener">
+          {lang === "zh" ? "前往 AutoDL 控制台开机 →" : "Open AutoDL console →"}
+        </a>
+      {/if}
+    </div>
+  {/each}
 
   <!-- ═══ 任务队列面板（仅在有活跃队列项时显示） ═══ -->
   {#if activeQueueItems.length > 0}
@@ -795,6 +856,39 @@
 {/if}
 
 <style>
+  /* AutoDL 开机提醒横幅 */
+  .autodl-banner {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    margin-bottom: 14px;
+    border-radius: 10px;
+    background: rgba(229, 62, 62, 0.10);
+    border: 1px solid rgba(229, 62, 62, 0.45);
+  }
+  .autodl-banner.autodl-soft {
+    background: rgba(237, 137, 54, 0.08);
+    border-color: rgba(237, 137, 54, 0.4);
+  }
+  .autodl-icon { font-size: 20px; flex-shrink: 0; }
+  .autodl-text { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .autodl-text strong { font-size: 14px; color: #fc8181; }
+  .autodl-soft .autodl-text strong { color: #ed8936; }
+  .autodl-text span { font-size: 12px; color: var(--text-secondary, #a0aec0); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .autodl-link {
+    flex-shrink: 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: #fff;
+    background: #e53e3e;
+    padding: 7px 14px;
+    border-radius: 8px;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .autodl-soft .autodl-link { background: #ed8936; }
+  .autodl-link:hover { filter: brightness(1.1); }
   .works-page {
     max-width: 1200px;
     margin: 0 auto;

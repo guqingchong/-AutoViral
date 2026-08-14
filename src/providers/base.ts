@@ -21,6 +21,11 @@ export interface VideoOpts {
   resolution?: string
   duration?: number       // 4-15 seconds (Dreamina CLI)
   modelVersion?: string   // e.g. 'seedance2.0', 'seedance2.0fast'
+  /**
+   * 镜头类型(分镜脚本标注,local-h3 用于音画同生提示词约定):
+   * broll 氛围空镜 / dialogue 对白播报 / narration 解说配图 / hero 精品镜头
+   */
+  shotType?: 'broll' | 'dialogue' | 'narration' | 'hero'
   // Seedance / 多参考视觉模型
   referenceImages?: string[]                            // 公网可访问的图片 URL 列表
   referenceVideos?: string[]                            // 公网可访问的视频 URL 列表(传入则触发 Seedance 有参考模式)
@@ -74,7 +79,7 @@ export interface GenerateResult {
   assetPath?: string
   previewUrl?: string
   error?: string
-  code?: 'TIMEOUT' | 'API_ERROR' | 'DOWNLOAD_FAILED' | 'INVALID_PARAMS' | 'ACCESS_DENIED'
+  code?: 'TIMEOUT' | 'API_ERROR' | 'DOWNLOAD_FAILED' | 'INVALID_PARAMS' | 'ACCESS_DENIED' | 'INSTANCE_OFFLINE'
 }
 
 export interface GenerateProvider {

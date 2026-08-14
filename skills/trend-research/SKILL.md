@@ -244,6 +244,7 @@ curl http://localhost:3271/api/trends/xiaohongshu
 ## 扩展能力模块
 
 检查 `modules/` 目录，根据当前任务需要加载相关能力模块。例如：
+- **评估/推荐任何选题时 → 必读 `modules/topic-scorecard.md`**（选题评分卡：五要素打分、三无否决项、对标拆解法、选题库字段）
 - 需要采集达人数据时 → 读取 `modules/creator-analytics.md`
 
 ---
@@ -282,5 +283,6 @@ curl -X POST http://localhost:3271/api/works/{workId} \
 ## 扩展能力模块
 
 检查 `modules/` 目录，根据当前任务需要加载相关能力模块。例如：
+- **评估/推荐任何选题时 → 必读 `modules/topic-scorecard.md`**（选题评分卡：五要素打分、三无否决项、对标拆解法、选题库字段）
 - 需要采集达人数据时 → 读取 `modules/creator-analytics.md`
 - 需要分析竞品视频时 → 读取 `modules/video-understanding.md`，使用 `scripts/video-understanding/analyze_video.py` 抽帧分析

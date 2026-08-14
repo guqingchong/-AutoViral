@@ -774,9 +774,19 @@ export interface Template {
   audio: Record<string, unknown>[];
   subtitles?: Record<string, unknown>;
   transitions: Record<string, unknown>[];
+  /** 模板级品牌 logo(2026-08-13):视频渲染与图文卡片共用 */
+  branding?: {
+    logoAsset: string;
+    position: string;
+    margin?: number;
+    width?: number;
+    opacity?: number;
+  };
   previewUrl?: string;
   /** poster.png 静态图 URL（存在时由后端返回），模板卡片优先用它展示 */
   posterUrl?: string;
+  /** 分幕故事板单帧 URL 列表(2026-08-13):点击预览时灯箱逐张查看 */
+  frameUrls?: string[];
   status: string;
   /** 模板被渲染使用的次数（自进化偏好信号） */
   usageCount?: number;

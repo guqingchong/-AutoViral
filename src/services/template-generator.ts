@@ -11,9 +11,10 @@ import { mkdir } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { dataDir } from "../config.js";
 import { runJsonPrompt } from "./llm-json.js";
-import { createTemplate, getTemplate, updateTemplate, listTopUsedTemplates } from "../db/templates-repo.js";
+import { createTemplate, getTemplate, updateTemplate, listTopUsedTemplates, deleteTemplate } from "../db/templates-repo.js";
 import { listSkills, touchSkill } from "../db/template-skills-repo.js";
 import { renderTimeline } from "../video/renderer.js";
+import { brandingToImageLayer } from "../video/branding.js";
 import { buildElementsPrompt, GOLDEN_EXAMPLE, GOLDEN_EXAMPLE_NOTES, type TemplateElements } from "./template-dna.js";
 import { checkTemplateQuality } from "./template-quality.js";
 import type { DbTemplate, TemplateCanvas } from "../db/templates-repo.js";
@@ -122,6 +123,14 @@ async function generateTemplatesBatch(input: GenerateTemplatesInput = {}): Promi
     "6. shape 层必须有: shape:\"rect\", fill, size",
     "7. canvas 固定: {width:1080, height:1920, fps:30, backgroundColor:背景色}",
     "8. 左右安全边距 70px，最底元素下缘距画布底 ≥40px",
+    "",
+    "## 精品设计纪律(2026-08-14 研究落地,硬性)",
+    "9. 安全区:任何文字/关键元素不得进入顶部 250px 与底部 510px 区域(平台 UI 遮挡区)——标题放在 y≈300-500,正文集中在 y 500-1400 的中段",
+    "10. 字号阶梯:主标题 60-96px、卡片标题 40-48px、正文 30-36px、辅助说明 ≥26px(低于此值小屏不可读)。一个画面内字号层级 ≥2 档,制造视觉层级",
+    "11. 对比度:文字色与背景/底色块的对比必须强烈(深底用近白文字 #f1f5f9 级,浅底用近黑 #1c1917 级);灰字只用于次要信息",
+    "12. 配色纪律:全模板 ≤3 个彩色 + 中性色(白/灰/深色底);强调色只用于关键数字/关键词,不大面积铺",
+    "13. 空心边框用 stroke 表达:shape 层 fill:'#RRGGBB' 可选 stroke:{width:2-4,color} 画描边框;不要叠两个矩形模拟边框",
+    "14. 每个画面至少一个有入场动效(fadein/slidein)的元素,但同一画面动效 ≤3 个,避免杂乱",
     "",
     "## 变量",
     "把主题相关文字抽象为变量（如 topic, card1_title, card1_body, stat_value, cta_text 等，按版式需要增减）。",
@@ -254,6 +263,18 @@ async function generateTemplatesBatch(input: GenerateTemplatesInput = {}): Promi
       transitions: rawTransitions,
       status: "candidate",
     });
+    // 精品评分门禁(2026-08-14):低于 40 分的生成结果直接拦在库外并记录原因
+    const { scoreTemplate } = await import("./template-score.js");
+    const scored = scoreTemplate(template as unknown as Parameters<typeof scoreTemplate>[0]);
+    if (scored.score < 40) {
+      console.warn(`[template-score] 「${template.name}」评分 ${scored.score} 过低,已拦在库外:`,
+        scored.issues.map((i) => i.detail).join(" / "));
+      deleteTemplate(id);
+      continue;
+    }
+    if (scored.issues.length > 0) {
+      console.log(`[template-score] 「${template.name}」评分 ${scored.score}:`, scored.issues.map((i) => i.detail).join(" / "));
+    }
     created.push(template);
   }
 
@@ -414,6 +435,11 @@ export async function renderTemplatePreview(templateId: string): Promise<{ previ
   const outputPath = join(previewDir, `${template.id}-preview.mp4`);
 
   const timeline = buildPreviewTimeline(template);
+  // 模板级品牌 logo 同样进预览(所见即所得,2026-08-13);时长取预览内容长度
+  if (template.branding?.logoAsset) {
+    const contentDuration = Math.max(1, ...timeline.layers.map((l) => ((l as any).start ?? 0) + ((l as any).duration ?? 0)));
+    timeline.layers.push(brandingToImageLayer(template.branding, template.canvas, contentDuration) as unknown as Timeline["layers"][number]);
+  }
   await renderTimeline(timeline, {
     outputPath,
     duration: 5,
