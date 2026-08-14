@@ -8,12 +8,15 @@
 import { spawn } from "node:child_process";
 import { writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { dataDir } from "../config.js";
 import { probeMedia } from "../video/ffmpeg.js";
 
-const WORKER_DIR = join(process.cwd(), "packages", "code-scene");
+// 子项目路径必须按模块位置解析,不能用 process.cwd()——服务可能从任意目录启动
+// (如 autocode start 从用户主目录启动,cwd 下没有 packages/,2026-08-14 live e2e 实测踩中)
+const WORKER_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "packages", "code-scene");
 const RENDER_TIMEOUT_MS = 180_000;
 const VALID_THEMES = new Set(["finance_dark", "warm_gold", "ink_green", "minimal_light"]);
 
