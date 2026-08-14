@@ -5,6 +5,7 @@ import { SeedanceProvider } from './seedance.js'
 import { NanoBananaProvider } from './nanobanana.js'
 import { MiniMaxTTSProvider } from './minimax-tts.js'
 import { MiniMaxMusicProvider } from './minimax-music.js'
+import { LocalH3Provider } from './local-h3.js'
 
 const providers = new Map<string, GenerateProvider>()
 
@@ -50,5 +51,9 @@ export async function initProviders(config: any) {
   if (config.minimax?.apiKey) {
     registerProvider(new MiniMaxTTSProvider(config.minimax))
     registerProvider(new MiniMaxMusicProvider(config.minimax))
+  }
+  // MiniMax H3 本地视频生成(AutoDL ComfyUI,SSH 隧道);配置了 h3 段即启用
+  if (config.h3?.baseUrl) {
+    registerProvider(new LocalH3Provider({ baseUrl: config.h3.baseUrl }))
   }
 }

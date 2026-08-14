@@ -99,7 +99,7 @@ describe("batch-convert 素材三维与双产物", () => {
     expect(work.topic_hint).toContain("素材约束");
     expect(work.topic_hint).toContain("以真实视频混剪为主");
     expect(work.topic_hint).toContain("仅用素材库真实素材");
-    expect(work.topic_hint).toContain("禁止 AI 生成视频");
+    expect(work.topic_hint).toContain("仅使用本地 H3 生成视频");
     expect(work.topic_hint).toContain("双产物");
   });
 
@@ -148,5 +148,42 @@ describe("batch-convert 素材三维与双产物", () => {
     expect(work.asset_form).toBeUndefined();
     expect(work.asset_source).toBeUndefined();
     expect(work.asset_budget).toBeUndefined();
+  });
+
+  it("smart 精品混合：放行入库，topicHint 含路由表/铁律/H3 规则", async () => {
+    const t = createTopic({ title: "精品混合选题", status: "new", tags: [], content_angles: [] } as any);
+
+    const job = await runBatch(app, [t.id], {
+      type: "short-video",
+      assetForm: "video-mix",
+      assetSource: "smart",
+      assetBudget: "eco",
+      duration: 180,
+    });
+
+    const work = dbGetWork(job.items[0].workId)!;
+    expect(work.asset_source).toBe("smart");
+    expect(work.topic_hint).toContain("精品混合");
+    // smart 触发按镜头内容路由 + H3 本地生成路由(eco 档禁云端)
+    expect(work.topic_hint).toContain("镜头路由(smart)");
+    expect(work.topic_hint).toContain("仅使用本地 H3 生成视频");
+    // 旧 videoSource 行不得与 smart 语义并存(smart 映射 search,但该行应被 assetSource 抑制)
+    expect(work.topic_hint).not.toContain("素材样式:");
+  });
+
+  it("程序化素材铁律无条件生效：stock 模式同样注入", async () => {
+    const t = createTopic({ title: "铁律选题", status: "new", tags: [], content_angles: [] } as any);
+
+    const job = await runBatch(app, [t.id], {
+      type: "short-video",
+      assetSource: "stock",
+    });
+
+    const work = dbGetWork(job.items[0].workId)!;
+    expect(work.topic_hint).toContain("程序化素材铁律");
+    expect(work.topic_hint).toContain("/api/assets/data-card");
+    expect(work.topic_hint).toContain("/api/assets/snapshot-card");
+    // stock 不触发 smart 路由表
+    expect(work.topic_hint).not.toContain("镜头路由(smart)");
   });
 });

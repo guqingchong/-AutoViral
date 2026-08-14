@@ -20,6 +20,42 @@ export interface TemplateCanvas {
   backgroundColor?: string;
 }
 
+/** 模板级品牌 logo(2026-08-13 模板库改造 功能 c):视频/图文双链路共用 */
+export interface TemplateBranding {
+  /** 共享素材相对路径,如 "branding/logo.png" */
+  logoAsset: string;
+  /** 九宫格位置 */
+  position: "top-left" | "top-center" | "top-right" | "middle-left" | "center" | "middle-right" | "bottom-left" | "bottom-center" | "bottom-right";
+  /** 边距 px,默认 48 */
+  margin?: number;
+  /** 宽度 px(高度按比例),默认 160 */
+  width?: number;
+  /** 不透明度 0-1,默认 1 */
+  opacity?: number;
+}
+
+export const BRANDING_POSITIONS = [
+  "top-left", "top-center", "top-right",
+  "middle-left", "center", "middle-right",
+  "bottom-left", "bottom-center", "bottom-right",
+] as const;
+
+/** 校验/规范化前端提交的 branding;非法输入返回 undefined(不阻断模板保存) */
+export function sanitizeBranding(raw: unknown): TemplateBranding | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const b = raw as Record<string, unknown>;
+  if (typeof b.logoAsset !== "string" || !b.logoAsset) return undefined;
+  return {
+    logoAsset: b.logoAsset,
+    position: (BRANDING_POSITIONS as readonly string[]).includes(b.position as string)
+      ? (b.position as TemplateBranding["position"])
+      : "top-right",
+    margin: typeof b.margin === "number" && b.margin >= 0 ? b.margin : 48,
+    width: typeof b.width === "number" && b.width > 0 ? b.width : 160,
+    opacity: typeof b.opacity === "number" ? Math.max(0, Math.min(1, b.opacity)) : 1,
+  };
+}
+
 export interface DbTemplate {
   id: string;
   name: string;
@@ -30,6 +66,7 @@ export interface DbTemplate {
   audio: Record<string, unknown>[];
   subtitles?: Record<string, unknown>;
   transitions: Record<string, unknown>[];
+  branding?: TemplateBranding;
   preview_url?: string;
   status: TemplateStatus;
   kind: TemplateKind;
@@ -43,8 +80,12 @@ function normalizeLayer(layer: Record<string, unknown>, i: number): Record<strin
   if (!l.id || typeof l.id !== "string") l.id = `layer_${i}`;
   if (typeof l.start !== "number") l.start = 0;
   if (typeof l.duration !== "number") l.duration = 10;
-  if (!l.position || typeof l.position !== "object") l.position = { x: 0, y: 0 };
-  else {
+  if (!l.position) l.position = { x: 0, y: 0 };
+  else if (typeof l.position === "string") {
+    // 方位词是合法 position(renderer.resolvePosition 支持),此前被一律归零,
+    // 导致克隆模板的 "bottom" 字幕层渲染到左上角(2026-08-13 踩坑)
+    if (!["center", "top", "bottom", "left", "right"].includes(l.position)) l.position = { x: 0, y: 0 };
+  } else if (typeof l.position === "object") {
     const pos = l.position as Record<string, unknown>;
     if (typeof pos.x !== "number") pos.x = 0;
     if (typeof pos.y !== "number") pos.y = 0;
@@ -96,6 +137,7 @@ function rowToTemplate(row: Record<string, unknown>): DbTemplate {
     audio: fromJson(row.audio as string) as Record<string, unknown>[],
     subtitles: row.subtitles ? fromJson(row.subtitles as string) as Record<string, unknown> | undefined : undefined,
     transitions: fromJson(row.transitions as string) as Record<string, unknown>[],
+    branding: row.branding ? fromJson(row.branding as string) as TemplateBranding : undefined,
     preview_url: (row.preview_url as string) || undefined,
     status: row.status as TemplateStatus,
     kind: (row.kind as TemplateKind) || "video",
@@ -109,8 +151,8 @@ export function createTemplate(template: Omit<DbTemplate, "created_at" | "update
   const db = getDb();
   const now = new Date().toISOString();
   db.prepare(
-    `INSERT INTO templates (id, name, content_form, canvas, variables, layers, audio, subtitles, transitions, preview_url, status, kind, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO templates (id, name, content_form, canvas, variables, layers, audio, subtitles, transitions, branding, preview_url, status, kind, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     template.id,
     template.name,
@@ -121,6 +163,7 @@ export function createTemplate(template: Omit<DbTemplate, "created_at" | "update
     toJson(template.audio),
     template.subtitles ? toJson(template.subtitles) : null,
     toJson(template.transitions),
+    template.branding ? toJson(template.branding) : null,
     template.preview_url ?? null,
     template.status,
     template.kind ?? "video",
@@ -158,7 +201,7 @@ export function updateTemplate(id: string, updates: Partial<DbTemplate>): DbTemp
     db.prepare(
       `UPDATE templates SET
         name = ?, content_form = ?, canvas = ?, variables = ?, layers = ?, audio = ?, subtitles = ?,
-        transitions = ?, preview_url = ?, status = ?, kind = ?, updated_at = ?
+        transitions = ?, branding = ?, preview_url = ?, status = ?, kind = ?, updated_at = ?
        WHERE id = ?`
     ).run(
       template.name,
@@ -169,6 +212,7 @@ export function updateTemplate(id: string, updates: Partial<DbTemplate>): DbTemp
       toJson(template.audio),
       template.subtitles ? toJson(template.subtitles) : null,
       toJson(template.transitions),
+      template.branding ? toJson(template.branding) : null,
       template.preview_url ?? null,
       template.status,
       template.kind ?? "video",

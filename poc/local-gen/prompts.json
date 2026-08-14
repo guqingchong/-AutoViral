@@ -1,0 +1,50 @@
+{
+  "meta": {
+    "created": "2026-08-10",
+    "source_work": "w_20260807_1441_0d6（城投变产投，已发布作品）",
+    "note": "prompt 风格遵循 skills/asset-generation/SKILL.md 五维约束"
+  },
+  "images": [
+    {
+      "id": "img-01-industrial-park",
+      "prompt": "现代化产业园区全景航拍，黄昏金色光线，玻璃幕墙办公楼与标准化厂房错落有致，远处城市天际线，蓝金色调，写实摄影风格，高细节，4K",
+      "aspect_ratio": "3:4",
+      "purpose": "小红书卡片底图·同主题对比真实资产 ai-07-industrial-park.png"
+    },
+    {
+      "id": "img-02-handshake",
+      "prompt": "两位商务人士在现代化会议室握手，落地窗外是城市天际线，自然光线，浅景深，写实摄影风格，商务财经氛围",
+      "aspect_ratio": "3:4",
+      "purpose": "人物场景·同主题对比真实资产 ai-08-handshake.png"
+    },
+    {
+      "id": "img-03-chinese-text",
+      "prompt": "一张庄重的财经主题海报，正中央是四个烫金大字「城投转型」，深红色背景配暗金色祥云纹样，字体为粗宋体，金属质感，对称构图，高端大气",
+      "aspect_ratio": "3:4",
+      "purpose": "中文文字渲染专项测试（Z-Image/Qwen 系 vs 即梦的核心差异点）"
+    }
+  ],
+  "videos": [
+    {
+      "id": "vid-01-park-aerial",
+      "prompt": "航拍镜头缓慢向前推进，现代化产业园区全景，黄昏金色阳光洒在玻璃幕墙上，反射出耀眼光芒，云层缓慢流动，写实风格，镜头平稳顺滑",
+      "ratio": "9:16",
+      "duration_s": 5,
+      "purpose": "大场景运镜·基础画质对比"
+    },
+    {
+      "id": "vid-02-abacus",
+      "prompt": "特写镜头：一只手的指尖拨动老式木质算盘的算珠，算珠清脆碰撞，暖色台灯光线，浅景深背景虚化，慢动作，质感细腻",
+      "ratio": "9:16",
+      "duration_s": 5,
+      "purpose": "特写+物理动态·同主题对比真实资产 ai-09-abacus.png"
+    },
+    {
+      "id": "vid-03-news-audio",
+      "prompt": "财经新闻演播室，一位西装男主持人面对镜头播报，身后是蓝色数据大屏滚动着图表，主持人开口说：「城投转型正在全面加速」，演播室环境音，专业播报语气",
+      "ratio": "9:16",
+      "duration_s": 5,
+      "purpose": "H3 原生音画同生专项（对白+环境音），对照组 Seedance/即梦为无声"
+    }
+  ]
+}

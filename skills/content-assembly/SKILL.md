@@ -161,6 +161,28 @@ ffprobe -v error -show_entries stream=codec_type -of csv=p=0 output.mp4 | grep a
 
 **安全做法：** 在 pad/crop/overlay 等纯视频操作中始终加 `-c:a copy` 或 `-map 0:a`。
 
+### H3 本地生成镜头的音轨处理（按 shotType，强制）
+
+本地 H3（local-h3）生成的 clip 自带原生音轨（32kHz 立体声 AAC）。**处理前先从分镜脚本读出每个镜头的 shotType**，按下表处理——不允许把 H3 音轨一律丢弃或一律保留：
+
+| shotType | 原生音轨处理 | TTS | 字幕 |
+|----------|-------------|-----|------|
+| `dialogue` 对白/播报 | **保留为主音轨**（音量 100%，即成品配音） | **跳过该时段 TTS**（禁止再生成配音叠上去） | 文本取分镜的 audioIntent 逐字对白，时段对齐该镜头（不依赖 ASR） |
+| `broll` 氛围/空镜 | **压至 20% 作环境音垫层**：`volume=0.2`，垫在 TTS/BGM 下 | 正常 | 正常 |
+| `narration` 解说配图 | **丢弃**（视频静音：`volume=0` 或不映射音轨） | 正常 | 正常 |
+| `hero` 精品镜头 | **丢弃**（沿用现有流程） | 正常 | 正常 |
+
+**识别 H3 产物**：由 local-h3 生成的 clip 才有原生音轨需要上表处理；云端/素材库 clip 沿用原有流程（原音轨默认丢弃或压低）。
+
+**broll 垫层混音示例**（该镜头原声 0.2 + TTS 旁白 + BGM 闪避）：
+```bash
+ffmpeg -i norm-02.mp4 -i narration.mp3 -i bgm.mp3 \
+  -filter_complex "[0:a]volume=0.2[amb];[amb][1:a][2:a]amix=inputs=3:duration=first[a]" \
+  -map 0:v -map "[a]" -c:v copy -c:a aac -y out.mp4
+```
+
+**dialogue 镜头字幕对齐**：字幕文本直接取分镜脚本该镜头的 audioIntent（逐字对白），起止时间 = 该镜头在成片中的入点/出点。禁止对该镜头跑 ASR 或 TTS 对齐。
+
 ### 阶段二：执行组装
 
 #### 第1步：统一所有片段格式（横屏→竖屏智能裁切）
@@ -711,6 +733,7 @@ ffmpeg -i audio1.mp3 -i audio2.mp3 \
 
 | 模块 | 文档路径 | 用途 |
 |------|---------|------|
+| **声音设计规范（强制）** | `modules/audio-spec.md` | 平台LUFS响度标准、人声/SFX/音乐三层混音参数、ducking闪避、SFX音效层。**凡涉及音频必加载** |
 | 热门音乐搜索 | `modules/music-search.md` | 从 YouTube/B站搜索下载 BGM，按情绪/BPM 匹配 |
 | 卡点剪辑 | `modules/beat-sync.md` | 节拍检测 + 视频与音乐节拍对齐 |
 | 调色指南 | `modules/color-grading.md` | LUT调色、内容类型调色参数、AI调色工具 |
@@ -887,6 +910,7 @@ curl -X PUT http://localhost:3271/api/works/{workId} \
 
 | 模块 | 文档路径 | 用途 |
 |------|---------|------|
+| **声音设计规范（强制）** | `modules/audio-spec.md` | 平台LUFS响度标准、人声/SFX/音乐三层混音参数、ducking闪避、SFX音效层。**凡涉及音频必加载** |
 | 热门音乐搜索 | `modules/music-search.md` | 从 YouTube/B站搜索下载 BGM，按情绪/BPM 匹配 |
 | 卡点剪辑 | `modules/beat-sync.md` | 节拍检测 + 视频与音乐节拍对齐 |
 

@@ -39,12 +39,16 @@ export interface VideoLayer extends BaseLayer {
   type: "video";
   source: string;
   size: TimelineSize;
+  /** 素材截取起点(秒)。缺省时沿用历史语义:从 layer.start 处截取素材 */
+  sourceStart?: number;
 }
 
 export interface ImageLayer extends BaseLayer {
   type: "image";
   source: string;
   size: TimelineSize;
+  /** 素材截取起点(秒)。缺省时沿用历史语义:从 layer.start 处截取素材 */
+  sourceStart?: number;
 }
 
 export interface TextLayer extends BaseLayer {

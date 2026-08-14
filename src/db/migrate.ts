@@ -659,6 +659,26 @@ ALTER TABLE works ADD COLUMN parent_work_id TEXT;
 CREATE INDEX IF NOT EXISTS idx_works_parent_work_id ON works(parent_work_id);
 `,
   },
+  {
+    version: 21,
+    name: "templates_branding",
+    sql: `
+-- 模板级品牌 logo(2026-08-13 模板库改造 功能 c):
+-- JSON 字符串 {logoAsset, position, margin, width, opacity},
+-- 视频渲染(video-factory)与图文卡片(dual-output buildCardHtml)共用
+ALTER TABLE templates ADD COLUMN branding TEXT;
+`,
+  },
+  {
+    version: 22,
+    name: "asset_library_kind_index",
+    sql: `
+-- C5 素材沉淀复用(2026-08-14):asset_library 表自迁移 v2 已存在,
+-- 此处仅补常用检索索引(不改变结构)
+CREATE INDEX IF NOT EXISTS idx_asset_library_type ON asset_library(type);
+CREATE INDEX IF NOT EXISTS idx_asset_library_source ON asset_library(source);
+`,
+  },
 ];
 
 export function migrate(): void {

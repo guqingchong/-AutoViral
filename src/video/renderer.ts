@@ -210,19 +210,25 @@ export function buildFilterComplexArgs(tl: Timeline, inputs: InputSlot[], durati
       if (layer.type === "text") {
         videoFilterParts.push(...buildTextDrawFilters(layer, pos, tl.canvas, start, end, "[base]", "[base]"));
       } else {
-        videoFilterParts.push(buildShapeDrawFilter(layer, pos, tl.canvas, start, end, "[base]", "[base]"));
+        videoFilterParts.push(...buildShapeDrawFilters(layer, pos, tl.canvas, start, end, "[base]", "[base]"));
       }
     } else {
       // Video/image layers: overlay compositing with optional slide animations
+      // 滤镜图分两段:先独立处理 overlay 媒体流(贴标签 [ovlN]),再 overlay 到 [base]。
+      // 2026-08-13 修复:此前拼成 `[base][N:v]trim=...` 使 trim 拿到两个输入标签,
+      // 此路径(无 transitions 的多媒体层 overlay)从未成功过,模板 branding logo 首次触发
       const srcIdx = getInputIndex(layer, inputs);
       let chain = buildLayerVideoChain(layer, srcIdx, tl.canvas, duration);
       if (opacity < 1) {
         chain += `,format=rgba,colorchannelmixer=aa=${opacity}`;
       }
       const animFilters = buildAnimationFilters(layer, pos, layer.size!);
+      if (animFilters) chain += `,${animFilters}`;
       const overlayExpr = buildOverlayExpr(layer, pos, tl.canvas);
+      const ovlLabel = `ovl_${String(layer.id).replace(/[^a-zA-Z0-9_]/g, "_")}`;
+      videoFilterParts.push(`${chain}[${ovlLabel}]`);
       videoFilterParts.push(
-        `[base]${chain}${overlayExpr}:enable='between(t\\,${start}\\,${end})'${animFilters ? "," + animFilters : ""}[base]`
+        `[base][${ovlLabel}]${overlayExpr.replace(/^,/, "")}:enable='between(t\\,${start}\\,${end})'[base]`
       );
     }
   }
@@ -298,7 +304,8 @@ function buildXfadeChain(
     if (layer.type === "image") {
       chain += `loop=1:1:1,trim=duration=${layerDur},setpts=PTS-STARTPTS`;
     } else {
-      chain += `trim=${layer.start}:${layer.start + layerDur},setpts=PTS-STARTPTS`;
+      const srcStart = layer.type === "video" ? (layer.sourceStart ?? layer.start) : layer.start;
+      chain += `trim=${srcStart}:${srcStart + layerDur},setpts=PTS-STARTPTS`;
     }
     // Scale to fill canvas preserving aspect ratio (centered)
     chain += `,scale=${canvas.width}:${canvas.height}:force_original_aspect_ratio=decrease,pad=${canvas.width}:${canvas.height}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p`;
@@ -476,10 +483,12 @@ function buildTextDrawFilters(
 }
 
 /**
- * 把一个 shape 层转成 drawbox 滤镜链。颜色经过 normalizeColorForFfmpeg
- * 规范化（rgba() 与画布背景预混合成实色，避免半透明滤镜链崩溃）。
+ * 把一个 shape 层转成 drawbox 滤镜链(可能多条:实心填充 + 描边)。
+ * 颜色经过 normalizeColorForFfmpeg 规范化（rgba() 与画布背景预混合成实色，
+ * 避免半透明滤镜链崩溃）。stroke 描边用 drawbox t=厚度 实现空心边框;
+ * fill 为 transparent/none 时只画边框(2026-08-13:克隆模板的空心白框场景)。
  */
-function buildShapeDrawFilter(
+function buildShapeDrawFilters(
   layer: Extract<TimelineLayer, { type: "shape" }>,
   pos: TimelinePosition,
   canvas: { width: number; height: number; backgroundColor?: string },
@@ -487,10 +496,25 @@ function buildShapeDrawFilter(
   end: number,
   inLabel: string,
   outLabel: string,
-): string {
+): string[] {
   const size = layer.size!;
-  const fill = normalizeColorForFfmpeg(layer.fill ?? "#FFFFFF", canvas.backgroundColor);
-  return `${inLabel}drawbox=x=${pos.x}:y=${pos.y}:w=${size.width}:h=${size.height}:color=${fill}:t=fill:enable='between(t\\,${start}\\,${end})'${outLabel}`;
+  const enable = `:enable='between(t\\,${start}\\,${end})'`;
+  const parts: string[] = [];
+  const hasFill = layer.fill && !/^(transparent|none)$/i.test(layer.fill.trim());
+  if (hasFill) {
+    const fill = normalizeColorForFfmpeg(layer.fill, canvas.backgroundColor);
+    parts.push(`${inLabel}drawbox=x=${pos.x}:y=${pos.y}:w=${size.width}:h=${size.height}:color=${fill}:t=fill${enable}${outLabel}`);
+  }
+  if (layer.stroke && layer.stroke.width > 0) {
+    const sc = normalizeColorForFfmpeg(layer.stroke.color);
+    parts.push(`${inLabel}drawbox=x=${pos.x}:y=${pos.y}:w=${size.width}:h=${size.height}:color=${sc}:t=${layer.stroke.width}${enable}${outLabel}`);
+  }
+  if (parts.length === 0) {
+    // 既无填充也无描边:默认白实心,防止图层静默消失
+    const fill = normalizeColorForFfmpeg("#FFFFFF", canvas.backgroundColor);
+    parts.push(`${inLabel}drawbox=x=${pos.x}:y=${pos.y}:w=${size.width}:h=${size.height}:color=${fill}:t=fill${enable}${outLabel}`);
+  }
+  return parts;
 }
 
 // ── Animation Filters ───────────────────────────────────────────────────────
@@ -569,7 +593,10 @@ function buildLayerVideoChain(
 
   if (layer.type === "video" || layer.type === "image") {
     const size = layer.size!;
-    chain += `trim=${start}:${end},setpts=PTS-STARTPTS,scale=${size.width}:${size.height}:force_original_aspect_ratio=decrease,setsar=1`;
+    // 素材截取起点:sourceStart 缺省时沿用历史语义(从 layer.start 处截取);
+    // 素材驱动时长适配(timeline-adapt)会显式置 0,让素材从头部播
+    const srcStart = layer.sourceStart ?? start;
+    chain += `trim=${srcStart}:${srcStart + layer.duration},setpts=PTS-STARTPTS,scale=${size.width}:${size.height}:force_original_aspect_ratio=decrease,setsar=1`;
     if (layer.type === "image") {
       chain += `,format=yuv420p`;
     }
@@ -588,9 +615,20 @@ function buildLayerVideoChain(
     }
   } else if (layer.type === "shape") {
     const size = layer.size!;
-    const fill = normalizeColorForFfmpeg(layer.fill ?? "#FFFFFF", canvas.backgroundColor);
     const pos = resolvePosition(layer.position, layer.size, canvas);
-    chain = `[${inputIndex}:v]drawbox=x=${pos.x}:y=${pos.y}:w=${size.width}:h=${size.height}:color=${fill}:t=fill:enable='between(t\\,${start}\\,${end})'`;
+    const hasFill = layer.fill && !/^(transparent|none)$/i.test(layer.fill.trim());
+    const hasStroke = !!(layer.stroke && layer.stroke.width > 0);
+    const boxes: string[] = [];
+    if (hasFill || !hasStroke) {
+      // 有填充,或既无填充也无描边(默认白实心防止静默消失)
+      const fill = normalizeColorForFfmpeg(hasFill ? layer.fill : "#FFFFFF", canvas.backgroundColor);
+      boxes.push(`drawbox=x=${pos.x}:y=${pos.y}:w=${size.width}:h=${size.height}:color=${fill}:t=fill:enable='between(t\\,${start}\\,${end})'`);
+    }
+    if (hasStroke) {
+      const sc = normalizeColorForFfmpeg(layer.stroke!.color);
+      boxes.push(`drawbox=x=${pos.x}:y=${pos.y}:w=${size.width}:h=${size.height}:color=${sc}:t=${layer.stroke!.width}:enable='between(t\\,${start}\\,${end})'`);
+    }
+    chain = `[${inputIndex}:v]${boxes.join(",")}`;
   }
 
   return chain;

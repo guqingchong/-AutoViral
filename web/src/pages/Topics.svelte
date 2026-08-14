@@ -29,7 +29,8 @@
   let batchDuration = $state<number>(60);
   let batchContentForm = $state<string>("knowledge");
   let batchAssetForm = $state<string>("video-mix");
-  let batchAssetSource = $state<string>("stock");
+  // 默认 smart 精品混合:按镜头内容自动路由(数据→程序化素材、氛围→AI、真实画面→素材库)
+  let batchAssetSource = $state<string>("smart");
   let batchAssetBudget = $state<string>("eco");
   let batchVoiceStyle = $state<string>("male-qn-qingse");
   let myVoices = $state<VoiceItem[]>([]);
@@ -49,15 +50,18 @@
     }
   });
 
-  // 内容类型变化时过滤模板（模板无 kind 字段视为 video），并清掉不适用的选择
+  // 内容类型变化时过滤模板（模板无 kind 字段视为 video），按质量评分降序，并清掉不适用的选择
   let filteredTemplates = $derived(
-    templates.filter((tpl) =>
-      batchType === "image-text" ? tpl.kind === "image-text" : (tpl.kind ?? "video") !== "image-text"
-    )
+    templates
+      .filter((tpl) =>
+        batchType === "image-text" ? tpl.kind === "image-text" : (tpl.kind ?? "video") !== "image-text"
+      )
+      .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
   );
   $effect(() => {
+    // 已选模板在新类型下不适用时,重选该类型下评分最高者(用户手动选"不使用模板"则保持空)
     if (batchTemplateId && !filteredTemplates.some((tpl) => tpl.id === batchTemplateId)) {
-      batchTemplateId = "";
+      batchTemplateId = filteredTemplates[0]?.id ?? "";
     }
     if (batchType === "image-text") batchDigitalHumanId = "";
   });
@@ -87,6 +91,7 @@
     { value: "auto", label: "LLM 自选" },
   ];
   const ASSET_SOURCE_OPTIONS = [
+    { value: "smart", label: "精品混合（推荐）：数据→程序化图表、氛围→AI、实拍→素材库" },
     { value: "stock", label: "仅素材库" },
     { value: "ai", label: "仅 AI 生成" },
     { value: "user", label: "仅用户指定素材" },
@@ -302,6 +307,10 @@
       if (tplRes.ok) {
         const data = await tplRes.json();
         templates = data.templates ?? [];
+        // 默认选中类型匹配的最高分模板(精品优先);用户仍可改选或清空为"不使用模板"
+        if (!batchTemplateId || !templates.some((tpl: any) => tpl.id === batchTemplateId)) {
+          batchTemplateId = filteredTemplates[0]?.id ?? "";
+        }
       }
     } catch {}
     try {
@@ -324,8 +333,8 @@
     batchResult = "";
     batchJob = null;
     const isVideo = batchType !== "image-text";
-    // 与旧 videoSource 字段兼容映射：stock→search，ai→ai-generate
-    const legacyVideoSource = batchAssetSource === "stock" ? "search" : batchAssetSource === "ai" ? "ai-generate" : batchAssetSource;
+    // 与旧 videoSource 字段兼容映射：stock/smart→search(smart 含素材库路由,需要素材搜索步骤),ai→ai-generate
+    const legacyVideoSource = batchAssetSource === "stock" || batchAssetSource === "smart" ? "search" : batchAssetSource === "ai" ? "ai-generate" : batchAssetSource;
     try {
       const res = await fetch("/api/topics/batch-convert", {
         method: "POST",
@@ -772,7 +781,7 @@
             <select bind:value={batchTemplateId}>
               <option value="">不使用模板（手动确认每个环节）</option>
               {#each filteredTemplates as tpl}
-                <option value={tpl.id}>{tpl.name}</option>
+                <option value={tpl.id}>{(tpl.score ?? 0) >= 90 ? "★精品 " : ""}{tpl.name}{tpl.score != null ? `（${tpl.score}分）` : ""}</option>
               {/each}
             </select>
             {#if filteredTemplates.length === 0}
@@ -875,6 +884,7 @@
               <input type="checkbox" bind:checked={batchEvaluation} />
               质量评审(每阶段由独立评审把关,不合格自动打回重做,强烈建议开启)
             </label>
+            <p class="batch-hint">出片后自动执行质量门禁(时长/黑帧/静音/字幕覆盖率机器检测),低级错误拦截在发布前。</p>
             {#if batchTemplateId || batchDigitalHumanId}
               <p class="batch-auto-notice">已选择模板/数字人 → <strong>全自动模式</strong>：AI 将无人值守执行完整流水线，本窗口会实时显示每个选题的制作进度。</p>
             {:else}

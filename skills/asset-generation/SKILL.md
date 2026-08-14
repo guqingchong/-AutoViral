@@ -381,13 +381,100 @@ python3 skills/asset-generation/scripts/music_generate.py \
 > 详细的 prompt 工程技巧和情绪-风格映射请阅读 `modules/music-generation.md`
 
 **选择策略：**
-1. **视频生成** → **优先 Dreamina CLI**（`dreamina` 命令，Seedance 2.0 模型，功能最全最强）
-2. **视频备用** → Dreamina CLI 未登录时，回退到 `jimeng_generate.py`（需要 API Key）
-3. **图片生成** → 优先 `openrouter_generate.py`（Gemini 3.1 Flash，画质最好，参数最丰富）
-4. **图片备用** → Dreamina CLI `dreamina text2image`（Seedream 5.0，最高 4K）或 `jimeng_generate.py image`
-5. **音乐生成** → 使用 `music_generate.py`（Lyria Pro，~2分钟完整曲目）
-6. **图文排版** → 使用 `poster_render.py`（HTML/CSS 模板渲染，文字清晰可控）
-7. 先运行 `check_providers.py` 确认可用服务（包括 Dreamina CLI 登录态检查）
+1. **视频生成（本地 H3，首选）** → 当作品素材来源为 `ai`/`auto` 且非 hero 精品镜头时，**优先用本地 H3**（MiniMax H3，AutoDL ComfyUI，约 ¥0.13/条 vs 即梦 ¥1.4）：
+   ```bash
+   # 图生视频(i2v,主流程):首帧 + 运动描述
+   curl -X POST http://localhost:3271/api/generate/video \
+     -H "Content-Type: application/json" \
+     -d '{
+       "workId": "{workId}",
+       "provider": "local-h3",
+       "prompt": "{视频运动提示词}",
+       "firstFrame": "http://localhost:3271/api/works/{workId}/assets/frames/frame-{NN}.png",
+       "filename": "clips/clip-{NN}.mp4",
+       "duration": 5,
+       "shotType": "narration"
+     }'
+
+   # 文生视频(t2v):dialogue 对白/播报镜头专用,不传 firstFrame;对白逐字写入 prompt
+   # shotType 取值见分镜脚本: broll / dialogue / narration / hero
+   ```
+   - **`shotType` 必须随分镜脚本传入**，它决定 H3 的音轨行为：
+     - `dialogue`：**走 t2v**（不传 firstFrame，避免首帧约束口型），prompt 必须包含逐字对白（如「主持人开口说：城投转型正在加速」）和语气/环境音描述；产物原生音轨即成品配音
+       - **⚠️ 台词时间轴锚点（必须）**：不写台词起始时间，模型会先自由发挥几秒模糊人声再说台词（实测 5s 镜头前 3s 口播是乱码）。prompt 必须用分秒锚定，如「[0s] 主持人立即开口说：「城投转型正在全面加速」，语速平稳一气呵成」；需要更长台词时给足时长并在合成阶段掐头去尾
+     - `broll` / `narration` / `hero`：走 i2v（有首帧）；provider 自动在 prompt 追加「无对白、仅环境音」约束
+   - **⚠️ Windows 中文乱码防护**：`/api/generate/video` 会拒绝 GBK mojibake 的 prompt。禁止在 Git Bash curl 里直接写中文字面量——用 python/node 脚本发请求，或把 JSON 写入文件后 `curl --data-binary @req.json`
+   - 先查实例状态：`curl http://localhost:3271/api/h3/instance/status`（`state=ready` 才可用）
+   - **H3 返回 `INSTANCE_OFFLINE`（实例离线）时**：
+     - **eco 档**：禁止使用云端视频降级！显著提醒用户「H3 实例离线，请到 AutoDL 控制台（https://www.autodl.com/console）开机实例并启动 ComfyUI」，任务在此阻塞等待；用户确认开机后重试
+     - **premium 档**：broll 镜头改用素材库搜索补位，其余镜头降级云端 provider
+   - 单条约 3.5 分钟，批量镜头请串行生成（本地单卡，无并发能力）
+   - H3 产物自带原生音轨，合成阶段的处理方式由 shotType 决定（见 content-assembly skill）
+2. **视频生成（云端）** → hero 精品镜头（premium 档）或 H3 不可用时的 premium 降级：**Dreamina CLI**（`dreamina` 命令，Seedance 2.0 模型，功能最全最强）
+3. **视频备用** → Dreamina CLI 未登录时，回退到 `jimeng_generate.py`（需要 API Key）
+4. **图片生成** → 优先 `openrouter_generate.py`（Gemini 3.1 Flash，画质最好，参数最丰富）
+5. **图片备用** → Dreamina CLI `dreamina text2image`（Seedream 5.0，最高 4K）或 `jimeng_generate.py image`
+6. **音乐生成** → 使用 `music_generate.py`（Lyria Pro，~2分钟完整曲目）
+7. **图文排版** → 使用 `poster_render.py`（HTML/CSS 模板渲染，文字清晰可控）
+8. 先运行 `check_providers.py` 确认可用服务（包括 Dreamina CLI 登录态检查）
+
+## 程序化精确素材（2026-08-14 新增）
+
+**铁律：涉及精确数据、结构关系、文件原文的镜头，禁止用 AI 生图**（数字必错、结构必乱、文字乱码）。一律走以下程序化素材 API（本地服务 3271 端口，零生成成本、秒级出图、可反复编辑）：
+
+### 1. 数据图表 `/api/assets/chart` 与 `/api/assets/data-card`
+
+```bash
+# 简单数据(推荐):传 [{label,value}],图表类型自动判断(时间序列→折线,占比→饼图,其他→柱状)
+curl -X POST http://localhost:3271/api/assets/data-card \
+  -H "Content-Type: application/json" \
+  --data-binary @req.json
+# req.json: {"title":"2025年专项债发行规模","source":"财政部","unit":"万亿元","theme":"finance_dark",
+#            "data":[{"label":"2021","value":3.58},{"label":"2022","value":4.04}]}
+
+# 复杂图表(双轴/堆叠/雷达等):传完整 ECharts option
+curl -X POST http://localhost:3271/api/assets/chart -H "Content-Type: application/json" --data-binary @req.json
+# req.json: {"title":"...","theme":"finance_dark","option":{"xAxis":{...},"series":[...]}}
+```
+
+- 主题四选一:`finance_dark`(财经深蓝,默认)/`warm_gold`(暖黑金)/`ink_green`(墨绿知识)/`minimal_light`(米白简约);**与作品模板配色保持一致**
+- 产出 2 倍高清 PNG(默认 2160×2160),返回 `path`(本地路径,可直接作首帧/素材)与 `url`
+- **数据来源必须署名**(source 字段),这是财经内容的可信度来源
+
+### 2. 政策文件/网页快照卡 `/api/assets/snapshot-card`
+
+讲政策/新闻/文件原文时使用,权威感是 AI 画面给不了的:
+
+```bash
+curl -X POST http://localhost:3271/api/assets/snapshot-card -H "Content-Type: application/json" --data-binary @req.json
+# req.json: {"url":"https://xxx.gov.cn/zhengce/xxx.htm",   ← 或 "imagePath":"本地图片路径"
+#            "title":"关于XX的通知","source":"财政部官网",
+#            "highlights":[{"left":10,"top":30,"width":80,"height":8,"label":"关键条款"}]}
+```
+
+- highlights 为**相对截图区域的百分比坐标**(目测即可),画红色高亮框+标注
+- 截图内容永不裁切(contain),政策原文必须完整可读
+
+### 3. 图标素材 `/api/assets/icons`
+
+装饰画面、列表符号、概念具象化(共 15000+ 个,mdi/tabler/lucide 三集):
+
+```bash
+curl "http://localhost:3271/api/assets/icons/search?q=chart"        # 搜索
+curl "http://localhost:3271/api/assets/icons/mdi/trending-up.svg?color=%233b82f6&size=96"  # 取 SVG
+```
+
+### 路由速查(镜头内容 → 制作方式)
+
+| 镜头内容 | 路由 |
+|---|---|
+| 数据/对比/趋势/占比 | **data-card / chart**(禁 AI 生图) |
+| 政策文件/新闻原文 | **snapshot-card**(禁 AI 生图) |
+| 结构图/流程图/逻辑示意 | **代码动画场景 POST /api/assets/code-scene**(structure-growth/flow-steps/logic-chain 三模板,参数即文案;模板清单 GET /api/assets/code-scene/templates) |
+| 口播/讲解人 | 数字人 / H3 t2v(dialogue) |
+| 氛围/场景感画面 | AI 生图 → i2v(broll/hero) |
+| 真实事件画面 | 素材库搜索 → 用户上传兜底 |
+
 
 > **视频生成决策树：**
 > Dreamina CLI 已登录？→ 用 `dreamina` 命令（首选）
@@ -1114,6 +1201,7 @@ ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p
 
 | 模块 | 文档路径 | 用途 |
 |------|---------|------|
+| **Prompt 编译器（强制）** | `modules/prompt-compiler.md` | **五槽公式中间表示、单运动约束、static显式声明、负面词库、H3/即梦/Seedance适配。写任何生成 prompt 前必加载** |
 | **Dreamina 高阶** | `modules/dreamina-mastery.md` | **Dreamina CLI 完整方法论——命令选择决策、模型策略、多模态工作流、批量生产、镜头串联** |
 | Prompt 进阶 | `modules/prompt-mastery.md` | 模型差异化策略、负向提示词库、高级质量关键词、风格一致性进阶 |
 | 质量门控 | `modules/quality-gate.md` | 生成后自检清单、常见问题修复、美学评分工具 |

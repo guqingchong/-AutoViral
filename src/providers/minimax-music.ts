@@ -1,10 +1,17 @@
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, rename, writeFile } from 'node:fs/promises'
 import { join, dirname } from 'node:path'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { dataDir } from '../config.js'
+import { probeMedia } from '../video/ffmpeg.js'
 import type { GenerateProvider, ImageOpts, VideoOpts, AudioOpts, MusicOpts, GenerateResult } from './base.js'
 
+const execFileAsync = promisify(execFile)
+
 const MINIMAX_MUSIC_URL = 'https://api.minimax.chat/v1/music_generation'
-const DEFAULT_MODEL = 'music-1.5'
+// 2026-08-14: music-1.5 → music-2.6(与 skills/asset-generation/scripts/music_generate.py 对齐),
+// 1.5 产物音质/编曲明显粗糙,是"BGM 质量差"的直接原因
+const DEFAULT_MODEL = 'music-2.6'
 const INSTRUMENTAL_MARKER = '[instrumental]'
 
 export interface MiniMaxMusicConfig {
@@ -24,7 +31,7 @@ export class MiniMaxMusicProvider implements GenerateProvider {
   }
 
   async generateMusic(opts: MusicOpts): Promise<GenerateResult> {
-    const { prompt, lyrics, workId, filename } = opts
+    const { prompt, lyrics, workId, filename, duration } = opts
 
     try {
       const outFilename = filename.endsWith('.mp3') ? filename : `${filename}.mp3`
@@ -76,6 +83,17 @@ export class MiniMaxMusicProvider implements GenerateProvider {
       await mkdir(dirname(assetPath), { recursive: true })
       await writeFile(assetPath, buffer)
 
+      // MiniMax 不接受时长参数,产物长度由模型决定(实测常只有 20-45s)。
+      // 调用方传入期望时长时,不足则无缝循环补齐并在末尾 3s 淡出,
+      // 避免下游被迫用 yt-dlp 抓免版权音乐兜底(版权风险)。
+      if (duration && duration > 0) {
+        try {
+          await this.ensureDuration(assetPath, duration)
+        } catch (err) {
+          console.warn('[minimax-music] 时长补齐失败,保留原始时长产物:', err instanceof Error ? err.message : err)
+        }
+      }
+
       return {
         success: true,
         assetPath,
@@ -84,6 +102,25 @@ export class MiniMaxMusicProvider implements GenerateProvider {
     } catch (err: any) {
       return { success: false, error: err.message, code: 'API_ERROR' }
     }
+  }
+
+  /**
+   * 时长补齐:实际时长低于目标时,单曲循环拼接到目标时长,末尾 3s 淡出。
+   * 纯器乐 BGM 循环听感可接受;带歌词歌曲不适用(但歌曲一般也不会偏短)。
+   */
+  private async ensureDuration(assetPath: string, target: number): Promise<void> {
+    const info = await probeMedia(assetPath)
+    const actual = info.duration ?? 0
+    if (actual >= target - 1) return // 达标(容忍 1s 误差)
+    const tmp = assetPath.replace(/\.mp3$/i, '.loop.mp3')
+    const fadeStart = Math.max(0, target - 3)
+    await execFileAsync('ffmpeg', [
+      '-y', '-stream_loop', '-1', '-i', assetPath,
+      '-t', String(target),
+      '-af', `afade=t=out:st=${fadeStart}:d=3`,
+      '-codec:a', 'libmp3lame', '-q:a', '2', tmp,
+    ], { timeout: 120_000 })
+    await rename(tmp, assetPath)
   }
 
   async generateImage(_opts: ImageOpts): Promise<GenerateResult> {
