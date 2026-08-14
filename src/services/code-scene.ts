@@ -75,3 +75,104 @@ export function validateCodeSceneInput(input: CodeSceneInput): string[] {
   }
   return errors;
 }
+
+// ── 以下为渲染执行(追加到 Task 6 的文件末尾) ──
+
+export interface CodeSceneResult {
+  success: boolean;
+  path?: string;
+  url?: string;
+  duration?: number;
+  error?: string;
+  code?: "TIMEOUT" | "RENDER_FAILED" | "INVALID_PARAMS";
+}
+
+// 串行队列:本地单 Edge 实例渲染,并发无收益且会互相覆盖 custom/current.tsx
+let queue: Promise<unknown> = Promise.resolve();
+
+export async function renderCodeScene(input: CodeSceneInput): Promise<CodeSceneResult> {
+  const errors = validateCodeSceneInput(input);
+  if (errors.length) return { success: false, error: errors.join("; "), code: "INVALID_PARAMS" };
+  if (!existsSync(join(WORKER_DIR, "node_modules"))) {
+    return { success: false, error: "code-scene 子项目未安装依赖,请先执行: cd packages/code-scene && npm install", code: "RENDER_FAILED" };
+  }
+  const job = queue.then(() => doRender(input));
+  queue = job.catch(() => {});
+  return job;
+}
+
+async function doRender(input: CodeSceneInput): Promise<CodeSceneResult> {
+  const jobId = `cs_${randomUUID().slice(0, 8)}`;
+  const outDirAbs = join(dataDir, "works", input.workId, "assets", "clips", "code");
+  await mkdir(outDirAbs, { recursive: true });
+  const outFile = `${input.filename}.mp4`;
+
+  const spec = {
+    jobId,
+    scene: input.template ? input.template.name : "custom",
+    params: input.template ? { ...input.template.params, theme: input.theme ?? input.template.params.theme } : undefined,
+    customCode: input.customScene,
+    duration: input.duration ?? 6,
+    width: input.size?.w ?? 1080,
+    height: input.size?.h ?? 1920,
+    outFile,
+    outDir: outDirAbs,
+  };
+  const specPath = join(outDirAbs, `${jobId}.spec.json`);
+  await writeFile(specPath, JSON.stringify(spec), "utf-8");
+
+  const outputPath = join(outDirAbs, outFile);
+  try {
+    await runWorker(specPath);
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err), code: err instanceof WorkerTimeout ? "TIMEOUT" : "RENDER_FAILED" };
+  }
+  if (!existsSync(outputPath)) {
+    return { success: false, error: "worker 完成但未产出文件", code: "RENDER_FAILED" };
+  }
+
+  const info = await probeMedia(outputPath);
+  // 质量门禁:无声中间段语义(2026-08-14 起 expectAudio 区分)
+  try {
+    const { runQualityGate } = await import("./quality-gate.js");
+    const report = await runQualityGate(outputPath, { expectAudio: false });
+    await writeFile(join(outDirAbs, `${input.filename}.quality.json`), JSON.stringify(report, null, 2), "utf-8");
+  } catch { /* 门禁失败不阻断 */ }
+
+  // C5 素材沉淀:登记资产库
+  try {
+    const { createAsset } = await import("../db/assets-repo.js");
+    createAsset({
+      name: `代码场景 ${input.template?.name ?? "custom"}: ${String(input.template?.params?.title ?? input.filename)}`,
+      file_path: outputPath,
+      category: "general",
+      type: "video",
+      tags: [input.template?.name, "程序化动画", "code-scene"].filter((t): t is string => !!t),
+      source: "self-generated",
+      license: "unknown",
+      compliance_status: "passed",
+      metadata: { workId: input.workId, assetKind: "code-scene", template: input.template?.name },
+      usage_count: 0,
+    });
+  } catch { /* 登记失败不阻断 */ }
+
+  const rel = `clips/code/${outFile}`;
+  return { success: true, path: outputPath, url: `/api/works/${input.workId}/assets/${rel}`, duration: info.duration };
+}
+
+class WorkerTimeout extends Error { constructor() { super("渲染超时(180s)"); } }
+
+function runWorker(specPath: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn("node", ["worker.mjs", specPath], { cwd: WORKER_DIR, stdio: ["ignore", "pipe", "pipe"] });
+    let stderr = "";
+    proc.stderr?.on("data", (d) => { stderr += String(d); });
+    const timer = setTimeout(() => { proc.kill("SIGKILL"); reject(new WorkerTimeout()); }, RENDER_TIMEOUT_MS);
+    proc.on("error", (err) => { clearTimeout(timer); reject(err); });
+    proc.on("exit", (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve();
+      else reject(new Error(`渲染失败(exit ${code}): ${stderr.slice(-600)}`));
+    });
+  });
+}

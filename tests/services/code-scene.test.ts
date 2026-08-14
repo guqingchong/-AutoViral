@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { validateCodeSceneInput } from "../../src/services/code-scene.js";
+import { existsSync } from "node:fs";
+import { renderCodeScene, validateCodeSceneInput } from "../../src/services/code-scene.js";
 
 const base = { workId: "w_test", filename: "demo", template: { name: "flow-steps", params: { title: "三条标准", steps: [{ title: "隐债清零" }, { title: "剥离职能" }] } } };
 
@@ -32,5 +33,23 @@ describe("validateCodeSceneInput", () => {
   it("structure-growth 分支数 2-4", () => {
     const bad = { workId: "w", filename: "f", template: { name: "structure-growth", params: { title: "t", center: "c", branches: [{ text: "a", label: "b" }] } } };
     expect(validateCodeSceneInput(bad as any).join()).toContain("2-4");
+  });
+});
+
+// 集成测试:真实渲染(约 30-60s)。子项目未装依赖时跳过。
+const workerReady = existsSync("packages/code-scene/node_modules");
+
+describe.skipIf(!workerReady)("renderCodeScene 集成", () => {
+  it("flow-steps 最小参数渲染出合法 mp4", { timeout: 240_000 }, async () => {
+    const r = await renderCodeScene({
+      workId: "w_code_scene_test",
+      filename: "it-flow",
+      template: { name: "flow-steps", params: { title: "退出三标准", steps: [{ title: "隐债清零" }, { title: "剥离职能" }, { title: "转型注销" }] } },
+      duration: 4,
+      theme: "finance_dark",
+    });
+    expect(r.success).toBe(true);
+    expect(r.path && existsSync(r.path)).toBe(true);
+    expect(r.duration).toBeGreaterThan(2);
   });
 });
