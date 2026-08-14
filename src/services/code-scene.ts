@@ -102,6 +102,7 @@ export async function renderCodeScene(input: CodeSceneInput): Promise<CodeSceneR
 }
 
 async function doRender(input: CodeSceneInput): Promise<CodeSceneResult> {
+  try {
   const jobId = `cs_${randomUUID().slice(0, 8)}`;
   const outDirAbs = join(dataDir, "works", input.workId, "assets", "clips", "code");
   await mkdir(outDirAbs, { recursive: true });
@@ -158,6 +159,9 @@ async function doRender(input: CodeSceneInput): Promise<CodeSceneResult> {
 
   const rel = `clips/code/${outFile}`;
   return { success: true, path: outputPath, url: `/api/works/${input.workId}/assets/${rel}`, duration: info.duration };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err), code: "RENDER_FAILED" };
+  }
 }
 
 class WorkerTimeout extends Error { constructor() { super("渲染超时(180s)"); } }
