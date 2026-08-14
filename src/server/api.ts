@@ -4900,4 +4900,7 @@ apiRoutes.route("/api/publish", publishRoutes);
 apiRoutes.route("/api/works/:id/publish", publishWorkRoutes);
 apiRoutes.route("/api/accounts", accountsRoutes);
 apiRoutes.route("/api/queue", queueRoutes);
-apiRoutes.rout
+apiRoutes.route("/api/calendar", calendarRoutes);
+apiRoutes.route("/api/budget", budgetRoutes);
+apiRoutes.route("/api/data-sources", dataSourceRoutes);
+apiRoutes.route("/api/stock-assets", stockAssetRoutes);

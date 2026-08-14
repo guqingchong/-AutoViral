@@ -74,3 +74,7 @@ type: module
 - [ ] i2v 是否只写了运动+镜头（没重复描述首帧已有的构图）？
 - [ ] 矛盾指令检查（如 extreme close-up 与 full body 同求）？
 - [ ] 涉及精确数据/文字？→ **停**，改走程序化素材 API（/api/assets/chart|data-card|snapshot-card），本模块不服务此类镜头
+
+## 六、结构/流程/逻辑镜头不走本模块
+
+涉及结构图、流程图、逻辑链条的镜头不属于 AI 生成范畴——调用 `POST /api/assets/code-scene`(程序化动画,数字/结构 100% 准确)。本模块只服务氛围/场景感画面的生成 prompt。

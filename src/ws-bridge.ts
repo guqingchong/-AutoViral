@@ -311,6 +311,7 @@ export class WsBridge {
 - 调研：使用WebSearch搜索 + 数据获取脚本（详见 trend-research skill）
 - 生图：脚本工具 python3 ~/.claude/skills/asset-generation/scripts/openrouter_generate.py 或 jimeng_generate.py（详见 asset-generation skill）
 - 生视频：调用 curl http://localhost:${port}/api/generate/video 或使用即梦脚本
+- 程序化动画: curl http://localhost:${port}/api/assets/code-scene(结构图/流程图/逻辑链条镜头,参数化模板渲染 mp4 段,详见 asset-generation skill 路由速查表)
 - 合成：使用ffmpeg命令剪辑视频（拼接片段+字幕+配乐+转场）
 - 字幕管线（强制）：
   1. **生成字幕文件**：使用 python3 ~/.claude/skills/content-assembly/scripts/caption_generate.py 生成 ASS 字幕（支持 douyin-highlight/xhs-soft/funny/minimal 等预设风格 + 逐词高亮 karaoke）。如果你有手动时间戳 JSON，也可以用 --timestamps 模式；否则用 --input 自动语音识别模式
