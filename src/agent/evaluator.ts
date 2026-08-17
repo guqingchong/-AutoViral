@@ -75,6 +75,8 @@ export async function runApiEvaluator(opts: ApiEvaluatorOpts): Promise<EvalResul
   }
 
   const sink = createLoopEventSink(opts.session, opts.bridge, { source: "evaluator" });
+  // 评审进行中标记:runner 健康检查据此判定会话存活(isWorkActive),防评审窗口被误判死亡
+  opts.session.evalLoopRunning = true;
   const loop = new AgentLoop({
     provider,
     model,
@@ -84,6 +86,7 @@ export async function runApiEvaluator(opts: ApiEvaluatorOpts): Promise<EvalResul
     visionModel: vision?.model,
     workDir: opts.workDir,
     onLoopEvent: (ev) => {
+      opts.session.lastActivityAt = Date.now();
       if (ev.type === "vision_route") {
         console.log(`[evaluator] ${opts.workId}/${step}: ImageBlock 回合路由 → ${ev.text}`);
       }
@@ -95,6 +98,10 @@ export async function runApiEvaluator(opts: ApiEvaluatorOpts): Promise<EvalResul
     },
   });
 
-  const { resultText } = await loop.runTurn(opts.evalPrompt);
-  return parseEvalResultText(resultText, step);
+  try {
+    const { resultText } = await loop.runTurn(opts.evalPrompt);
+    return parseEvalResultText(resultText, step);
+  } finally {
+    opts.session.evalLoopRunning = false;
+  }
 }

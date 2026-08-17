@@ -3,7 +3,7 @@ import { mkdtemp, writeFile, rm, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { estimateTokens, maybeCompact } from "../../src/agent/compact.js";
-import { AgentLoop } from "../../src/agent/loop.js";
+import { AgentLoop, ensureToolPairing } from "../../src/agent/loop.js";
 import type { AgentMessage, ChatRequest, LlmProvider, StreamEvent } from "../../src/llm/types.js";
 
 // P2-T2:结构压缩 —— 估算/阈值/配对边界/steps 注入/loop 集成
@@ -77,6 +77,40 @@ describe("maybeCompact", () => {
     const r = await maybeCompact(msgs, { threshold: 10, workDir: dir });
     expect(JSON.stringify(r.messages[1])).toContain("调研完成:3 个选题");
     await rm(dir, { recursive: true, force: true });
+  });
+});
+
+describe("ensureToolPairing(2026-08-17 live 评审 400 防线)", () => {
+  it("孤儿 tool_use 补合成错误结果", () => {
+    const msgs: AgentMessage[] = [user("问"), toolCall("t1"), assistant("答")];
+    ensureToolPairing(msgs);
+    // t1 后插入带配对 tool_result 的 user 消息
+    const inserted = msgs[2];
+    expect(inserted.role).toBe("user");
+    expect(inserted.content[0]).toMatchObject({ type: "tool_result", tool_use_id: "t1", is_error: true });
+  });
+
+  it("部分配对:缺失的补齐、已有的不动", () => {
+    const msgs: AgentMessage[] = [
+      user("问"),
+      { role: "assistant", content: [
+        { type: "tool_use", id: "a", name: "Read", input: {} },
+        { type: "tool_use", id: "b", name: "Bash", input: {} },
+      ] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "a", content: "ok" }] },
+      assistant("答"),
+    ];
+    ensureToolPairing(msgs);
+    const results = msgs[2].content.filter((b) => b.type === "tool_result");
+    expect(results).toHaveLength(2);
+    expect(results.some((b) => b.type === "tool_result" && b.tool_use_id === "b" && b.is_error)).toBe(true);
+  });
+
+  it("配对完整时原样不动", () => {
+    const msgs: AgentMessage[] = [user("问"), toolCall("t1"), toolResult("t1"), assistant("答")];
+    const before = JSON.stringify(msgs);
+    ensureToolPairing(msgs);
+    expect(JSON.stringify(msgs)).toBe(before);
   });
 });
 

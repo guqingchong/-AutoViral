@@ -216,37 +216,37 @@ export const PROVIDER_PRESETS = {
 
 ## Phase 2 —— 评审 + 无人值守 + 机器门禁（3 天）
 
-### Task P2-T1：评审 loop
+### Task P2-T1：评审 loop ✅ 2026-08-17
 
 **Files:** Create `src/agent/evaluator.ts`；Modify `src/ws-bridge.ts`（spawnEvaluator）、`src/server/api.ts`（runEvaluation 不动）
 
-- [ ] `parseEvalResultText` 从 ws-bridge.ts:1205-1227 抽出共享
-- [ ] `runApiEvaluator`：独立 AgentLoop、全新 messages、buildEvaluatorTools(visionModel)
-- [ ] ImageBlock 回合路由 visionModel；无 visionModel → 配置校验期报错（assets/assembly 评审禁用）
-- [ ] 验收：评审日志确认 ImageBlock 进请求；eval_blocked 3 轮流复现
+- [x] `parseEvalResultText` 抽出共享(src/agent/evaluator.ts,CLI/API 同语义)
+- [x] `runApiEvaluator`：独立 AgentLoop、全新 messages、buildEvaluatorTools;视觉优先级 评审provider→kimi→glm(glm-4v 探针实证带 tools 返回空,仅兜底)
+- [x] ImageBlock 回合路由 visionModel(loop visionProvider/visionModel);assets/assembly 无视觉模型配置期报错;openai-compat 修复 tool 消息不能带图(拆 user 消息)
+- [x] 验收：集成测试断言 image_url 进 kimi 请求;tests/server/eval-blocked.test.ts 三轮卡死复现
 
 ### Task P2-T2：结构压缩 + autoMode 解禁
 
 **Files:** Create `src/agent/compact.ts`；Modify `src/agent/loop.ts`
 
-- [ ] `estimateTokens`（CJK×0.6+其他×0.25）；`maybeCompact(messages, threshold=120k)`：留 messages[0]+最近 8 条，中段换确定性摘要 + steps/<step>.json 阶段摘要注入
-- [ ] autoMode 作品允许走 API loop
-- [ ] 验收：autoMode 作品端到端（含人为 fail→打回→修复→pass）；出片 ≤40min 对照
+- [x] `estimateTokens`(CJK×0.6+其他×0.25);`maybeCompact(120k)`:留 messages[0]+最近 8 条+确定性摘要+steps 注入,切口对齐 tool_use/tool_result 配对(6 例测试)
+- [x] autoMode 作品允许走 API loop(useApiDriver 移除排除;live 验收:batch-convert 作品走 session_create_api)
+- [ ] 验收:autoMode 端到端 live 进行中(2026-08-17 17:40 起跑);出片时长对照待出
 
-### Task P2-T3：机器门禁（A1/A2/B2）
+### Task P2-T3：机器门禁（A1/A2/B2）✅ 2026-08-17
 
 **Files:** Modify `src/server/api.ts`（advance 端点）、`src/services/quality-gate.ts`
 
-- [ ] advance(assembly) 前置校验函数 `assertAssemblyDeliverables(workId)`：final.mp4 存在 / publish-text.md 存在 / quality-report.json 的 videoPath 指向 final.mp4 且 mtime ≥ final.mp4 mtime / subs.ass 单行 ≤15 字且 CPS≤8——任一缺失返回 400 + 可读缺失清单
-- [ ] quality-gate.ts 响度项改 ebur128 实测（I∈[-16,-14]、TP≤-1.5），废弃 volumedetect mean
-- [ ] 单测：缺 publish-text 的 advance 被 400
+- [x] advance(assembly) 前置校验 `assertAssemblyDeliverables`(400+可读清单,image-text 跳过)：final.mp4 存在 / publish-text.md 存在 / quality-report.json 的 videoPath 指向 final.mp4 且 mtime ≥ final.mp4 mtime / subs.ass 单行 ≤15 字且 CPS≤8——任一缺失返回 400 + 可读缺失清单
+- [x] quality-gate 响度改 ebur128 Summary 段实测(I∈[-16,-14]、TP≤-1.5),废弃 volumedetect mean
+- [x] 单测:缺 publish-text 的 advance 被 400(tests/server/assembly-gate.test.ts 9 例)
 
-### Task P2-T4：配额防护（A3）+ A4 回归测试
+### Task P2-T4：配额防护（A3）+ A4 回归测试 ✅ 2026-08-17
 
 **Files:** Modify `src/services/work-queue.ts`；Create `tests/server/reconcile.test.ts` 增补
 
-- [ ] ws-compat/loop 层把 "usage limit"/"quota" 错误文本冒泡为 `QuotaExhaustedError`；work-queue tick 捕获 → 全部 running 项置 paused + 30min 后单次试探（指数回退），不 incrementResumeAttempts
-- [ ] reconcile 会话感知（8-16 已修）回归用例：活跃会话 + final.mp4 存在 → 不转正
+- [x] quota-guard.ts:文本分类 QuotaExhaustedError;冷却期 running→paused 不记恢复次数;30min 起指数回退单次试探;LLM 成功即解除(loop/CLI stderr 双路检测)
+- [x] reconcile 会话感知回归:活跃会话+final.mp4 不转正/无会话转正(tests/server/reconcile.test.ts)
 
 **Phase 2 验收**：实施方案 §4 五条。
 

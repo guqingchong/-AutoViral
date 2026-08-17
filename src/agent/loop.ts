@@ -67,6 +67,36 @@ export interface AgentLoopDeps {
 
 export class LoopGuardError extends Error {}
 
+/**
+ * tool_use/tool_result 配对不变量:每个 assistant 的 tool_use 必须在紧随的 user 消息里
+ * 有配对 tool_result;缺失则合成错误结果补齐(就地修改)。压缩切口/回合中断/AskUserQuestion
+ * 提前 return 都可能制造孤儿 tool_calls,OpenAI 兼容端点对孤儿一律 400。
+ */
+export function ensureToolPairing(messages: AgentMessage[]): void {
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i];
+    if (m.role !== "assistant") continue;
+    const uses = m.content.filter((b): b is ToolUseBlock => b.type === "tool_use");
+    if (!uses.length) continue;
+    const next = messages[i + 1];
+    const results = next?.role === "user"
+      ? next.content.filter((b): b is ToolResultBlock => b.type === "tool_result")
+      : [];
+    const missing = uses.filter((u) => !results.some((r) => r.tool_use_id === u.id));
+    if (!missing.length) continue;
+    console.warn(`[agent-loop] 配对修复:${missing.length} 个孤儿 tool_use 补合成结果`);
+    const synth: ToolResultBlock[] = missing.map((u) => ({
+      type: "tool_result",
+      tool_use_id: u.id,
+      name: u.name,
+      content: "错误:该工具调用未执行(回合中断或上下文编辑导致配对丢失),如需请重新发起",
+      is_error: true,
+    }));
+    if (next?.role === "user") next.content.push(...synth);
+    else messages.splice(i + 1, 0, { role: "user", content: synth });
+  }
+}
+
 export class AgentLoop {
   messages: AgentMessage[];
   state: LoopState = "idle";
@@ -120,6 +150,11 @@ export class AgentLoop {
         // 结构压缩(P2-T2):估算超阈值先把中段换确定性摘要再发,防上下文无限膨胀
         const compacted = await maybeCompact(this.messages, { workDir: this.deps.workDir, threshold: this.deps.compactThreshold });
         if (compacted.compacted) this.messages = compacted.messages;
+
+        // 配对不变量(2026-08-17 live 评审 400 实证):任何 assistant tool_use 必须在紧随的
+        // user 消息里有配对 tool_result——回合中断/压缩切口/提前 return 都可能留下孤儿,
+        // OpenAI 协议直接 400。缺什么补什么(合成错误结果),发送前永保合法。
+        ensureToolPairing(this.messages);
 
         // 视觉路由:消息里出现图片(Read 读图/工具返回图)且配置了视觉模型 → 本回合走视觉模型
         const hasImage = this.messages.some((m) =>

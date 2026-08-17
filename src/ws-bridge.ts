@@ -57,6 +57,9 @@ export interface WsSession {
   loopState?: "idle" | "running";
   loopTurnPromise?: Promise<unknown>;
   agentSessionId?: string;
+  /** API 评审 loop 进行中(P2-T1):评审期间创作者 loop 空闲,无此标记 runner 会误判会话死亡
+   *  反复 resume/重建会话(2026-08-17 验收实测:eval 窗口内 resumeAttempts 6 次把队列项打 failed) */
+  evalLoopRunning?: boolean;
 }
 
 interface NdjsonMessage {
@@ -137,7 +140,7 @@ export class WsBridge {
     const s = this.sessions.get(workId);
     if (!s) return false;
     if (s.cliProcess || s.evalProcess) return true;
-    if (s.loopState === "running") return true;
+    if (s.loopState === "running" || s.evalLoopRunning) return true;
     return Date.now() - (s.lastActivityAt ?? 0) < ACTIVITY_GRACE_MS;
   }
 
@@ -542,7 +545,9 @@ ${unattended
     const currentStep = Object.entries(work.pipeline).find(([, s]) => s.status === "active" || s.status === "pending")?.[0] ?? "plan";
     const stageKey = (currentStep === "material-search" ? "research" : currentStep) as "research" | "plan" | "assets" | "assembly";
     const { provider, model: routedModel } = resolveModelFor(config, stageKey in { research: 1, plan: 1, assets: 1, assembly: 1 } ? stageKey : "plan");
-    const usedModel = model ?? routedModel;
+    // 入参 model 是 CLI 时代的模型名(sonnet 等),对 API provider 无意义且会被 DeepSeek 等
+    // 直接拒收(400:unsupported model)——API 路径恒用阶段路由模型(2026-08-17 live 踩中)
+    const usedModel = routedModel;
 
     // 平台内置联网搜索(如 Kimi $web_search):provider 预设声明了能力才挂,loop 按两段协议回填
     const { PROVIDER_PRESETS } = await import("./llm/provider-keys.js");

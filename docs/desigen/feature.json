@@ -394,7 +394,7 @@
       "deps": [
         "P2-T1"
       ],
-      "status": "pending"
+      "status": "in-progress(live e2e 中)"
     },
     {
       "id": "P2-T3",
@@ -419,7 +419,7 @@
       "deps": [
         "P2-T2"
       ],
-      "status": "pending"
+      "status": "done"
     },
     {
       "id": "P2-T4",
@@ -444,7 +444,7 @@
       "deps": [
         "P2-T2"
       ],
-      "status": "pending"
+      "status": "done"
     },
     {
       "id": "P3-T1",

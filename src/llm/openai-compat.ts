@@ -33,8 +33,11 @@ interface OpenAiToolCallDelta {
   function?: { name?: string; arguments?: string };
 }
 
-/** AgentMessage → OpenAI messages 数组 */
-function toOpenAiMessages(system: string, messages: AgentMessage[]): Record<string, unknown>[] {
+/** AgentMessage → OpenAI messages 数组。builtinTools:当前请求挂载的内置工具名——
+ *  历史里的 builtin tool_call 仅当本会话仍挂载该内置工具时才按 builtin_function 序列化,
+ *  否则降级为普通 function(跨 provider 恢复会话时对方方言不认识 builtin_function,
+ *  2026-08-17 实测 deepseek 400:unknown variant) */
+function toOpenAiMessages(system: string, messages: AgentMessage[], builtinTools: Set<string> = new Set()): Record<string, unknown>[] {
   const out: Record<string, unknown>[] = [{ role: "system", content: system }];
   for (const m of messages) {
     if (m.role === "assistant") {
@@ -46,7 +49,7 @@ function toOpenAiMessages(system: string, messages: AgentMessage[]): Record<stri
         .filter((b): b is ToolUseBlock => b.type === "tool_use")
         .map((b) => ({
           id: b.id,
-          type: b.builtin ? "builtin_function" : "function",
+          type: b.builtin && builtinTools.has(b.name) ? "builtin_function" : "function",
           // builtin 回填逐字用原始 arguments(moonshot 协议:平台按 search_id 执行并注入结果)
           function: { name: b.name, arguments: b.rawArguments ?? JSON.stringify(b.input) },
         }));
@@ -159,7 +162,7 @@ export class OpenAICompatProvider implements LlmProvider {
       },
       body: JSON.stringify({
         model: req.model,
-        messages: toOpenAiMessages(req.system, req.messages),
+        messages: toOpenAiMessages(req.system, req.messages, new Set(req.tools.filter((t) => t.builtin).map((t) => t.name))),
         tools: req.tools.length ? toOpenAiTools(req.tools) : undefined,
         max_tokens: req.maxTokens,
         stream: true,
