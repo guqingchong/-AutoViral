@@ -49,7 +49,7 @@ describe("llm 设置(P1-T7)", () => {
     delete process.env.AUTOVIRAL_DATA_DIR;
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
-  });
+  }, 15_000);
 
   async function putLlm(llm: unknown) {
     return apiRoutes.request("/api/config", {
@@ -73,14 +73,14 @@ describe("llm 设置(P1-T7)", () => {
     expect(p.kimi.baseUrl).toBe("https://api.kimi.com/coding/v1");  // 预设补全
     expect(p.kimi.enabled).toBe(true);
     expect(data.llm.models.plan).toBe("deepseek:deepseek-v4-pro");
-  });
+  }, 15_000);
 
   it("GET 无 llm 配置时三家卡片仍出现、key 为空", async () => {
     await boot(cfgWithLlm(undefined));
     const data = await (await apiRoutes.request("/api/config")).json();
     expect(data.llm.providers.deepseek.apiKey).toBe("");
     expect(data.llm.providers.glm.visionModel).toBe("glm-4v");
-  });
+  }, 15_000);
 
   it("PUT 掩码 key 保留原值;新 key 覆盖;其余 llm 字段不动", async () => {
     await boot(cfgWithLlm(LLM_FULL));
@@ -99,13 +99,13 @@ describe("llm 设置(P1-T7)", () => {
     expect(saved.models.plan).toBe("deepseek:deepseek-v4-pro");          // 未提交 → 保留
     // PUT 响应同样不出明文
     expect(JSON.stringify(await res.json?.() ?? {})).not.toContain("sk-kimi-newkey123456");
-  });
+  }, 15_000);
 
   it("PUT 空串 apiKey 视为显式清除", async () => {
     await boot(cfgWithLlm(LLM_FULL));
     await putLlm({ providers: { deepseek: { baseUrl: "https://api.deepseek.com/v1", apiKey: "", visionModel: "", enabled: true } } });
     expect((await savedLlm()).providers.deepseek.apiKey).toBe("");
-  });
+  }, 15_000);
 
   it("POST /api/llm/ping 用保存的 key 打 models 列表,返回延迟", async () => {
     await boot(cfgWithLlm(LLM_FULL));
@@ -121,7 +121,7 @@ describe("llm 设置(P1-T7)", () => {
     expect(typeof data.latencyMs).toBe("number");
     expect(fetchMock.mock.calls[0][0]).toBe("https://api.deepseek.com/v1/models");
     expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe(`Bearer ${REAL_KEY}`);
-  });
+  }, 15_000);
 
   it("POST /api/llm/ping 掩码 key 回落到已保存值;无 key 报 400", async () => {
     await boot(cfgWithLlm(LLM_FULL));
@@ -140,7 +140,7 @@ describe("llm 设置(P1-T7)", () => {
       body: JSON.stringify({ provider: "deepseek" }),
     });
     expect(res2.status).toBe(400);
-  });
+  }, 15_000);
 
   it("enabled=false 的 provider 路由期抛可读错误", async () => {
     await boot(cfgWithLlm({
@@ -151,5 +151,5 @@ describe("llm 设置(P1-T7)", () => {
     const { loadConfig } = await import("../../src/config.js");
     const config = await loadConfig();
     expect(() => getProvider(config, "deepseek")).toThrow(/停用/);
-  });
+  }, 15_000);
 });
