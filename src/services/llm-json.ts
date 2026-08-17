@@ -22,7 +22,7 @@ function sleep(ms: number): Promise<void> {
  * Strips markdown fences, finds first { and last }, and parses.
  * Returns null if no valid JSON found.
  */
-function extractJsonFromText(text: string): unknown | null {
+export function extractJsonFromText(text: string): unknown | null {
   const cleaned = text
     .replace(/```json\s*/gi, "")
     .replace(/```\s*/g, "")

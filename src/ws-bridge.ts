@@ -50,6 +50,11 @@ export interface WsSession {
   model?: string;
   /** 最近一次 CLI 活动（spawn/stdout 输出）的时间戳；用于区分"回合间静默"与"真死" */
   lastActivityAt?: number;
+  // ── LLM 直连（API agent loop）字段，2026-08-17 Phase 1 ──
+  loop?: import("./agent/loop.js").AgentLoop;
+  loopState?: "idle" | "running";
+  loopTurnPromise?: Promise<unknown>;
+  agentSessionId?: string;
 }
 
 interface NdjsonMessage {
@@ -123,13 +128,14 @@ export class WsBridge {
     }
   }
 
-  /** 作品是否活跃:有存活进程,或最近 ACTIVITY_GRACE_MS 内有 CLI 活动。
+  /** 作品是否活跃:有存活进程/运行中的 loop,或最近 ACTIVITY_GRACE_MS 内有活动。
    *  queue runner / watchdog 的存活判定必须用这个,而不是只看 cliProcess —
    *  -p 单回合模式下进程每回合退出是常态,纯内存判定会误判假死(2026-08-06 根因) */
   isWorkActive(workId: string): boolean {
     const s = this.sessions.get(workId);
     if (!s) return false;
     if (s.cliProcess || s.evalProcess) return true;
+    if (s.loopState === "running") return true;
     return Date.now() - (s.lastActivityAt ?? 0) < ACTIVITY_GRACE_MS;
   }
 
@@ -267,6 +273,10 @@ export class WsBridge {
 
     const platforms = work.platforms.join(", ");
 
+    // 无人值守判定(2026-08-16 用户决策)：autoMode(批量按钮创建) = 全自动,
+    // 其余 = 深度介入(保留"等用户确认"规则)。与 api.ts startWorkSession 同一契约。
+    const unattended = !!work.autoMode;
+
     return `## 系统第一原则：质量优先
 
 - 宁可不交付，不可降质交付。如果所有路径都会导致不可接受的质量损失，停下来告知用户，而不是静默降质出一个"勉强能用"的结果
@@ -376,12 +386,16 @@ ${memoryContext}
 
 ## 规则
 - 调研阶段：如果用户指定了方向，围绕该方向深入调研；否则广泛调研热门趋势
-- 每生成一个素材前，先描述计划，等用户确认
-- 素材生成后展示预览链接，等用户反馈
+${unattended
+  ? `- 本作品为无人值守自动流水线：每步计划与素材生成直接执行，全程不得等待用户确认、反馈或拍板；所有创意选择自行按 skill 推荐方案决定`
+  : `- 每生成一个素材前，先描述计划，等用户确认
+- 素材生成后展示预览链接，等用户反馈`}
 - 短视频制作：先生成首帧图片→用首帧图生成视频片段→ffmpeg剪辑合成
 - 可随时引用公共素材库中的人物、配乐等素材
 - 只支持抖音和小红书平台
-- 不要在未经用户确认的情况下自动跳转到下一阶段`;
+${unattended
+  ? `- 阶段完成立即自行调用 pipeline/advance 推进，无需任何人确认`
+  : `- 不要在未经用户确认的情况下自动跳转到下一阶段`}`;
   }
 
   /**
@@ -397,6 +411,12 @@ ${memoryContext}
     const existing = this.sessions.get(workId);
     if (existing?.cliProcess) {
       try { existing.cliProcess.kill("SIGTERM"); } catch { /* dead */ }
+    }
+
+    // LLM 直连：llm.providers 已配置且非 autoMode → API agent loop（Phase 1）
+    if (await this.useApiDriver(workId)) {
+      logBridge("session_create_api", workId, { model });
+      return this.createSessionApi(workId, initialPrompt, model);
     }
 
     const session: WsSession = {
@@ -458,6 +478,149 @@ ${memoryContext}
       } catch { /* fall back to plain prompt */ }
       this.spawnCli(session, systemPrompt);
     }
+
+    return session;
+  }
+
+  // ── LLM 直连（API agent loop）路径，2026-08-17 Phase 1 ─────────────────────
+
+  /**
+   * 是否走 API loop：llm.providers 已配置 且 作品非 autoMode（无人值守批量
+   * 在 Phase 2 结构压缩就位前仍走 CLI——硬性顺序约束）。
+   */
+  private async useApiDriver(workId: string): Promise<boolean> {
+    try {
+      const config = await loadConfig();
+      if (!config.llm?.providers || Object.keys(config.llm.providers).length === 0) return false;
+      const work = await getWork(workId);
+      return !work?.autoMode;
+    } catch {
+      return false;
+    }
+  }
+
+  /** API loop 版 createSession：agent-session.json 还原或全新开局 */
+  private async createSessionApi(workId: string, initialPrompt: string, model?: string): Promise<WsSession> {
+    const { AgentLoop } = await import("./agent/loop.js");
+    const { loadAgentSession, saveAgentSession } = await import("./agent/session-store.js");
+    const { createLoopEventSink } = await import("./agent/ws-compat.js");
+    const { buildCreatorTools } = await import("./agent/tools/index.js");
+    const { resolveModelFor } = await import("./llm/registry.js");
+    const { randomUUID } = await import("node:crypto");
+
+    const existing = this.sessions.get(workId);
+    const session: WsSession = {
+      workId,
+      idle: false,
+      browserSockets: existing?.browserSockets ?? new Set(),
+      messageHistory: existing?.messageHistory ?? [],
+      model,
+    };
+    this.sessions.set(workId, session);
+
+    // 重启后内存无历史时从 chat.jsonl 回放（与 CLI 路径同一逻辑）
+    if (session.messageHistory.length === 0) {
+      try {
+        const jsonlPath = join(dataDir, "works", session.workId, "chat.jsonl");
+        const raw = await readFile(jsonlPath, "utf-8");
+        const blocks: ChatBlock[] = [];
+        for (const line of raw.split("\n")) {
+          if (!line.trim()) continue;
+          try { blocks.push(JSON.parse(line)); } catch { /* skip malformed */ }
+        }
+        if (blocks.length > 0) session.messageHistory = blocks;
+      } catch { /* 无历史 */ }
+    }
+
+    const config = await loadConfig();
+    const work = await getWork(workId);
+    if (!work) throw new Error("Work not found");
+
+    // 阶段模型路由：当前流水线步骤 → StageKey
+    const currentStep = Object.entries(work.pipeline).find(([, s]) => s.status === "active" || s.status === "pending")?.[0] ?? "plan";
+    const stageKey = (currentStep === "material-search" ? "research" : currentStep) as "research" | "plan" | "assets" | "assembly";
+    const { provider, model: routedModel } = resolveModelFor(config, stageKey in { research: 1, plan: 1, assets: 1, assembly: 1 } ? stageKey : "plan");
+    const usedModel = model ?? routedModel;
+
+    // 平台内置联网搜索(如 Kimi $web_search):provider 预设声明了能力才挂,loop 按两段协议回填
+    const { PROVIDER_PRESETS } = await import("./llm/provider-keys.js");
+    const searchToolName = PROVIDER_PRESETS[provider.name]?.builtinSearchTool;
+    const builtinTools = searchToolName
+      ? [{
+          name: searchToolName,
+          builtin: true,
+          description: "联网搜索(平台服务端执行)。涉及时效性话题、热点、资料查证时调用;调用后平台自动执行并注入结果。",
+          input_schema: { type: "object", properties: {} },
+        }]
+      : [];
+
+    // 还原或全新开局
+    const restored = await loadAgentSession(workId);
+    let systemPrompt = await this.buildSystemPrompt(work);
+    if (builtinTools.length) {
+      // 工具名映射声明:skills/提示词按 CLI 命名写死 WebSearch,API loop 下平台内置工具叫 $web_search;
+      // 不显式声明时模型会退回 curl 抓站(2026-08-17 验收实测:kimi 连续 100+ 次 bash curl 打转)
+      systemPrompt += `\n\n**联网搜索工具**:本环境的联网搜索工具名为 \`$web_search\`(即本文档与 skills 中提到的 WebSearch)。调用后平台自动执行搜索并注入结果,无需任何参数处理。**禁止用 curl/wget 抓取网页**代替搜索。`;
+    }
+    session.agentSessionId = restored?.sessionId ?? `api-${randomUUID()}`;
+
+    const sink = createLoopEventSink(session, this);
+    const loop = new AgentLoop(
+      {
+        provider,
+        model: usedModel,
+        systemPrompt,
+        tools: buildCreatorTools({ bashBlocklist: config.llm?.guard?.bashBlocklist }),
+        builtinTools,
+        workDir: join(dataDir, "works", workId),
+        onLoopEvent: (ev) => {
+          session.lastActivityAt = Date.now();
+          sink(ev);
+        },
+        guard: {
+          maxStepsPerTurn: config.llm?.guard?.maxStepsPerTurn,
+          maxTurnMinutes: config.llm?.guard?.maxTurnMinutes,
+        },
+      },
+      restored?.messages,
+    );
+    if (restored?.pendingAskToolUseId) loop.pendingAskToolUseId = restored.pendingAskToolUseId;
+    session.loop = loop;
+
+    // 状态持久化（回合结束即写）
+    const persist = (): void => {
+      saveAgentSession(workId, {
+        version: 1,
+        sessionId: session.agentSessionId!,
+        model: usedModel,
+        messages: loop.messages,
+        pendingAskToolUseId: loop.pendingAskToolUseId,
+        createdAt: restored?.createdAt ?? new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }).catch(() => {});
+    };
+
+    session.cliSessionId = session.agentSessionId; // 前端透传展示用
+    this.broadcastToBrowsers(workId, {
+      event: "session_ready",
+      data: { workId, cliSessionId: session.agentSessionId },
+    });
+
+    // 首回合消息：新会话带完整任务说明；还原会话只发新指令
+    const firstMessage = restored
+      ? initialPrompt
+      : initialPrompt; // systemPrompt 已独立携带全量上下文，无需拼进 user 消息
+    session.loopState = "running";
+    session.loopTurnPromise = loop
+      .runTurn(firstMessage)
+      .catch((err) => {
+        console.error(`[agent-loop] turn failed for ${workId}:`, err);
+      })
+      .finally(() => {
+        session.loopState = "idle";
+        session.idle = true;
+        persist();
+      });
 
     return session;
   }
@@ -541,6 +704,28 @@ ${memoryContext}
   private async sendMessageLocked(session: WsSession, text: string): Promise<boolean> {
     const workId = session.workId;
 
+    // API loop 路径：免 resume，直接续跑
+    if (session.loop) {
+      if (session.loopState === "running") {
+        session.loop.abortTurn();
+        try { await session.loopTurnPromise; } catch { /* 忽略中断错误 */ }
+      }
+      session.loopState = "running";
+      session.idle = false;
+      session.loopTurnPromise = session.loop
+        .runTurn(text)
+        .catch((err) => console.error(`[agent-loop] follow-up turn failed for ${workId}:`, err))
+        .finally(() => {
+          session.loopState = "idle";
+          session.idle = true;
+        });
+      this.broadcastToBrowsers(workId, {
+        event: "session_state",
+        data: { idle: false },
+      });
+      return true;
+    }
+
     // If CLI is still running (shouldn't normally be, but just in case)
     if (session.cliProcess) {
       try { session.cliProcess.kill("SIGTERM"); } catch { /* dead */ }
@@ -586,6 +771,12 @@ ${memoryContext}
   killSession(workId: string): boolean {
     const session = this.sessions.get(workId);
     if (!session) return false;
+
+    // API loop 路径：中断回合
+    if (session.loop) {
+      session.loop.abortTurn();
+      session.loopState = "idle";
+    }
 
     // Kill creator CLI process
     if (session.cliProcess) {
@@ -907,64 +1098,7 @@ ${memoryContext}
             if (msg.session_id) {
               session.cliSessionId = msg.session_id;
             }
-            this.broadcastToBrowsers(session.workId, {
-              event: "turn_complete",
-              data: {
-                workId: session.workId,
-                idle: true,
-                result: resultText,
-                sessionId: session.cliSessionId,
-                historyLength: session.messageHistory.length,
-              },
-            });
-            // Persist chat to disk (survives server restart)
-            if (!session.workId.startsWith("trends_")) {
-              saveWorkChat(session.workId, { blocks: session.messageHistory }).catch(() => {});
-            }
-            // Real-time memory sync — assistant text (complete turn, not fragments)
-            if (!session.workId.startsWith("trends_") && resultText) {
-              getWork(session.workId).then(w => {
-                if (!w) return;
-                const activeStep = Object.entries(w.pipeline).find(([, s]) => s.status === "active");
-                if (activeStep) {
-                  syncMessage(session.workId, w.title, activeStep[0], "assistant", resultText).catch(() => {});
-                }
-              }).catch(() => {});
-            }
-            // Auto-save step history from backend (doesn't rely on frontend)
-            // Only save the NEW messages from this turn (not entire history)
-            if (!session.workId.startsWith("trends_") && resultText) {
-              getWork(session.workId).then(w => {
-                if (!w) return;
-                const activeStep = Object.entries(w.pipeline).find(([, s]) => s.status === "active");
-                if (activeStep) {
-                  const [stepKey, stepInfo] = activeStep;
-                  // Build blocks from this turn only: the last user message + resultText
-                  const lastUserMsg = [...session.messageHistory].reverse().find(m => m.type === "user");
-                  const blocks: Array<{type: string; text: string}> = [];
-                  if (lastUserMsg) blocks.push({ type: "user", text: lastUserMsg.text });
-                  blocks.push({ type: "text", text: resultText });
-                  // Append to existing step history (don't overwrite)
-                  loadStepHistory(session.workId, stepKey).then(existing => {
-                    const existingBlocks = (existing as any)?.blocks ?? [];
-                    saveStepHistory(session.workId, stepKey, {
-                      stepKey,
-                      stepName: stepInfo.name,
-                      completedAt: new Date().toISOString(),
-                      blocks: [...existingBlocks, ...blocks],
-                    }).catch(() => {});
-                  }).catch(() => {
-                    // No existing history, save fresh
-                    saveStepHistory(session.workId, stepKey, {
-                      stepKey,
-                      stepName: stepInfo.name,
-                      completedAt: new Date().toISOString(),
-                      blocks,
-                    }).catch(() => {});
-                  });
-                }
-              }).catch(() => {});
-            }
+            this.finalizeTurn(session, resultText);
             continue;
           }
 
@@ -1355,6 +1489,80 @@ ${memoryContext}
   }
 
   // ── Helpers ──────────────────────────────────────────────────────────────
+
+  /**
+   * 回合收尾（从 spawnCli 的 result 分支抽出，2026-08-17 LLM 直连改造）：
+   * 广播 turn_complete + saveWorkChat 落盘 + memory 同步 + steps/<step>.json 摘要。
+   * CLI 路径与 API loop 路径（ws-compat）共用，保证两侧行为逐字一致。
+   */
+  finalizeTurn(session: WsSession, resultText: string): void {
+    this.broadcastToBrowsers(session.workId, {
+      event: "turn_complete",
+      data: {
+        workId: session.workId,
+        idle: true,
+        result: resultText,
+        sessionId: session.cliSessionId,
+        historyLength: session.messageHistory.length,
+      },
+    });
+    // Persist chat to disk (survives server restart)
+    if (!session.workId.startsWith("trends_")) {
+      saveWorkChat(session.workId, { blocks: session.messageHistory }).catch(() => {});
+    }
+    // Real-time memory sync — assistant text (complete turn, not fragments)
+    if (!session.workId.startsWith("trends_") && resultText) {
+      getWork(session.workId).then(w => {
+        if (!w) return;
+        const activeStep = Object.entries(w.pipeline).find(([, s]) => s.status === "active");
+        if (activeStep) {
+          syncMessage(session.workId, w.title, activeStep[0], "assistant", resultText).catch(() => {});
+        }
+      }).catch(() => {});
+    }
+    // Auto-save step history from backend (doesn't rely on frontend)
+    // Only save the NEW messages from this turn (not entire history)
+    if (!session.workId.startsWith("trends_") && resultText) {
+      getWork(session.workId).then(w => {
+        if (!w) return;
+        const activeStep = Object.entries(w.pipeline).find(([, s]) => s.status === "active");
+        if (activeStep) {
+          const [stepKey, stepInfo] = activeStep;
+          // Build blocks from this turn only: the last user message + resultText
+          const lastUserMsg = [...session.messageHistory].reverse().find(m => m.type === "user");
+          const blocks: Array<{type: string; text: string}> = [];
+          if (lastUserMsg) blocks.push({ type: "user", text: lastUserMsg.text });
+          blocks.push({ type: "text", text: resultText });
+          // Append to existing step history (don't overwrite)
+          loadStepHistory(session.workId, stepKey).then(existing => {
+            const existingBlocks = (existing as any)?.blocks ?? [];
+            saveStepHistory(session.workId, stepKey, {
+              stepKey,
+              stepName: stepInfo.name,
+              completedAt: new Date().toISOString(),
+              blocks: [...existingBlocks, ...blocks],
+            }).catch(() => {});
+          }).catch(() => {
+            // No existing history, save fresh
+            saveStepHistory(session.workId, stepKey, {
+              stepKey,
+              stepName: stepInfo.name,
+              completedAt: new Date().toISOString(),
+              blocks,
+            }).catch(() => {});
+          });
+        }
+      }).catch(() => {});
+    }
+  }
+
+  /** 供 ws-compat（API loop 路径）使用：推入 ChatBlock（历史+jsonl+防抖快照）并广播事件 */
+  pushBlock(session: WsSession, block: ChatBlock, event: string, data: unknown): void {
+    session.messageHistory.push(block);
+    this.appendToChatLog(session.workId, block);
+    this.scheduleIncrementalSave(session.workId);
+    this.broadcastToBrowsers(session.workId, { event, data });
+  }
 
   broadcastToBrowsers(workId: string, payload: { event: string; data: unknown }): void {
     const session = this.sessions.get(workId);

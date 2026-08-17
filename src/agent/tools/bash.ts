@@ -1,0 +1,96 @@
+/**
+ * Bash 工具（2026-08-17 Phase 1，Windows 关键件）。
+ * 设计文档：docs/desigen/01 §4.3 / 实施方案 P1-T2
+ *
+ * - 优先 Git Bash（skills 里的命令全是 Unix 语法：管道/重定向/~ 展开）；
+ *   探测顺序：常见安装路径 → where bash；结果缓存
+ * - 默认 120s 超时（input.timeout 可覆写，单位毫秒）
+ * - stdout+stderr 合并输出，超 30k 截头留尾
+ * - bashBlocklist 正则黑名单（危险命令拦截）
+ */
+
+import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import type { ToolContext, ToolExecutor } from "./index.js";
+import { truncateMiddle } from "./common.js";
+
+const DEFAULT_BLOCKLIST = ["rm\\s+-rf\\s+/", "format\\s+[a-z]:", "del\\s+/f\\s+/s\\s+/q"];
+
+let bashPath: string | null | undefined;
+
+function detectBash(): Promise<string | null> {
+  if (bashPath !== undefined) return Promise.resolve(bashPath);
+  const candidates = [
+    "C:\\Program Files\\Git\\bin\\bash.exe",
+    "C:\\Program Files (x86)\\Git\\bin\\bash.exe",
+  ];
+  for (const c of candidates) {
+    if (existsSync(c)) {
+      bashPath = c;
+      return Promise.resolve(c);
+    }
+  }
+  return new Promise((resolvePromise) => {
+    const p = spawn("where", ["bash"], { shell: true });
+    let out = "";
+    p.stdout.on("data", (d) => (out += d));
+    p.on("close", (code) => {
+      const first = out.trim().split("\n")[0]?.trim();
+      // 排除 WSL 的 System32 bash（语义不同）
+      bashPath = code === 0 && first && !first.toLowerCase().includes("system32") ? first : null;
+      resolvePromise(bashPath);
+    });
+    p.on("error", () => {
+      bashPath = null;
+      resolvePromise(null);
+    });
+  });
+}
+
+export function bashExecutor(blocklist?: string[]): ToolExecutor {
+  const rules = (blocklist?.length ? blocklist : DEFAULT_BLOCKLIST).map((r) => new RegExp(r, "i"));
+  return {
+    def: {
+      name: "Bash",
+      description: "执行 shell 命令（Git Bash 语义，支持管道/重定向/ffmpeg/curl/python3）。默认 120 秒超时。",
+      input_schema: {
+        type: "object",
+        properties: {
+          command: { type: "string", description: "要执行的 shell 命令" },
+          timeout: { type: "number", description: "超时毫秒数（默认 120000）" },
+        },
+        required: ["command"],
+      },
+    },
+    async execute(input: Record<string, unknown>, ctx: ToolContext): Promise<string> {
+      const command = String(input.command ?? "");
+      if (!command) throw new Error("Bash: command 必填");
+      for (const rule of rules) {
+        if (rule.test(command)) throw new Error(`Bash: 命令被安全策略拦截: ${command.slice(0, 80)}`);
+      }
+      const timeout = Math.min(Number(input.timeout) || 120_000, 600_000);
+      const bash = await detectBash();
+      const [cmd, args] = bash ? [bash, ["-lc", command]] : ["cmd", ["/c", command]];
+      return new Promise((resolvePromise) => {
+        const p = spawn(cmd, args, { cwd: ctx.workDir, windowsHide: true });
+        let out = "";
+        const killTimer = setTimeout(() => {
+          p.kill("SIGTERM");
+          setTimeout(() => p.kill("SIGKILL"), 3000);
+        }, timeout);
+        p.stdout.on("data", (d) => (out += d));
+        p.stderr.on("data", (d) => (out += d));
+        ctx.signal?.addEventListener("abort", () => p.kill("SIGTERM"), { once: true });
+        p.on("close", (code) => {
+          clearTimeout(killTimer);
+          const result = truncateMiddle(out.trim());
+          resolvePromise(code === 0 ? result || "（无输出）" : `Exit code ${code}\n${result}`);
+        });
+        p.on("error", (err) => {
+          clearTimeout(killTimer);
+          resolvePromise(`执行失败: ${err.message}`);
+        });
+      });
+    },
+  };
+}

@@ -1,0 +1,314 @@
+/**
+ * OpenAI 兼容协议 LLM provider（2026-08-16 架构改造 Phase 0）。
+ * 覆盖 DeepSeek / Kimi(Coding Plan) / GLM(Coding Plan) 三家，同一实现按配置切换。
+ * 设计文档：docs/desigen/01-LLM直连架构-详细设计方案.md §3.2
+ *
+ * 关键行为：
+ * - 流式 tool_calls 的 function.arguments 分片累积，完整后一次性发 tool_use 事件
+ *   （与 CLI 按完整 block 下发的行为对齐，ws-compat 依赖这一粒度）
+ * - 消息纪律：system+tools 恒定在前、messages 只追加不改写 → 命中自动前缀缓存
+ * - usage 经 stream_options.include_usage 取得，cacheReadTokens ← prompt_cache_hit_tokens
+ */
+
+import type {
+  AgentMessage,
+  ChatRequest,
+  ContentBlock,
+  ImageBlock,
+  LlmProvider,
+  StreamEvent,
+  TextBlock,
+  ThinkingBlock,
+  ToolResultBlock,
+  ToolUseBlock,
+} from "./types.js";
+import { noRetry, withRetry } from "./retry.js";
+import { extractJsonFromText } from "../services/llm-json.js";
+
+interface OpenAiToolCallDelta {
+  index: number;
+  id?: string;
+  type?: string;
+  function?: { name?: string; arguments?: string };
+}
+
+/** AgentMessage → OpenAI messages 数组 */
+function toOpenAiMessages(system: string, messages: AgentMessage[]): Record<string, unknown>[] {
+  const out: Record<string, unknown>[] = [{ role: "system", content: system }];
+  for (const m of messages) {
+    if (m.role === "assistant") {
+      const text = m.content
+        .filter((b): b is TextBlock => b.type === "text")
+        .map((b) => b.text)
+        .join("");
+      const toolCalls = m.content
+        .filter((b): b is ToolUseBlock => b.type === "tool_use")
+        .map((b) => ({
+          id: b.id,
+          type: b.builtin ? "builtin_function" : "function",
+          // builtin 回填逐字用原始 arguments(moonshot 协议:平台按 search_id 执行并注入结果)
+          function: { name: b.name, arguments: b.rawArguments ?? JSON.stringify(b.input) },
+        }));
+      const msg: Record<string, unknown> = { role: "assistant", content: text || null };
+      if (toolCalls.length) msg.tool_calls = toolCalls;
+      out.push(msg);
+    } else {
+      // user 消息：可能含 tool_result / text / image 混合
+      const toolResults = m.content.filter((b): b is ToolResultBlock => b.type === "tool_result");
+      const rest = m.content.filter((b) => b.type !== "tool_result");
+      for (const tr of toolResults) {
+        out.push({
+          role: "tool",
+          tool_call_id: tr.tool_use_id,
+          ...(tr.name ? { name: tr.name } : {}),
+          content: typeof tr.content === "string" ? tr.content : flattenBlocks(tr.content),
+        });
+      }
+      if (rest.length) {
+        out.push({ role: "user", content: toOpenAiUserContent(rest) });
+      }
+    }
+  }
+  return out;
+}
+
+function flattenBlocks(blocks: ContentBlock[]): string {
+  return blocks
+    .map((b) => {
+      if (b.type === "text") return b.text;
+      if (b.type === "image") return "[图片]";
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function toOpenAiUserContent(blocks: ContentBlock[]): unknown {
+  const hasImage = blocks.some((b) => b.type === "image");
+  if (!hasImage) return flattenBlocks(blocks);
+  return blocks.map((b) => {
+    if (b.type === "image") {
+      const img = b as ImageBlock;
+      return { type: "image_url", image_url: { url: `data:${img.mediaType};base64,${img.base64}` } };
+    }
+    if (b.type === "text") return { type: "text", text: (b as TextBlock).text };
+    if (b.type === "thinking") return { type: "text", text: (b as ThinkingBlock).thinking };
+    return { type: "text", text: "" };
+  });
+}
+
+/** ToolDef(anthropic 风格 input_schema) → OpenAI function 格式;builtin 工具映射为 builtin_function(平台服务端执行) */
+function toOpenAiTools(tools: ChatRequest["tools"]): Record<string, unknown>[] {
+  return tools.map((t) =>
+    t.builtin
+      ? { type: "builtin_function", function: { name: t.name } }
+      : { type: "function", function: { name: t.name, description: t.description, parameters: t.input_schema } },
+  );
+}
+
+export class OpenAICompatProvider implements LlmProvider {
+  readonly protocol = "openai" as const;
+  constructor(
+    readonly name: string,
+    private opts: { baseUrl: string; apiKey: string },
+  ) {}
+
+  async chatStream(
+    req: ChatRequest,
+    onEvent: (ev: StreamEvent) => void,
+  ): Promise<{ stopReason: string; assistant: AgentMessage }> {
+    // 首个 delta 到达前的失败可整体重试；已开始输出则直接抛（防重复输出混入）
+    let firstDeltaSeen = false;
+    const guardedOnEvent = (ev: StreamEvent) => {
+      if (ev.type === "text_delta" || ev.type === "thinking_delta" || ev.type === "tool_use") firstDeltaSeen = true;
+      onEvent(ev);
+    };
+    return withRetry(async () => {
+      try {
+        return await this.doChatStream(req, guardedOnEvent);
+      } catch (err) {
+        if (firstDeltaSeen) throw noRetry(err as Error);
+        throw err;
+      }
+    });
+  }
+
+  private async doChatStream(
+    req: ChatRequest,
+    onEvent: (ev: StreamEvent) => void,
+  ): Promise<{ stopReason: string; assistant: AgentMessage }> {
+    const res = await fetch(`${this.opts.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.opts.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: req.model,
+        messages: toOpenAiMessages(req.system, req.messages),
+        tools: req.tools.length ? toOpenAiTools(req.tools) : undefined,
+        max_tokens: req.maxTokens,
+        stream: true,
+        stream_options: { include_usage: true },
+      }),
+      signal: req.signal,
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      const err = new Error(`LLM API ${res.status}: ${body.slice(0, 300)}`);
+      if (res.status >= 400 && res.status < 500 && res.status !== 429) throw noRetry(err);
+      throw err;
+    }
+    if (!res.body) throw new Error("LLM API 响应无 body");
+
+    // SSE 解析：跨 chunk 断行安全
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    let stopReason = "end_turn";
+    const textParts: string[] = [];
+    const thinkParts: string[] = [];
+    // tool_calls 累积器：index → {id, name, arguments, 是否平台内置工具}
+    const tcAcc = new Map<number, { id: string; name: string; args: string; builtin: boolean }>();
+    let emittedStop = false;
+
+    const flushToolCalls = (): void => {
+      for (const [, tc] of [...tcAcc.entries()].sort((a, b) => a[0] - b[0])) {
+        let input: Record<string, unknown> = {};
+        try {
+          input = tc.args ? JSON.parse(tc.args) : {};
+        } catch {
+          input = { _raw: tc.args };
+        }
+        onEvent({
+          type: "tool_use",
+          block: {
+            type: "tool_use", id: tc.id || `call_${tcAcc.size}`, name: tc.name, input,
+            ...(tc.builtin ? { builtin: true, rawArguments: tc.args } : {}),
+          },
+        });
+      }
+    };
+
+    const handleData = (json: string): void => {
+      let chunk: any;
+      try {
+        chunk = JSON.parse(json);
+      } catch {
+        return; // 半行/心跳，忽略
+      }
+      if (chunk.usage) {
+        onEvent({
+          type: "usage",
+          inputTokens: chunk.usage.prompt_tokens ?? 0,
+          outputTokens: chunk.usage.completion_tokens ?? 0,
+          cacheReadTokens: chunk.usage.prompt_cache_hit_tokens ?? undefined,
+        });
+      }
+      const choice = chunk.choices?.[0];
+      if (!choice) return;
+      const delta = choice.delta ?? {};
+      if (typeof delta.reasoning_content === "string" && delta.reasoning_content) {
+        thinkParts.push(delta.reasoning_content);
+        onEvent({ type: "thinking_delta", text: delta.reasoning_content });
+      }
+      if (typeof delta.content === "string" && delta.content) {
+        textParts.push(delta.content);
+        onEvent({ type: "text_delta", text: delta.content });
+      }
+      for (const tc of (delta.tool_calls ?? []) as OpenAiToolCallDelta[]) {
+        const acc = tcAcc.get(tc.index) ?? { id: "", name: "", args: "", builtin: false };
+        if (tc.id) acc.id = tc.id;
+        if (tc.type === "builtin_function") acc.builtin = true;
+        if (tc.function?.name) acc.name = tc.function.name;
+        if (tc.function?.arguments) acc.args += tc.function.arguments;
+        tcAcc.set(tc.index, acc);
+      }
+      if (choice.finish_reason) {
+        stopReason = choice.finish_reason === "stop" ? "end_turn"
+          : choice.finish_reason === "tool_calls" ? "tool_use"
+          : choice.finish_reason === "length" ? "max_tokens"
+          : choice.finish_reason;
+        if (stopReason === "tool_use" && !emittedStop) {
+          emittedStop = true;
+          flushToolCalls();
+        }
+        onEvent({ type: "message_stop", stopReason: stopReason as never });
+      }
+    };
+
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let idx: number;
+      while ((idx = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, idx).trim();
+        buf = buf.slice(idx + 1);
+        if (!line.startsWith("data:")) continue;
+        const payload = line.slice(5).trim();
+        if (payload === "[DONE]") continue;
+        handleData(payload);
+      }
+    }
+    if (req.signal?.aborted) {
+      onEvent({ type: "message_stop", stopReason: "aborted" });
+      stopReason = "aborted";
+    }
+
+    // 组装 assistant 消息（供 loop 直接入 messages）
+    const blocks: ContentBlock[] = [];
+    if (thinkParts.length) blocks.push({ type: "thinking", thinking: thinkParts.join("") });
+    if (textParts.length) blocks.push({ type: "text", text: textParts.join("") });
+    for (const [, tc] of [...tcAcc.entries()].sort((a, b) => a[0] - b[0])) {
+      let input: Record<string, unknown> = {};
+      try {
+        input = tc.args ? JSON.parse(tc.args) : {};
+      } catch {
+        input = { _raw: tc.args };
+      }
+      blocks.push({
+        type: "tool_use", id: tc.id, name: tc.name, input,
+        ...(tc.builtin ? { builtin: true, rawArguments: tc.args } : {}),
+      });
+    }
+    return { stopReason, assistant: { role: "assistant", content: blocks } };
+  }
+
+  async chatJson<T>(prompt: string, opts: { model: string; timeoutMs?: number; maxAttempts?: number }): Promise<T> {
+    return withRetry(async () => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 120_000);
+      try {
+        const res = await fetch(`${this.opts.baseUrl}/chat/completions`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${this.opts.apiKey}`,
+          },
+          body: JSON.stringify({
+            model: opts.model,
+            messages: [{ role: "user", content: prompt }],
+            stream: false,
+          }),
+          signal: controller.signal,
+        });
+        if (!res.ok) {
+          const body = await res.text().catch(() => "");
+          const err = new Error(`LLM API ${res.status}: ${body.slice(0, 300)}`);
+          if (res.status >= 400 && res.status < 500 && res.status !== 429) throw noRetry(err);
+          throw err;
+        }
+        const data = (await res.json()) as any;
+        const text: string = data.choices?.[0]?.message?.content ?? "";
+        const extracted = extractJsonFromText(text);
+        if (extracted === undefined || extracted === null) {
+          throw new Error(`chatJson 无法从响应提取 JSON: ${text.slice(0, 200)}`);
+        }
+        return extracted as T;
+      } finally {
+        clearTimeout(timer);
+      }
+    }, { maxAttempts: opts.maxAttempts ?? 3 });
+  }
+}
