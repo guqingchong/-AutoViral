@@ -2901,6 +2901,19 @@ apiRoutes.post("/api/works/:id/pipeline/advance", async (c) => {
       }
     }
 
+    // ── A1/B2 机器门禁(P2-T3):assembly 推进前强制交付物校验,拦截在评审之前 ──
+    if (completedStep === "assembly" && work.type !== "image-text") {
+      const { assertAssemblyDeliverables } = await import("../services/quality-gate.js");
+      const gateIssues = assertAssemblyDeliverables(join(dataDir, "works", id));
+      if (gateIssues.length) {
+        log("info", "api", "assembly_gate_blocked", id, { count: gateIssues.length });
+        return c.json({
+          error: `成片交付物机器门禁未通过(${gateIssues.length} 项),请修复后重新提交`,
+          issues: gateIssues.map((i) => i.detail),
+        }, 400);
+      }
+    }
+
     // ── Evaluation gate ─────────────────────────────────────────────────
     // (evaluating 态的重入已被上方守卫1拦截,此处恒为非评审中)
     if (work.evaluationMode) {

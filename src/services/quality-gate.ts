@@ -12,7 +12,8 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { join, basename } from "node:path";
 import { probeMedia } from "../video/ffmpeg.js";
 
 const execFileAsync = promisify(execFile);
@@ -44,11 +45,21 @@ async function ffmpegDetect(args: string[]): Promise<string> {
   }
 }
 
-/** 平均响度(volumedetect):无声/接近无声返回 null */
-async function meanVolume(path: string): Promise<number | null> {
-  const stderr = await ffmpegDetect(["-i", path, "-af", "volumedetect", "-f", "null", "-"]);
-  const m = stderr.match(/mean_volume:\s*(-?[\d.]+)\s*dB/);
-  return m ? parseFloat(m[1]) : null;
+/** 响度实测(ebur128):Integrated I 与 True Peak。解析失败返回 null(P2-T3 起废弃 volumedetect mean) */
+export function parseEbur128(stderr: string): { i: number; tp: number } | null {
+  // 取 Summary 段的终值(多次出现时是分段瞬时/累计值,Summary 才是全片)
+  const summary = stderr.slice(Math.max(stderr.lastIndexOf("Summary:"), 0));
+  const iM = summary.match(/I:\s*(-?[\d.]+|-?inf)\s*LUFS/i);
+  const tpM = summary.match(/Peak:\s*(-?[\d.]+|-?inf)\s*dBFS/i);
+  if (!iM) return null;
+  const i = /inf/i.test(iM[1]) ? -Infinity : parseFloat(iM[1]);
+  const tp = !tpM ? NaN : (/inf/i.test(tpM[1]) ? -Infinity : parseFloat(tpM[1]));
+  return { i, tp };
+}
+
+async function loudness(path: string): Promise<{ i: number; tp: number } | null> {
+  const stderr = await ffmpegDetect(["-i", path, "-af", "ebur128=peak=true", "-f", "null", "-"]);
+  return parseEbur128(stderr);
 }
 
 /** 黑帧段(blackdetect):返回超过阈值的段列表 */
@@ -93,20 +104,25 @@ export async function runQualityGate(videoPath: string, opts?: { subtitlePath?: 
     add("resolution", "分辨率", "fail", "无视频流");
   }
 
-  // 3. 音轨 + 响度
+  // 3. 音轨 + 响度(ebur128 实测:I∈[-16,-14] LUFS、TP≤-1.5 dBFS 为平台甜点区,P2-T3)
   if (!info.hasAudio) {
     if (expectAudio) add("audio", "音轨", "fail", "成片没有音轨(无声视频)");
     else add("audio", "音轨", "pass", "无声段(模板图解/中间段),按预期无音轨");
   } else {
-    const vol = await meanVolume(videoPath);
+    const loud = await loudness(videoPath);
     // 中间段(Revideo/模板图解)导出器会带静默音轨:expectAudio=false 时静默属预期,不判 fail
-    if (!expectAudio && vol !== null && vol < -60) {
+    if (!expectAudio && loud !== null && loud.i === -Infinity) {
       add("audio", "响度", "pass", "无声中间段(静默音轨),按预期不检查响度");
     }
-    else if (vol === null) add("audio", "响度", "warn", "响度检测失败");
-    else if (vol < -60) add("audio", "响度", "fail", `平均响度 ${vol.toFixed(1)}dB,接近静音`);
-    else if (vol < -45) add("audio", "响度", "warn", `平均响度 ${vol.toFixed(1)}dB 偏低`);
-    else add("audio", "响度", "pass", `平均响度 ${vol.toFixed(1)}dB`);
+    else if (loud === null) add("audio", "响度", "warn", "响度检测失败");
+    else if (loud.i === -Infinity || loud.i < -35) add("audio", "响度", "fail", `综合响度 ${loud.i === -Infinity ? "-∞" : loud.i.toFixed(1)} LUFS,接近静音`);
+    else if (loud.i >= -16 && loud.i <= -14 && (Number.isNaN(loud.tp) || loud.tp <= -1.5)) {
+      add("audio", "响度", "pass", `I=${loud.i.toFixed(1)} LUFS,TP=${Number.isNaN(loud.tp) ? "n/a" : loud.tp.toFixed(1)} dBFS(甜点区)`);
+    }
+    else if (loud.i >= -20 && loud.i <= -11) {
+      add("audio", "响度", "warn", `I=${loud.i.toFixed(1)} LUFS 偏离甜点区[-16,-14]${!Number.isNaN(loud.tp) && loud.tp > -1.5 ? `,TP=${loud.tp.toFixed(1)} 超 -1.5` : ""}`);
+    }
+    else add("audio", "响度", "fail", `I=${loud.i.toFixed(1)} LUFS 严重偏离[-16,-14](响度战争或过轻)`);
   }
 
   // 4. 黑帧
@@ -140,4 +156,91 @@ export async function runQualityGate(videoPath: string, opts?: { subtitlePath?: 
     checks,
     createdAt: new Date().toISOString(),
   };
+}
+
+// ── A1/B2 机器门禁:assembly 交付物断言(P2-T3,2026-08-17)─────────────────────
+// advance(assembly) 前置校验:成品文件/发布文案/质检报告时效/字幕规范,
+// 任一缺失给可读清单,拦截在评审与发布之前。
+
+export interface DeliverableIssue {
+  key: string;
+  detail: string;
+}
+
+/** ass Dialogue 单可视行 ≤15 字、CPS ≤8 校验;返回违规描述列表 */
+export function checkAssSubtitles(assContent: string): string[] {
+  const violations: string[] = [];
+  const lines = assContent.split("\n").filter((l) => l.startsWith("Dialogue:"));
+  lines.forEach((line, idx) => {
+    // ass: Dialogue: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
+    const parts = line.split(",");
+    if (parts.length < 10) return;
+    const [start, end] = [parts[1].trim(), parts[2].trim()];
+    const text = parts.slice(9).join(",").replace(/\{[^}]*\}/g, "").trim();
+    const toSec = (t: string): number => {
+      const m = t.match(/(\d+):(\d+):(\d+)[.:](\d+)/);
+      return m ? Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]) + Number(m[4]) / 100 : 0;
+    };
+    const dur = toSec(end) - toSec(start);
+    for (const visualLine of text.split(/\N/i)) {
+      const len = [...visualLine.trim()].length;
+      if (len > 15) violations.push(`第${idx + 1}条单行 ${len} 字(>15):「${visualLine.trim().slice(0, 20)}…」`);
+    }
+    const chars = [...text.replace(/\N/gi, "")].length;
+    if (dur > 0.2 && chars / dur > 8) violations.push(`第${idx + 1}条 CPS=${(chars / dur).toFixed(1)}(>8):「${text.slice(0, 16)}…」`);
+  });
+  return violations;
+}
+
+/**
+ * assembly 推进前置校验:返回问题清单(空数组=通过)。
+ * 检查:① output/*final*.mp4 存在 ② publish-text.md 存在
+ * ③ quality-report.json 存在且 videoPath 指向 final 且报告不早于 final(QC 未跑在旧片上)
+ * ④ 字幕 ass 单行 ≤15 字、CPS ≤8
+ */
+export function assertAssemblyDeliverables(workDir: string): DeliverableIssue[] {
+  const issues: DeliverableIssue[] = [];
+  const outDir = join(workDir, "output");
+  if (!existsSync(outDir)) {
+    return [{ key: "output_dir", detail: "output/ 目录不存在——成片/文案/质检报告均未产出" }];
+  }
+  const files = readdirSync(outDir);
+
+  // ① 成片
+  const finalVideo = files.find((f) => /final/i.test(f) && /\.(mp4|mov|webm)$/i.test(f));
+  if (!finalVideo) issues.push({ key: "final_video", detail: "output/ 下无文件名含 final 的成片视频" });
+
+  // ② 发布文案
+  if (!files.includes("publish-text.md")) {
+    issues.push({ key: "publish_text", detail: "output/publish-text.md 缺失(发布文案未产出)" });
+  }
+
+  // ③ 质检报告时效
+  const reportFile = files.find((f) => f === "quality-report.json");
+  if (!reportFile) {
+    issues.push({ key: "quality_report", detail: "output/quality-report.json 缺失(成片未过质量门禁)" });
+  } else if (finalVideo) {
+    try {
+      const report = JSON.parse(readFileSync(join(outDir, reportFile), "utf-8")) as { videoPath?: string };
+      if (!report.videoPath || basename(report.videoPath) !== finalVideo) {
+        issues.push({ key: "quality_report", detail: `quality-report.json 的 videoPath(${report.videoPath ?? "空"})不指向当前成片 ${finalVideo}——QC 跑在了旧文件上` });
+      } else if (statSync(join(outDir, reportFile)).mtimeMs < statSync(join(outDir, finalVideo)).mtimeMs) {
+        issues.push({ key: "quality_report", detail: "quality-report.json 早于成片最后修改时间——成片重渲染后未重跑 QC" });
+      }
+    } catch {
+      issues.push({ key: "quality_report", detail: "quality-report.json 解析失败(损坏)" });
+    }
+  }
+
+  // ④ 字幕规范
+  const assFile = files.find((f) => /\.ass$/i.test(f));
+  if (!assFile) {
+    issues.push({ key: "subtitles", detail: "output/ 下无 .ass 字幕文件" });
+  } else {
+    const violations = checkAssSubtitles(readFileSync(join(outDir, assFile), "utf-8"));
+    for (const v of violations.slice(0, 5)) issues.push({ key: "subtitles", detail: v });
+    if (violations.length > 5) issues.push({ key: "subtitles", detail: `……另有 ${violations.length - 5} 条字幕违规` });
+  }
+
+  return issues;
 }
