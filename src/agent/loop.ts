@@ -156,8 +156,11 @@ export class AgentLoop {
         // OpenAI 协议直接 400。缺什么补什么(合成错误结果),发送前永保合法。
         ensureToolPairing(this.messages);
 
-        // 视觉路由:消息里出现图片(Read 读图/工具返回图)且配置了视觉模型 → 本回合走视觉模型
-        const hasImage = this.messages.some((m) =>
+        // 视觉路由:最近消息出现新图片(Read 读图/工具返回图)且配置了视觉模型 → 本回合走视觉模型。
+        // 只看最近 4 条:更早的图片已被视觉回合的文字描述沉淀,不因此永久粘滞在视觉模型上;
+        // 非视觉回合的图片一律降格为文本占位(DeepSeek 文本模型见 image_url 直接 400——2026-08-17 live)
+        const recent = this.messages.slice(-4);
+        const hasImage = recent.some((m) =>
           m.content.some((b) =>
             b.type === "image" ||
             (b.type === "tool_result" && Array.isArray(b.content) && b.content.some((x) => x.type === "image"))));
@@ -170,6 +173,7 @@ export class AgentLoop {
         const { stopReason, assistant } = await (useVision ? this.deps.visionProvider! : this.deps.provider).chatStream(
           {
             model: useVision ? this.deps.visionModel! : this.deps.model,
+            allowImages: useVision,
             system: this.deps.systemPrompt,
             messages: this.messages,
             tools: [
