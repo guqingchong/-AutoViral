@@ -75,6 +75,9 @@ export interface ChatRequest {
   tools: ToolDef[];
   maxTokens: number;
   signal?: AbortSignal;
+  /** 当前模型是否接受图片(image_url 内容块)。false 时历史图片降格为文本占位——
+   *  DeepSeek 文本模型等对 image_url 变体直接 400(2026-08-17 live 实证) */
+  allowImages?: boolean;
 }
 
 export type StreamEvent =

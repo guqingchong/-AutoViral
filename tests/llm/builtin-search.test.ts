@@ -83,6 +83,36 @@ describe("builtin_function(Kimi $web_search)协议", () => {
     expect(toolMsg.content).toBe(SEARCH_ARGS);
   });
 
+  it("多工具带图回合:tool 消息连续在前,图片统一收尾(防 tool_call_id 无响应 400)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(sseStream([JSON.stringify({ choices: [{ delta: { content: "好" }, finish_reason: "stop" }] })]), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const img = { type: "image" as const, mediaType: "image/png", base64: "AAAA" };
+    const messages: AgentMessage[] = [
+      { role: "assistant", content: [
+        { type: "tool_use", id: "c1", name: "Read", input: { file_path: "a.png" } },
+        { type: "tool_use", id: "c2", name: "Read", input: { file_path: "b.png" } },
+      ] },
+      { role: "user", content: [
+        { type: "tool_result", tool_use_id: "c1", content: [img] },
+        { type: "tool_result", tool_use_id: "c2", content: [img] },
+      ] },
+    ];
+    const p = new OpenAICompatProvider("deepseek", { baseUrl: "https://x/v1", apiKey: "k" });
+    await p.chatStream({ model: "m", system: "s", messages, tools: [], maxTokens: 100 }, () => {});
+
+    const sent = JSON.parse(fetchMock.mock.calls[0][1].body).messages;
+    // assistant 之后必须紧跟两个连续的 tool 消息,然后才是带图 user
+    const roles = sent.map((m: any) => m.role);
+    const aIdx = roles.indexOf("assistant");
+    expect(roles[aIdx + 1]).toBe("tool");
+    expect(roles[aIdx + 2]).toBe("tool");
+    expect(roles[aIdx + 3]).toBe("user");
+    expect(sent[aIdx + 3].content.some((x: any) => x.type === "image_url")).toBe(true);
+  });
+
   it("跨 provider 恢复:当前请求未挂载内置工具时 builtin 降级为 function(deepseek 方言不接受 builtin_function)", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(sseStream([JSON.stringify({ choices: [{ delta: { content: "继续" }, finish_reason: "stop" }] })]), { status: 200 }),

@@ -60,6 +60,11 @@ export interface WsSession {
   /** API 评审 loop 进行中(P2-T1):评审期间创作者 loop 空闲,无此标记 runner 会误判会话死亡
    *  反复 resume/重建会话(2026-08-17 验收实测:eval 窗口内 resumeAttempts 6 次把队列项打 failed) */
   evalLoopRunning?: boolean;
+  /** autoMode 无人值守续跑计数(P2-T2):步骤 key + 连续空转次数 + 历史长度标记 + 步骤内总次数 */
+  autoContinueStep?: string;
+  autoContinueCount?: number;
+  autoContinueMark?: number;
+  autoContinueTotal?: number;
 }
 
 interface NdjsonMessage {
@@ -572,6 +577,9 @@ ${unattended
     session.agentSessionId = restored?.sessionId ?? `api-${randomUUID()}`;
 
     const sink = createLoopEventSink(session, this);
+    // 创作者同样需要视觉路由(读素材图/参考图):无视觉模型时图片降格文本,不再 400(2026-08-17 live)
+    const { resolveVision } = await import("./agent/evaluator.js");
+    const creatorVision = resolveVision(config, provider.name);
     const loop = new AgentLoop(
       {
         provider,
@@ -579,6 +587,8 @@ ${unattended
         systemPrompt,
         tools: buildCreatorTools({ bashBlocklist: config.llm?.guard?.bashBlocklist }),
         builtinTools,
+        visionProvider: creatorVision?.provider,
+        visionModel: creatorVision?.model,
         workDir: join(dataDir, "works", workId),
         onLoopEvent: (ev) => {
           session.lastActivityAt = Date.now();
@@ -627,9 +637,53 @@ ${unattended
         session.loopState = "idle";
         session.idle = true;
         persist();
+        this.scheduleAutoContinue(session);
       });
 
     return session;
+  }
+
+  /**
+   * autoMode 无人值守驱动(P2-T2,2026-08-17 验收缺口):回合结束但当前步骤仍 active
+   * (agent 提前收工未 advance)→ 2s 后自动发继续指令。无人在线时回合干停=流水线停摆,
+   * 此前靠 runner resumeAttempts 恢复,计数打爆(>5)作品被判 failed。
+   * 同一步骤最多续 15 次防空转;评审中(evalLoopRunning/evaluating)不干预。
+   */
+  private scheduleAutoContinue(session: WsSession): void {
+    if (session.workId.startsWith("trends_")) return;
+    setTimeout(() => {
+      void (async () => {
+        try {
+          if (session.loopState === "running" || session.evalLoopRunning) return;
+          const work = await getWork(session.workId);
+          if (!work?.autoMode) return;
+          const active = Object.entries(work.pipeline).find(([, s]) => s.status === "active");
+          if (!active) return; // 评审中/已完结/已卡死:各有归属,不续跑
+          const [stepKey] = active;
+          if (session.autoContinueStep !== stepKey) {
+            session.autoContinueStep = stepKey;
+            session.autoContinueCount = 0;
+            session.autoContinueTotal = 0;
+            session.autoContinueMark = session.messageHistory.length;
+          }
+          // 有进展的续跑不计空转(历史增长 ≥3 块=该回合干了活);空转 15 次或步骤内
+          // 总续跑 60 次封顶(2026-08-17:小碎步回合 15 次配额 13 分钟打满但素材在持续推进)
+          const progressed = session.messageHistory.length - (session.autoContinueMark ?? 0) >= 3;
+          session.autoContinueMark = session.messageHistory.length;
+          session.autoContinueCount = progressed ? 0 : (session.autoContinueCount ?? 0) + 1;
+          session.autoContinueTotal = (session.autoContinueTotal ?? 0) + 1;
+          if ((session.autoContinueCount ?? 0) >= 15 || (session.autoContinueTotal ?? 0) >= 60) {
+            console.warn(`[ws-bridge] auto_continue 放弃:${session.workId}/${stepKey} 空转${session.autoContinueCount} 总续跑${session.autoContinueTotal}`);
+            return;
+          }
+          logBridge("auto_continue", session.workId, { step: stepKey, stall: session.autoContinueCount });
+          await this.sendMessage(
+            session.workId,
+            "继续执行当前阶段任务,不要中途停下等确认——一口气把本阶段做完。若本阶段产出已全部完成,请立即调用 pipeline/advance 推进流水线。",
+          );
+        } catch { /* 续跑失败不阻断主流程 */ }
+      })();
+    }, 2000);
   }
 
   /**
@@ -725,6 +779,7 @@ ${unattended
         .finally(() => {
           session.loopState = "idle";
           session.idle = true;
+          this.scheduleAutoContinue(session);
         });
       this.broadcastToBrowsers(workId, {
         event: "session_state",

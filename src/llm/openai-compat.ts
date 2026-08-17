@@ -37,7 +37,7 @@ interface OpenAiToolCallDelta {
  *  历史里的 builtin tool_call 仅当本会话仍挂载该内置工具时才按 builtin_function 序列化,
  *  否则降级为普通 function(跨 provider 恢复会话时对方方言不认识 builtin_function,
  *  2026-08-17 实测 deepseek 400:unknown variant) */
-function toOpenAiMessages(system: string, messages: AgentMessage[], builtinTools: Set<string> = new Set()): Record<string, unknown>[] {
+function toOpenAiMessages(system: string, messages: AgentMessage[], builtinTools: Set<string> = new Set(), allowImages = true): Record<string, unknown>[] {
   const out: Record<string, unknown>[] = [{ role: "system", content: system }];
   for (const m of messages) {
     if (m.role === "assistant") {
@@ -60,6 +60,7 @@ function toOpenAiMessages(system: string, messages: AgentMessage[], builtinTools
       // user 消息：可能含 tool_result / text / image 混合
       const toolResults = m.content.filter((b): b is ToolResultBlock => b.type === "tool_result");
       const rest = m.content.filter((b) => b.type !== "tool_result");
+      const toolImages: ImageBlock[] = [];
       for (const tr of toolResults) {
         const contentArr = typeof tr.content === "string" ? null : tr.content;
         out.push({
@@ -68,21 +69,26 @@ function toOpenAiMessages(system: string, messages: AgentMessage[], builtinTools
           ...(tr.name ? { name: tr.name } : {}),
           content: contentArr ? flattenBlocks(contentArr) : (tr.content as string),
         });
-        // tool 角色消息不能携带图片(OpenAI 协议)——图片块拆成紧随的 user 消息,
-        // 否则视觉模型永远看不到工具返回的图(P2-T1 评审看图的关键路径)
-        const images = contentArr?.filter((b): b is ImageBlock => b.type === "image") ?? [];
-        if (images.length) {
-          out.push({
-            role: "user",
-            content: [
-              { type: "text", text: "[上述工具调用返回的图片内容]" },
-              ...images.map((img) => ({ type: "image_url", image_url: { url: `data:${img.mediaType};base64,${img.base64}` } })),
-            ],
-          });
-        }
+        // tool 角色消息不能携带图片(OpenAI 协议)——先收集,全部 tool 消息发完后统一带走。
+        // 关键:tool 消息必须紧跟 assistant tool_calls 且连续——多工具回合若逐条
+        // 穿插 user 图片消息,第二个 tool_call_id 就被判无响应 400(2026-08-17 live 踩中)
+        if (contentArr) toolImages.push(...contentArr.filter((b): b is ImageBlock => b.type === "image"));
+      }
+      if (toolImages.length) {
+        out.push(
+          allowImages
+            ? {
+                role: "user",
+                content: [
+                  { type: "text", text: "[上述工具调用返回的图片内容]" },
+                  ...toolImages.map((img) => ({ type: "image_url", image_url: { url: `data:${img.mediaType};base64,${img.base64}` } })),
+                ],
+              }
+            : { role: "user", content: "[上述工具调用返回了图片内容;当前模型无视觉能力,图片已省略]" },
+        );
       }
       if (rest.length) {
-        out.push({ role: "user", content: toOpenAiUserContent(rest) });
+        out.push({ role: "user", content: toOpenAiUserContent(rest, allowImages) });
       }
     }
   }
@@ -100,8 +106,8 @@ function flattenBlocks(blocks: ContentBlock[]): string {
     .join("\n");
 }
 
-function toOpenAiUserContent(blocks: ContentBlock[]): unknown {
-  const hasImage = blocks.some((b) => b.type === "image");
+function toOpenAiUserContent(blocks: ContentBlock[], allowImages = true): unknown {
+  const hasImage = allowImages && blocks.some((b) => b.type === "image");
   if (!hasImage) return flattenBlocks(blocks);
   return blocks.map((b) => {
     if (b.type === "image") {
@@ -162,7 +168,7 @@ export class OpenAICompatProvider implements LlmProvider {
       },
       body: JSON.stringify({
         model: req.model,
-        messages: toOpenAiMessages(req.system, req.messages, new Set(req.tools.filter((t) => t.builtin).map((t) => t.name))),
+        messages: toOpenAiMessages(req.system, req.messages, new Set(req.tools.filter((t) => t.builtin).map((t) => t.name)), req.allowImages !== false),
         tools: req.tools.length ? toOpenAiTools(req.tools) : undefined,
         max_tokens: req.maxTokens,
         stream: true,
