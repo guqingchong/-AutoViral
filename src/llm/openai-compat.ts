@@ -24,6 +24,7 @@ import type {
 } from "./types.js";
 import { noRetry, withRetry } from "./retry.js";
 import { extractJsonFromText } from "../services/llm-json.js";
+import { QuotaExhaustedError, isQuotaErrorText, reportQuotaSuccess } from "../services/quota-guard.js";
 
 interface OpenAiToolCallDelta {
   index: number;
@@ -168,10 +169,15 @@ export class OpenAICompatProvider implements LlmProvider {
     });
     if (!res.ok) {
       const body = await res.text().catch(() => "");
+      // 配额类错误单列:不可重试 + 可被 loop/work-queue 识别冒泡(A3 配额防护)
+      if (isQuotaErrorText(body)) {
+        throw noRetry(new QuotaExhaustedError(`LLM API ${res.status} 配额耗尽: ${body.slice(0, 200)}`));
+      }
       const err = new Error(`LLM API ${res.status}: ${body.slice(0, 300)}`);
       if (res.status >= 400 && res.status < 500 && res.status !== 429) throw noRetry(err);
       throw err;
     }
+    reportQuotaSuccess(); // 任一调用成功即解除配额冷却(试探成功的正信号)
     if (!res.body) throw new Error("LLM API 响应无 body");
 
     // SSE 解析：跨 chunk 断行安全
