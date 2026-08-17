@@ -82,6 +82,8 @@ export interface Work {
   /** 双产物标记：短视频+图文同一作品双产物 */
   dualOutput?: boolean;
   parentWorkId?: string;
+  /** 全自动模式：选题页「批量转为作品(自动流水线)」按钮创建 = true；其余入口 = 深度介入（逐步确认） */
+  autoMode?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -98,6 +100,8 @@ export interface WorkSummary {
   topicId?: number;
   templateId?: string;
   digitalHumanId?: string;
+  /** 全自动模式标记（作品卡片 ⚡/🖐 标签） */
+  autoMode?: boolean;
   /** 流水线各阶段状态（作品卡片实时进度条） */
   pipeline?: Array<{ key: string; name: string; status: string }>;
   /** 审核预览视频 URL（成片，区别于封面图 coverImage） */
@@ -210,6 +214,7 @@ function dbWorkToWork(w: DbWork, steps?: DbPipelineStep[]): Work {
     assetBudget: w.asset_budget as AssetBudget | undefined,
     dualOutput: w.dual_output,
     parentWorkId: w.parent_work_id,
+    autoMode: w.auto_mode,
     createdAt: w.created_at,
     updatedAt: w.updated_at,
   };
@@ -240,6 +245,7 @@ export async function listWorks(): Promise<WorkSummary[]> {
       topicId: w.topic_id,
       templateId: w.template_id,
       digitalHumanId: w.digital_human_id,
+      autoMode: w.auto_mode,
       pipeline: steps.map((s) => ({ key: s.step_key, name: s.name, status: s.status as string })),
       reviewComment: w.review_comment,
       lastActivityAt: toIsoUtc(latestTimestamp([
@@ -277,6 +283,7 @@ export async function createWork(input: {
   assetBudget?: AssetBudget;
   dualOutput?: boolean;
   evaluationMode?: boolean;
+  autoMode?: boolean;
 }): Promise<Work> {
   await maybeMigrateLegacy();
   const now = new Date().toISOString();
@@ -302,6 +309,7 @@ export async function createWork(input: {
     asset_source: input.assetSource,
     asset_budget: input.assetBudget,
     dual_output: input.dualOutput ?? false,
+    auto_mode: input.autoMode ?? false,
     tags: [],
     created_at: now,
     updated_at: now,
@@ -360,6 +368,7 @@ export async function updateWork(id: string, updates: Partial<Work>): Promise<Wo
   if (updates.assetSource !== undefined) dbUpdates.asset_source = updates.assetSource;
   if (updates.assetBudget !== undefined) dbUpdates.asset_budget = updates.assetBudget;
   if (updates.dualOutput !== undefined) dbUpdates.dual_output = updates.dualOutput;
+  if (updates.autoMode !== undefined) dbUpdates.auto_mode = updates.autoMode;
   if (updates.pipeline !== undefined) {
     // Sync steps back to DB
     for (const [key, step] of Object.entries(updates.pipeline)) {

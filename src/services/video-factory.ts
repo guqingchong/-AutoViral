@@ -1,5 +1,5 @@
 import { mkdir, writeFile } from "node:fs/promises";
-import { join, dirname } from "node:path";
+import { join, dirname, basename } from "node:path";
 import { randomUUID } from "node:crypto";
 import { getTemplate, incrementTemplateUsage } from "../db/templates-repo.js";
 import { createRenderJob, updateRenderJob, getRenderJob, listRenderJobs } from "../db/render-jobs-repo.js";
@@ -84,7 +84,11 @@ async function runRenderLoop(jobId: string, template: DbTemplate, req: RenderReq
 
   try {
     const work = await getWork(req.workId);
-    if (work) {
+    // 仅当本渲染产出就是最终成片(final.mp4)时才同步作品状态机。
+    // 分段模板渲染(job_*_final.mp4)在素材/合成混排流程中被频繁调用，
+    // 若也翻转状态机会把进行中作品误判为 reviewing
+    // （2026-08-16 d34/166：agent 素材阶段探测性渲染 → 作品跳 reviewing）。
+    if (work && /^final\.(mp4|mov|webm)$/i.test(basename(outputPath))) {
       // 同步两套状态机：works.status 与 pipeline_steps.assembly（此前只写前者，
       // 导致作品卡片状态标签与进度条脱节 —— 2026-07-21 Bug2 根因）
       const pipeline = work.pipeline;
@@ -208,7 +212,8 @@ async function runRenderLoop(jobId: string, template: DbTemplate, req: RenderReq
     // Best-effort cleanup of work status; swallow DB errors to avoid unhandled rejections
     try {
       const work = await getWork(req.workId);
-      if (work) {
+      // 同上：仅最终成片渲染才回写 assembly 状态/作品 status；分段渲染不动状态机
+      if (work && /^final\.(mp4|mov|webm)$/i.test(basename(outputPath))) {
         // 渲染成功 → 同步 assembly 步骤为 done（进度条与状态标签一致）；
         // 渲染失败 → 步骤保持 active 并在 note 中记录错误，便于排查。
         const pipeline = work.pipeline;
@@ -237,7 +242,11 @@ export function recoverStuckRenderJobs(): number {
   for (const job of stuck) {
     try {
       updateRenderJob(job.id, { status: "failed", error: "Recovered from unexpected shutdown" });
-      if (job.work_id) {
+      // 仅当僵死任务是最终成片渲染时才连坐作品为 failed；
+      // 分段渲染(job_*_final.mp4)中断由 agent 重试即可，
+      // 不能把整个作品标死（2026-08-16 166 被误标 failed 事故）
+      const isFinal = !!job.output_path && /^final\.(mp4|mov|webm)$/i.test(basename(job.output_path));
+      if (job.work_id && isFinal) {
         updateWork(job.work_id, { status: "failed" }).catch((err) => {
           console.error(`Failed to update work ${job.work_id} after render recovery:`, err);
         });

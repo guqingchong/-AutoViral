@@ -885,11 +885,7 @@
               质量评审(每阶段由独立评审把关,不合格自动打回重做,强烈建议开启)
             </label>
             <p class="batch-hint">出片后自动执行质量门禁(时长/黑帧/静音/字幕覆盖率机器检测),低级错误拦截在发布前。</p>
-            {#if batchTemplateId || batchDigitalHumanId}
-              <p class="batch-auto-notice">已选择模板/数字人 → <strong>全自动模式</strong>：AI 将无人值守执行完整流水线，本窗口会实时显示每个选题的制作进度。</p>
-            {:else}
-              <p class="batch-hint">未选择模板/数字人 → <strong>深度介入模式</strong>：每个作品需要在制作对话中逐步确认。选择模板或数字人后切换为全自动模式。</p>
-            {/if}
+            <p class="batch-auto-notice"><strong>全自动模式</strong>：本入口创建的作品一律由 AI 无人值守执行完整流水线（不会向你提问，所有创意决策按 skills 推荐方案自主拍板），本窗口实时显示每个选题的制作进度。模板/数字人为可选项，不影响模式。</p>
           </div>
           <div class="batch-modal-footer">
             <button class="btn-batch-start" disabled={batchConverting || (batchType !== "image-text" && ((batchVoiceMode === "cloned" && myVoices.length === 0) || (batchVoiceMode === "ai" && favVoices.length === 0)))} onclick={batchConvert}>

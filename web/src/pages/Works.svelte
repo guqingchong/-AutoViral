@@ -56,8 +56,8 @@
   // ── AutoDL 开机提醒（素材阶段需要 H3/数字人且实例未开机时顶部横幅，2026-08-14） ──
   interface AutodlNeed { id: string; title: string; certainty?: "confirmed" | "possible" }
   interface AutodlReminders {
-    h3: { state: string; consoleUrl?: string; neededBy: AutodlNeed[] };
-    heygem: { state: string; consoleUrl?: string; neededBy: AutodlNeed[] };
+    h3: { state: string; consoleUrl?: string; neededBy: AutodlNeed[]; upcoming?: AutodlNeed[] };
+    heygem: { state: string; consoleUrl?: string; neededBy: AutodlNeed[]; upcoming?: AutodlNeed[] };
   }
   let autodlReminders = $state<AutodlReminders | null>(null);
   let autodlTimer: ReturnType<typeof setInterval> | null = null;
@@ -82,6 +82,26 @@
       alerts.push({ kind: lang === "zh" ? "H3 视频生成" : "H3 video", items: r.h3.neededBy, url: r.h3.consoleUrl, hard });
     }
     return alerts;
+  });
+
+  /** 后续作品预告：已确认需要但尚未排到素材阶段——只提示"别急着开机/别关机"，不催 */
+  let autodlUpcoming = $derived.by(() => {
+    const r = autodlReminders;
+    if (!r) return [] as string[];
+    const notes: string[] = [];
+    const h3Up = r.h3.upcoming ?? [];
+    const hgUp = r.heygem.upcoming ?? [];
+    if (h3Up.length > 0) {
+      notes.push(lang === "zh"
+        ? `后续 ${h3Up.length} 部作品的分镜已确认需要 H3 视频生成（${h3Up.map((i) => `《${i.title || i.id}》`).join("、")}），排到素材阶段时会再提醒开机${r.h3.state === "ready" ? "；若短期内不会排到可考虑暂时关机省钱" : ""}`
+        : `${h3Up.length} queued work(s) will need H3 later`);
+    }
+    if (hgUp.length > 0) {
+      notes.push(lang === "zh"
+        ? `后续 ${hgUp.length} 部作品需要数字人渲染，排到素材阶段时会再提醒开机`
+        : `${hgUp.length} queued work(s) will need digital human later`);
+    }
+    return notes;
   });
 
 
@@ -483,6 +503,14 @@
     </div>
   {/each}
 
+  <!-- ═══ 后续需求预告（已确认要用但还未排到素材阶段——不催开机） ═══ -->
+  {#each autodlUpcoming as note}
+    <div class="autodl-banner autodl-upcoming">
+      <span class="autodl-icon">🕒</span>
+      <div class="autodl-text"><span>{note}</span></div>
+    </div>
+  {/each}
+
   <!-- ═══ 任务队列面板（仅在有活跃队列项时显示） ═══ -->
   {#if activeQueueItems.length > 0}
     <div class="queue-panel">
@@ -708,10 +736,10 @@
               </button>
             </div>
             <div class="card-tags">
-              {#if w.templateId || w.digitalHumanId}
-                <span class="card-tag mode-auto" title="已配置模板/数字人，AI 全自动执行流水线，无需逐步确认">⚡ 全自动</span>
+              {#if w.autoMode}
+                <span class="card-tag mode-auto" title="全自动模式：批量入口创建，AI 无人值守执行流水线，无需逐步确认">⚡ 全自动</span>
               {:else}
-                <span class="card-tag mode-manual" title="深度介入模式：在制作对话中逐步确认每个环节；配置模板/数字人后可切换全自动">🖐 深度介入</span>
+                <span class="card-tag mode-manual" title="深度介入模式：在制作对话中逐步确认每个环节；从选题页「批量转为作品(自动流水线)」入口创建即为全自动">🖐 深度介入</span>
               {/if}
               <span class="card-tag">{typeLabel(w.type)}</span>
               {#if w.contentCategory}
@@ -871,6 +899,13 @@
     background: rgba(237, 137, 54, 0.08);
     border-color: rgba(237, 137, 54, 0.4);
   }
+  /* 后续需求预告：中性灰蓝，不催行动 */
+  .autodl-banner.autodl-upcoming {
+    background: rgba(99, 179, 237, 0.07);
+    border-color: rgba(99, 179, 237, 0.3);
+    padding: 9px 16px;
+  }
+  .autodl-upcoming .autodl-icon { font-size: 15px; }
   .autodl-icon { font-size: 20px; flex-shrink: 0; }
   .autodl-text { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
   .autodl-text strong { font-size: 14px; color: #fc8181; }

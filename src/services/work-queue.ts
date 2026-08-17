@@ -106,9 +106,12 @@ async function tickOnce(d: RunnerDeps): Promise<void> {
       continue;
     }
     if (!d.isSessionAlive(item.workId)) {
-      // 成片已存在时不 resume:作品实际已完成只是未上报,
-      // 交给 reconcile(每 60s)修复状态,避免对已完成的作坊重复渲染(2026-08-06 根因)
-      if (hasFinalOutput(item.workId)) continue;
+      // 成片已存在且流水线已全 finish 时不 resume：作品实际已完成只是未上报,
+      // 交给 reconcile(每 60s)修复状态,避免对已完成的作坊重复渲染(2026-08-06 根因)。
+      // 2026-08-16 修正：必须同时检查流水线完成度——final.mp4 存在但阶段未走完
+      // (如 d34 成片出了但 QC/发布文案/推进未做、f2c 返工中)时继续闷头 skip
+      // 会让作品永远卡在 running 悬空态。
+      if (hasFinalOutput(item.workId) && allStepsFinished(work)) continue;
       const attempts = repo.incrementResumeAttempts(item.workId);
       if (attempts > MAX_RESUME_ATTEMPTS) {
         repo.setStatus(item.workId, "failed");
@@ -126,15 +129,22 @@ async function tickOnce(d: RunnerDeps): Promise<void> {
   await d.startWork(next.workId).catch(() => {});
 }
 
-/** 检查作品 output/ 下是否已有成片(final*.mp4/mov/webm),与 reconcile 的判定一致 */
+/** 检查作品 output/ 下是否已有成片(final 开头的视频文件,与 reconcile 判定一致;
+ *  job_*_final.mp4 分段渲染产物不算 —— 2026-08-16 d34 误判事故) */
 function hasFinalOutput(workId: string): boolean {
   try {
     const outDir = join(dataDir, "works", workId, "output");
     if (!existsSync(outDir)) return false;
     return readdirSync(outDir).some(
-      (f) => /final/i.test(f) && /\.(mp4|mov|webm)$/i.test(f),
+      (f) => /^final/i.test(f) && /\.(mp4|mov|webm)$/i.test(f),
     );
   } catch {
     return false;
   }
+}
+
+/** 流水线是否已全部 finish（done/skipped）——配合 hasFinalOutput 判断"真完成" */
+function allStepsFinished(work: { pipeline: Record<string, { status: string }> }): boolean {
+  const steps = Object.values(work.pipeline);
+  return steps.length > 0 && steps.every((s) => s.status === "done" || s.status === "skipped");
 }

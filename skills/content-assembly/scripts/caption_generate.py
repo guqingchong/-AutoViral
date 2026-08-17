@@ -290,10 +290,17 @@ def transcribe_with_stable_ts(audio_path: str, model_name: str = "medium",
 # ── 分行逻辑 ──────────────────────────────────────────────────────────
 
 
-def group_words_into_lines(words: list[dict], max_words: int = 8) -> list[list[dict]]:
-    """将词列表按 max_words 分组为行.
+def group_words_into_lines(words: list[dict], max_words: int = 8, max_chars: int = 15) -> list[list[dict]]:
+    """将词列表按 max_words / max_chars 分组为行.
 
-    每行包含最多 max_words 个词。当检测到时间间隙 > 0.5s 时也会换行。
+    每行最多 max_words 个词、且总字符数 ≤ max_chars（中文按字计）。
+    当检测到时间间隙 > 0.5s 时也会换行。
+
+    max_chars 存在的必要：部分 Windows ffmpeg 构建的 libass 没有 CJK 断词器，
+    无空格的中文长行不会自动换行、直接溢出画面边界
+    （2026-08-16 f2c 字幕出框事故：33~53 字单行穿出左右边缘）。
+    超过 max_chars 的"词"（如整句级时间戳条目）先按字均分时长拆开，
+    保住 karaoke 逐字高亮粒度。
 
     Returns:
         [[{"word", "start", "end"}, ...], ...]
@@ -301,20 +308,42 @@ def group_words_into_lines(words: list[dict], max_words: int = 8) -> list[list[d
     if not words:
         return []
 
+    # 超长词按字均分（整句级条目 → 逐字伪词）
+    expanded: list[dict] = []
+    for w in words:
+        text = str(w["word"])
+        dur = w["end"] - w["start"]
+        if len(text) > max_chars and dur > 0:
+            per = dur / len(text)
+            for i, ch in enumerate(text):
+                expanded.append({
+                    "word": ch,
+                    "start": w["start"] + i * per,
+                    "end": w["start"] + (i + 1) * per,
+                })
+        else:
+            expanded.append(w)
+    words = expanded
+
     lines = []
-    current_line = []
+    current_line: list[dict] = []
+    current_chars = 0
 
     for w in words:
         # 时间间隙检测: 如果当前行非空且与上一个词的间隙 > 0.5s, 强制换行
         if current_line and (w["start"] - current_line[-1]["end"]) >= 0.5:
             lines.append(current_line)
             current_line = []
+            current_chars = 0
 
-        current_line.append(w)
-
-        if len(current_line) >= max_words:
+        # 词数或字符数任一超限即换行
+        if current_line and (len(current_line) >= max_words or current_chars + len(str(w["word"])) > max_chars):
             lines.append(current_line)
             current_line = []
+            current_chars = 0
+
+        current_line.append(w)
+        current_chars += len(str(w["word"]))
 
     if current_line:
         lines.append(current_line)
@@ -512,6 +541,7 @@ def generate_captions(
     language: str = "zh",
     model: str = "medium",
     max_words: int = 8,
+    max_chars: int = 15,
     lead_time: int = 80,
     **kwargs,
 ) -> dict:
@@ -525,6 +555,7 @@ def generate_captions(
         language:        语言代码 (auto 模式)
         model:           Whisper 模型名 (auto 模式)
         max_words:       每行最大词数
+        max_chars:       每行最大字符数（中文防溢出硬约束，默认 15）
         lead_time:       字幕提前出现毫秒数
         **kwargs:        样式覆盖参数
 
@@ -557,7 +588,7 @@ def generate_captions(
             return {"success": False, "error": "未检测到任何词"}
 
         # 2. 分行
-        lines = group_words_into_lines(words, max_words)
+        lines = group_words_into_lines(words, max_words, max_chars)
 
         # 3. 计算 lead time (不修改词时间戳, 只调整行显示起始)
         line_starts = compute_lead_times(lines, lead_time)
@@ -649,6 +680,7 @@ def main():
 
     # 行为参数
     parser.add_argument("--max-words", type=int, default=8, help="每行最大词数 (默认: 8)")
+    parser.add_argument("--max-chars", type=int, default=15, help="每行最大字符数 (默认: 15，中文防溢出硬约束)")
     parser.add_argument("--lead-time", type=int, default=80, help="字幕提前出现毫秒数 (默认: 80)")
 
     args = parser.parse_args()
@@ -679,6 +711,7 @@ def main():
         language=args.language,
         model=args.model,
         max_words=args.max_words,
+        max_chars=args.max_chars,
         lead_time=args.lead_time,
         **overrides,
     )
