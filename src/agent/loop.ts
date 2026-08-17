@@ -21,6 +21,8 @@ import type {
   ToolUseBlock,
 } from "../llm/types.js";
 import type { ToolExecutorMap } from "./tools/index.js";
+import { maybeCompact } from "./compact.js";
+import { QuotaExhaustedError, isQuotaErrorText, reportQuotaExhausted } from "../services/quota-guard.js";
 
 export type LoopState = "idle" | "running" | "aborted";
 
@@ -59,6 +61,8 @@ export interface AgentLoopDeps {
     maxStepsPerTurn?: number;
     maxTurnMinutes?: number;
   };
+  /** 结构压缩阈值(tokens 估算,默认 120k)——测试可传小值 */
+  compactThreshold?: number;
 }
 
 export class LoopGuardError extends Error {}
@@ -112,6 +116,10 @@ export class AgentLoop {
         if ((this.state as LoopState) === "aborted") {
           return { resultText: "", stopReason: "aborted" };
         }
+
+        // 结构压缩(P2-T2):估算超阈值先把中段换确定性摘要再发,防上下文无限膨胀
+        const compacted = await maybeCompact(this.messages, { workDir: this.deps.workDir, threshold: this.deps.compactThreshold });
+        if (compacted.compacted) this.messages = compacted.messages;
 
         // 视觉路由:消息里出现图片(Read 读图/工具返回图)且配置了视觉模型 → 本回合走视觉模型
         const hasImage = this.messages.some((m) =>
@@ -217,6 +225,10 @@ export class AgentLoop {
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      // A3 配额防护:配额类错误冒泡到全局状态,work-queue 据此暂停批量(不再反复恢复撞墙)
+      if (err instanceof QuotaExhaustedError || isQuotaErrorText(message)) {
+        reportQuotaExhausted("api-loop");
+      }
       this.deps.onLoopEvent({ type: "error", error: message });
       throw err;
     } finally {
