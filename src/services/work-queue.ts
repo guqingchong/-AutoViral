@@ -7,6 +7,7 @@ import { getWork } from "../work-store.js";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { dataDir } from "../config.js";
+import { quotaState, quotaAllowsStart } from "./quota-guard.js";
 
 /** 会话恢复上限：超过后标记 failed，不再自动恢复 */
 const MAX_RESUME_ATTEMPTS = 5;
@@ -89,6 +90,24 @@ async function tick(): Promise<void> {
 }
 
 async function tickOnce(d: RunnerDeps): Promise<void> {
+  // 0. A3 配额防护:LLM 配额冷却期 —— running 项置 paused(不 incrementResumeAttempts,
+  // 配额不是作品的问题不计恢复次数);到试探窗口恢复一项单次试探,成败由
+  // reportQuotaExhausted/reportQuotaSuccess 回写(指数回退 30→60→120→240min)。
+  if (quotaState().exhausted) {
+    const running = repo.listQueue().filter((i) => i.status === "running");
+    if (!quotaAllowsStart()) {
+      for (const item of running) repo.setStatus(item.workId, "paused");
+      if (running.length) console.log(`[work-queue] 配额冷却:${running.length} 个 running 项置 paused`);
+      return;
+    }
+    const probe = running[0] ?? repo.listQueue().find((i) => i.status === "paused");
+    if (!probe) return; // 无在途项可试探;queued 项待试探成功后再启动
+    console.log(`[work-queue] 配额试探窗口:恢复 ${probe.workId} 单次试探`);
+    repo.setStatus(probe.workId, "running");
+    await d.startWork(probe.workId).catch(() => {});
+    return;
+  }
+
   // 1. running 任务健康检查：会话死了且作品仍在中间状态 → 恢复
   const running = repo.listQueue().filter((i) => i.status === "running");
   for (const item of running) {
