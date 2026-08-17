@@ -65,6 +65,9 @@ export interface WsSession {
   autoContinueCount?: number;
   autoContinueMark?: number;
   autoContinueTotal?: number;
+  /** 当前 loop 的路由阶段与模型(P2 提速 A):阶段推进时 refreshStageRouting 据此判定重建 */
+  routedStage?: string;
+  routedModel?: string;
 }
 
 interface NdjsonMessage {
@@ -287,6 +290,39 @@ export class WsBridge {
     // 其余 = 深度介入(保留"等用户确认"规则)。与 api.ts startWorkSession 同一契约。
     const unattended = !!work.autoMode;
 
+    // H3 本地生成可用性(P2 提速 C,2026-08-17):离线必须显性声明——此前 agent 环境检测
+    // 查不到 H3 就自作主张"本片不需要 AI 生图"静默降级纯素材库,用户毫不知情。
+    // 探测放在这里(loop 创建级,非请求级),3s 超时可控。
+    let h3StatusLine = "";
+    if (config.h3) {
+      const h3Base = config.h3.baseUrl ?? "http://localhost:8188";
+      let h3Online = false;
+      try {
+        const r = await fetch(`${h3Base}/system_stats`, { signal: AbortSignal.timeout(3000) });
+        h3Online = r.ok;
+      } catch { /* 离线 */ }
+      h3StatusLine = h3Online
+        ? `- H3 本地生成(ComfyUI ${h3Base}):**在线可用**,人物/场景定制图与视频优先用它`
+        : `- H3 本地生成(ComfyUI ${h3Base}):**已配置但当前离线**(AutoDL 实例未启动或隧道断开)。本作品素材规划不要依赖 H3;用素材库/即梦/程序化渲染替代,并在最终交付说明中明确注明"H3 离线,已降级"。若后续恢复在线可改用。`;
+      if (!h3Online) console.warn(`[ws-bridge] H3 离线降级声明已注入:workId=${work.id}`);
+    }
+
+    // 内部 API 契约(P2 提速 B,2026-08-17):agent 猜 code-scene 契约曾空转 35 分钟——
+    // 常用端点的精确用法直接写进上下文,禁止靠 grep 源码/读报错摸索。
+    const apiContract = `## 内部 API 契约(精确用法,直接照用;禁止 grep 源码找用法)
+- 推进流水线: POST http://localhost:${port}/api/works/${work.id}/pipeline/advance  body: {"completedStep":"当前步骤key","nextStep":"下一步骤key"}
+- 代码渲染动画(结构图/流程图/逻辑链条 → 程序化 mp4): POST http://localhost:${port}/api/assets/code-scene
+  body: {"workId":"${work.id}","filename":"英文小写带连字符","template":{"name":"NAME","params":{...}}}
+  NAME 与 params 三选一:
+  · flow-steps(流程步骤): {"title":"≤12字","steps":[{"title":"≤8字","desc":"≤16字,可省"}] ×2-5}
+  · structure-growth(中心辐射): {"title":"≤12字","center":"≤6字","branches":[{"text":"≤6字","label":"≤8字"}] ×2-4}
+  · logic-chain(逻辑链条): {"title":"≤12字","chain":["每节≤10字"] ×2-4}
+  可选: "duration":1-30(秒,默认6)、"theme":"finance_dark|warm_gold|ink_green|minimal_light"
+- assembly 阶段的 advance 有机器门禁,以下缺一即被 400 拦截(提前备齐):
+  ① output/ 下文件名含 final 的成片视频 ② output/publish-text.md(发布文案)
+  ③ output/quality-report.json——对当前成片跑质量门禁生成,videoPath 指向该片且生成时间不早于成片 ④ output/ 下 .ass 字幕(单可视行 ≤15 字、CPS ≤8)
+- 环境: Windows + Git Bash;python 用 \`py -3\`(不要用 python3);ffmpeg/ffprobe 可用`;
+
     return `## 系统第一原则：质量优先
 
 - 宁可不交付，不可降质交付。如果所有路径都会导致不可接受的质量损失，停下来告知用户，而不是静默降质出一个"勉强能用"的结果
@@ -393,6 +429,11 @@ ${sharedAssetsInfo}
 
 ## 记忆上下文（如有）
 ${memoryContext}
+
+${apiContract}
+
+## 素材生成环境
+${h3StatusLine || "- H3 本地生成: 未配置"}
 
 ## 规则
 - 调研阶段：如果用户指定了方向，围绕该方向深入调研；否则广泛调研热门趋势
@@ -511,11 +552,7 @@ ${unattended
 
   /** API loop 版 createSession：agent-session.json 还原或全新开局 */
   private async createSessionApi(workId: string, initialPrompt: string, model?: string): Promise<WsSession> {
-    const { AgentLoop } = await import("./agent/loop.js");
     const { loadAgentSession, saveAgentSession } = await import("./agent/session-store.js");
-    const { createLoopEventSink } = await import("./agent/ws-compat.js");
-    const { buildCreatorTools } = await import("./agent/tools/index.js");
-    const { resolveModelFor } = await import("./llm/registry.js");
     const { randomUUID } = await import("node:crypto");
 
     const existing = this.sessions.get(workId);
@@ -546,41 +583,101 @@ ${unattended
     const work = await getWork(workId);
     if (!work) throw new Error("Work not found");
 
+    // 还原或全新开局
+    const restored = await loadAgentSession(workId);
+    session.agentSessionId = restored?.sessionId ?? `api-${randomUUID()}`;
+
+    // 阶段路由解析+loop 构建已抽为 buildApiLoop——阶段推进时 sendMessage 前重解析(P2 提速 A)
+    const routed = await this.buildApiLoop(session, work, config, restored?.messages);
+    if (restored?.pendingAskToolUseId) routed.pendingAskToolUseId = restored.pendingAskToolUseId;
+    session.loop = routed;
+
+    // 状态持久化（回合结束即写;loop 可能已被阶段重路由换新——读 session.loop 现值）
+    const persist = (): void => {
+      saveAgentSession(workId, {
+        version: 1,
+        sessionId: session.agentSessionId!,
+        model: session.routedModel ?? "unknown",
+        messages: session.loop?.messages ?? [],
+        pendingAskToolUseId: session.loop?.pendingAskToolUseId ?? null,
+        createdAt: restored?.createdAt ?? new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }).catch(() => {});
+    };
+
+    session.cliSessionId = session.agentSessionId; // 前端透传展示用
+    this.broadcastToBrowsers(workId, {
+      event: "session_ready",
+      data: { workId, cliSessionId: session.agentSessionId },
+    });
+
+    // 首回合消息：新会话带完整任务说明；还原会话只发新指令
+    const firstMessage = initialPrompt; // systemPrompt 已独立携带全量上下文，无需拼进 user 消息
+    session.loopState = "running";
+    session.loopTurnPromise = routed
+      .runTurn(firstMessage)
+      .catch((err) => {
+        console.error(`[agent-loop] turn failed for ${workId}:`, err);
+      })
+      .finally(() => {
+        session.loopState = "idle";
+        session.idle = true;
+        persist();
+        this.scheduleAutoContinue(session);
+      });
+
+    return session;
+  }
+
+  /**
+   * 按当前流水线阶段解析路由并构建 AgentLoop(P2 提速改造 A,2026-08-17)。
+   * 从 createSessionApi 抽出,供两处复用:建会话、sendMessage 前的阶段重解析——
+   * 一部作品的各阶段从此真正各走各的模型(research=kimi 搜索、plan/assembly=deepseek-pro…),
+   * 不再全程锁死在创建时的模型上。
+   */
+  private async buildApiLoop(
+    session: WsSession,
+    work: Work,
+    config: Awaited<ReturnType<typeof loadConfig>>,
+    messages?: import("./llm/types.js").AgentMessage[],
+  ): Promise<import("./agent/loop.js").AgentLoop> {
+    const { AgentLoop } = await import("./agent/loop.js");
+    const { buildCreatorTools } = await import("./agent/tools/index.js");
+    const { PROVIDER_PRESETS } = await import("./llm/provider-keys.js");
+    const { resolveVision } = await import("./agent/evaluator.js");
+    const { resolveModelFor } = await import("./llm/registry.js");
+    const { createLoopEventSink } = await import("./agent/ws-compat.js");
+    const workId = session.workId;
+
     // 阶段模型路由：当前流水线步骤 → StageKey
     const currentStep = Object.entries(work.pipeline).find(([, s]) => s.status === "active" || s.status === "pending")?.[0] ?? "plan";
     const stageKey = (currentStep === "material-search" ? "research" : currentStep) as "research" | "plan" | "assets" | "assembly";
-    const { provider, model: routedModel } = resolveModelFor(config, stageKey in { research: 1, plan: 1, assets: 1, assembly: 1 } ? stageKey : "plan");
-    // 入参 model 是 CLI 时代的模型名(sonnet 等),对 API provider 无意义且会被 DeepSeek 等
-    // 直接拒收(400:unsupported model)——API 路径恒用阶段路由模型(2026-08-17 live 踩中)
-    const usedModel = routedModel;
+    const { provider, model: usedModel } = resolveModelFor(config, stageKey in { research: 1, plan: 1, assets: 1, assembly: 1 } ? stageKey : "plan");
+    session.routedStage = currentStep;
+    session.routedModel = usedModel;
 
     // 平台内置联网搜索(如 Kimi $web_search):provider 预设声明了能力才挂,loop 按两段协议回填
-    const { PROVIDER_PRESETS } = await import("./llm/provider-keys.js");
     const searchToolName = PROVIDER_PRESETS[provider.name]?.builtinSearchTool;
     const builtinTools = searchToolName
       ? [{
           name: searchToolName,
           builtin: true,
-          description: "联网搜索(平台服务端执行)。涉及时效性话题、热点、资料查证时调用;调用后平台自动执行并注入结果。",
+          description: "联网搜索(平台服务端执行)。涉及时效性话题、热点、资料查证时调用;调用后平台自动执行并注入结果,无需任何参数处理。",
           input_schema: { type: "object", properties: {} },
         }]
       : [];
 
-    // 还原或全新开局
-    const restored = await loadAgentSession(workId);
     let systemPrompt = await this.buildSystemPrompt(work);
     if (builtinTools.length) {
       // 工具名映射声明:skills/提示词按 CLI 命名写死 WebSearch,API loop 下平台内置工具叫 $web_search;
       // 不显式声明时模型会退回 curl 抓站(2026-08-17 验收实测:kimi 连续 100+ 次 bash curl 打转)
       systemPrompt += `\n\n**联网搜索工具**:本环境的联网搜索工具名为 \`$web_search\`(即本文档与 skills 中提到的 WebSearch)。调用后平台自动执行搜索并注入结果,无需任何参数处理。**禁止用 curl/wget 抓取网页**代替搜索。`;
     }
-    session.agentSessionId = restored?.sessionId ?? `api-${randomUUID()}`;
 
     const sink = createLoopEventSink(session, this);
     // 创作者同样需要视觉路由(读素材图/参考图):无视觉模型时图片降格文本,不再 400(2026-08-17 live)
-    const { resolveVision } = await import("./agent/evaluator.js");
     const creatorVision = resolveVision(config, provider.name);
-    const loop = new AgentLoop(
+    return new AgentLoop(
       {
         provider,
         model: usedModel,
@@ -599,48 +696,26 @@ ${unattended
           maxTurnMinutes: config.llm?.guard?.maxTurnMinutes,
         },
       },
-      restored?.messages,
+      messages,
     );
-    if (restored?.pendingAskToolUseId) loop.pendingAskToolUseId = restored.pendingAskToolUseId;
+  }
+
+  /**
+   * 阶段重解析(P2 提速 A):流水线阶段已推进 → 用新阶段的路由重建 loop,
+   * 上下文经内存消息直接移交(无需落盘往返)。步骤没变则不动。
+   */
+  private async refreshStageRouting(session: WsSession): Promise<void> {
+    if (!session.loop) return;
+    const work = await getWork(session.workId);
+    if (!work) return;
+    const currentStep = Object.entries(work.pipeline).find(([, s]) => s.status === "active" || s.status === "pending")?.[0];
+    if (!currentStep || currentStep === session.routedStage) return;
+    logBridge("stage_reroute", session.workId, { from: session.routedStage, to: currentStep, model: session.routedModel });
+    const config = await loadConfig();
+    const pendingAsk = session.loop.pendingAskToolUseId;
+    const loop = await this.buildApiLoop(session, work, config, session.loop.messages);
+    if (pendingAsk) loop.pendingAskToolUseId = pendingAsk;
     session.loop = loop;
-
-    // 状态持久化（回合结束即写）
-    const persist = (): void => {
-      saveAgentSession(workId, {
-        version: 1,
-        sessionId: session.agentSessionId!,
-        model: usedModel,
-        messages: loop.messages,
-        pendingAskToolUseId: loop.pendingAskToolUseId,
-        createdAt: restored?.createdAt ?? new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      }).catch(() => {});
-    };
-
-    session.cliSessionId = session.agentSessionId; // 前端透传展示用
-    this.broadcastToBrowsers(workId, {
-      event: "session_ready",
-      data: { workId, cliSessionId: session.agentSessionId },
-    });
-
-    // 首回合消息：新会话带完整任务说明；还原会话只发新指令
-    const firstMessage = restored
-      ? initialPrompt
-      : initialPrompt; // systemPrompt 已独立携带全量上下文，无需拼进 user 消息
-    session.loopState = "running";
-    session.loopTurnPromise = loop
-      .runTurn(firstMessage)
-      .catch((err) => {
-        console.error(`[agent-loop] turn failed for ${workId}:`, err);
-      })
-      .finally(() => {
-        session.loopState = "idle";
-        session.idle = true;
-        persist();
-        this.scheduleAutoContinue(session);
-      });
-
-    return session;
   }
 
   /**
@@ -765,12 +840,13 @@ ${unattended
   private async sendMessageLocked(session: WsSession, text: string): Promise<boolean> {
     const workId = session.workId;
 
-    // API loop 路径：免 resume，直接续跑
+    // API loop 路径：免 resume，直接续跑;阶段已推进则先重解析路由重建 loop(P2 提速 A)
     if (session.loop) {
       if (session.loopState === "running") {
         session.loop.abortTurn();
         try { await session.loopTurnPromise; } catch { /* 忽略中断错误 */ }
       }
+      await this.refreshStageRouting(session);
       session.loopState = "running";
       session.idle = false;
       session.loopTurnPromise = session.loop
