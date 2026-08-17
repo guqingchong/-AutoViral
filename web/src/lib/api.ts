@@ -190,6 +190,8 @@ export interface WorkSummary {
   topicId?: number;
   templateId?: string;
   digitalHumanId?: string;
+  /** 全自动模式：批量按钮创建 = true（作品卡片 ⚡/🖐 标签数据源） */
+  autoMode?: boolean;
   /** 流水线各阶段状态（作品卡片实时进度条） */
   pipeline?: Array<{ key: string; name: string; status: string }>;
   /** 最近活动时间（步骤 started/completed 与 updatedAt 的最大值），进度三态数据源 */

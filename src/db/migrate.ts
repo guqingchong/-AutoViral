@@ -679,6 +679,16 @@ CREATE INDEX IF NOT EXISTS idx_asset_library_type ON asset_library(type);
 CREATE INDEX IF NOT EXISTS idx_asset_library_source ON asset_library(source);
 `,
   },
+  {
+    version: 23,
+    name: "works_auto_mode",
+    sql: `
+-- 全自动模式显式开关(2026-08-16 用户决策):模式由创建入口决定——
+-- 选题页「批量转为作品(自动流水线)」按钮创建的作品 auto_mode=1(无人值守),
+-- 其余入口 = 深度介入(逐步确认)。不再用模板/数字人选择推断模式。
+ALTER TABLE works ADD COLUMN auto_mode INTEGER NOT NULL DEFAULT 0;
+`,
+  },
 ];
 
 export function migrate(): void {

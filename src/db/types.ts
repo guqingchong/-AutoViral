@@ -45,6 +45,7 @@ export interface DbWork {
   asset_budget?: string;           // 成本档：eco（禁 AI 视频生成）| premium（迁移 v19）
   dual_output?: boolean;           // 双产物标记：短视频+图文同一作品双产物（迁移 v19）
   parent_work_id?: string;         // 图文子作品 → 短视频父作品（迁移 v20）
+  auto_mode?: boolean;             // 全自动模式：批量按钮创建=true，其余=深度介入（迁移 v23）
   created_at: string;
   updated_at: string;
 }

@@ -14,10 +14,11 @@ ffprobe -v error -show_entries format=duration,size -show_entries stream=width,h
 - 分辨率：竖屏1080x1920，横屏1920x1080
 - 编码：H.264 (libx264)
 - 帧率：≥24fps（推荐30fps）
-- 音频：AAC，44100Hz
+- 音频：AAC，44100Hz，**立体声（channels=2，单声道不达标）**
 - 时长：符合方案规划（±20%误差范围内）
 - 文件大小：合理范围内（不超过100MB/分钟）
 - 是否有音频轨（必须有！）
+- **output/quality-report.json 的检测对象必须是 output/final.mp4 本身**（看 videoPath 字段），且出具时间晚于 final.mp4 最后修改时间；针对模板分段/中间产物的 QC 报告一律视为无效
 
 **评分标准：**
 - 9-10: 所有技术参数完美达标
@@ -55,6 +56,7 @@ ffprobe -v error -show_entries format=duration,size -show_entries stream=width,h
 ### 4. 字幕质量 (subtitle_quality)
 - 字幕是否与画面同步？
 - 字幕位置是否合理（不遮挡主体）？
+- **单行字数是否超标（中文 ≤15 字/行）？抽 3 个长句时间点截帧核对：字幕不得超出画面左右边界（部分 ffmpeg 构建的 libass 无 CJK 断词，长行不换行会直接出框）**
 - 字幕是否清晰可读（大小、颜色、描边）？
 - 内容是否准确、无错别字？
 - 每行字数是否合理（15-20字以内）？
@@ -92,6 +94,9 @@ ffprobe -v error -show_entries format=duration,size -show_entries stream=width,h
 ## Critical 问题示例
 - 最终视频无音频轨
 - 最终视频无法播放（编码错误）
+- **output/final.mp4 不存在（评审时成片尚未产出，必须直接 fail——不得对分段产物评审放行）**
+- **quality-report.json 缺失、检测对象不是 final.mp4、或出具时间早于 final.mp4 最后修改时间**
+- **音轨为单声道或采样率非 44.1/48kHz（平台要求立体声）**
 - 画面出现黑边或黑屏段落
 - 时长严重偏离方案（误差>50%）
 - 缺少发布文案（publish-text.md不存在）
@@ -99,3 +104,5 @@ ffprobe -v error -show_entries format=duration,size -show_entries stream=width,h
 - BGM 盖过人声（人声不可懂）或响度实测严重偏离 -16~-14 LUFS
 - 开头 1 秒静音（播放事故）
 - 静态数据卡/图表镜头出现肉眼可见抖动（裸 zoompan 亚像素抖动）
+- **字幕单行超过 15 个汉字 / 超出画面左右边界（抽帧可见文字出框）**
+- **结构/流程/逻辑类镜头全用静态文字卡应付，未使用 code-scene 程序化动画（分镜含此类镜头时）**

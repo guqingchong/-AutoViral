@@ -39,12 +39,22 @@ export interface ReconcileResult {
   details: string[];
 }
 
-/** 检查作品 output/ 目录下是否已存在成片（文件名含 final 的视频），返回路径与 mtime */
+/** 会话存活检查（由 server/index.ts 注入，wsBridge.isWorkActive）。
+ *  规则1 对活跃会话的作品不得转正——agent 还在干活（刚写出 final.mp4、
+ *  尚未 advance 触发评审），对账抢先转正会跳过评审门（2026-08-16 f2c 事故） */
+let sessionAliveCheck: ((workId: string) => boolean) | null = null;
+export function initReconcile(check: (workId: string) => boolean): void {
+  sessionAliveCheck = check;
+}
+
+/** 检查作品 output/ 目录下是否已存在成片（final*.mp4），返回路径与 mtime。
+ *  注意必须以 final 开头：模板/分段渲染产物形如 job_<id>_final.mp4，
+ *  用 /final/i 宽松匹配会把分段误判为成片（2026-08-16 d34 被对账提前转正）。 */
 async function findFinalVideo(workId: string): Promise<{ path: string; mtimeMs: number } | undefined> {
   try {
     const outDir = join(dataDir, "works", workId, "output");
     const entries = await readdir(outDir);
-    const name = entries.find((f) => /\.(mp4|mov|webm)$/i.test(f) && /final/i.test(f));
+    const name = entries.find((f) => /\.(mp4|mov|webm)$/i.test(f) && /^final/i.test(f));
     if (!name) return undefined;
     const full = join(outDir, name);
     const st = await stat(full);
@@ -79,8 +89,27 @@ export async function reconcileWorkStates(trigger: "startup" | "periodic" = "per
 
     const pipeline = stepsToPipeline(w.id);
 
+    // ── 0. 孤儿评审重置（仅启动时）────────────────────────────────────
+    // 服务重启会杀死进行中的评审 CLI 进程，步骤永久卡在 evaluating；且
+    // startWorkSession 找当前步骤时跳过 evaluating，会话恢复会错选后续阶段
+    // （2026-08-16 d34：assets 评审被杀 → 恢复会话直接进 assembly → 对账误判转正）。
+    // 启动时所有 evaluating 定义上都是孤儿（评审进程随旧服务死亡），回退 active
+    // 等待 agent 重新推进、评审重跑。
+    if (trigger === "startup") {
+      let touched = false;
+      for (const s of Object.values(pipeline)) {
+        if ((s.status as string) === "evaluating") { s.status = "active"; touched = true; }
+      }
+      if (touched) {
+        await updateWork(w.id, { pipeline, status: deriveStatusFromPipeline(pipeline, w.status as WorkStatus) });
+        result.fixed++;
+        result.details.push(`${w.id} 孤儿评审重置 evaluating→active`);
+      }
+    }
+
     // ── 1. 组装完成转正 ─────────────────────────────────────────────
-    if (w.status === "assembling") {
+    // 活跃会话的作品跳过：agent 会自己 advance（触发评审），对账不抢跑
+    if (w.status === "assembling" && !sessionAliveCheck?.(w.id)) {
       const activeRender = listRenderJobs("running", w.id).length + listRenderJobs("pending", w.id).length;
       if (activeRender === 0) {
         // 关键时序判定：只当"成品产生于本轮 assembly 开始之后"才转正。
@@ -90,7 +119,9 @@ export async function reconcileWorkStates(trigger: "startup" | "periodic" = "per
           ? Date.parse(pipeline["assembly"].startedAt)
           : 0;
         const completedJob = listRenderJobs("completed", w.id, 5).find(
-          (j) => j.output_path && existsSync(j.output_path) && Date.parse(j.updated_at) >= assemblyStartedAt,
+          (j) => j.output_path && existsSync(j.output_path)
+            && /^final/i.test(j.output_path.split(/[\\/]/).pop() ?? "")
+            && Date.parse(j.updated_at) >= assemblyStartedAt,
         );
         const finalInDir = await findFinalVideo(w.id);
         const freshFinal = finalInDir && finalInDir.mtimeMs >= assemblyStartedAt ? finalInDir : undefined;

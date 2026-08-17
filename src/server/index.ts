@@ -34,7 +34,7 @@ import { recoverStuckJobs, startPublishCron } from "../services/publish-service.
 import { recoverStuckRenderJobs } from "../services/video-factory.js";
 import { startHealthLoop, stopHealthLoop } from "../services/instance-service.js";
 import { startH3HealthLoop, stopH3HealthLoop } from "../services/h3-instance-service.js";
-import { reconcileWorkStates } from "../services/reconcile.js";
+import { reconcileWorkStates, initReconcile } from "../services/reconcile.js";
 import { registerAllPublishers } from "../services/publishers/factory.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -173,6 +173,7 @@ export async function startServer(port: number): Promise<{ server: Server }> {
   // 回合间空窗误判为"假死"而重复 resume、产生孤儿会话(2026-08-06 根因)。
   const isSessionAlive = (id: string) => wsBridge.isWorkActive(id);
   initWorkQueue({ startWork: (id) => startWorkSession(id), isSessionAlive });
+  initReconcile(isSessionAlive);
   startRunner();
   startWatchdog({ isSessionAlive });
 
