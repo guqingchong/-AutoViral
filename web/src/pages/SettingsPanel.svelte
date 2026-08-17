@@ -38,6 +38,41 @@
   let showSecretKey = $state(false);
   let showOpenRouter = $state(false);
 
+  // ── 大模型直连(P1-T7,2026-08-17):三家 provider 卡片 ──
+  interface LlmProviderForm { apiKey: string; baseUrl: string; visionModel: string; enabled: boolean; }
+  const LLM_PROVIDER_META = [
+    { key: "deepseek", name: "DeepSeek", hint: "策划/合成/评审主力" },
+    { key: "kimi", name: "Kimi Coding Plan", hint: "调研(联网搜索)" },
+    { key: "glm", name: "GLM Coding Plan", hint: "视觉看图(glm-4v)" },
+  ];
+  const emptyLlmProviders = (): Record<string, LlmProviderForm> => ({
+    deepseek: { apiKey: "", baseUrl: "", visionModel: "", enabled: true },
+    kimi: { apiKey: "", baseUrl: "", visionModel: "", enabled: true },
+    glm: { apiKey: "", baseUrl: "", visionModel: "", enabled: true },
+  });
+  let llmProviders = $state<Record<string, LlmProviderForm>>(emptyLlmProviders());
+  let llmShowKey = $state<Record<string, boolean>>({});
+  let llmPing = $state<Record<string, { state: "idle" | "testing" | "ok" | "fail"; latencyMs?: number; error?: string }>>({});
+
+  async function pingLlmProvider(key: string) {
+    const p = llmProviders[key];
+    llmPing[key] = { state: "testing" };
+    try {
+      const res = await fetch("/api/llm/ping", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        // apiKey 为掩码回显(含 ***)时服务端自动回落到已保存的 key
+        body: JSON.stringify({ provider: key, baseUrl: p.baseUrl, apiKey: p.apiKey }),
+      });
+      const data = await res.json();
+      llmPing[key] = data.ok
+        ? { state: "ok", latencyMs: data.latencyMs }
+        : { state: "fail", latencyMs: data.latencyMs, error: data.error ?? `HTTP ${res.status}` };
+    } catch (err) {
+      llmPing[key] = { state: "fail", error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
   const modelOptions = [
     { value: "opus", label: "Claude Opus" },
     { value: "sonnet", label: "Claude Sonnet" },
@@ -66,6 +101,17 @@
         pexelsApiKey = data.pexelsApiKey ?? ""
         pixabayApiKey = data.pixabayApiKey ?? ""
         unsplashAccessKey = data.unsplashAccessKey ?? ""
+        // 大模型直连:GET 已做预设补全+key 掩码,直接铺进卡片
+        const lp = data.llm?.providers ?? {};
+        for (const meta of LLM_PROVIDER_META) {
+          const p = lp[meta.key] ?? {};
+          llmProviders[meta.key] = {
+            apiKey: p.apiKey ?? "",
+            baseUrl: p.baseUrl ?? "",
+            visionModel: p.visionModel ?? "",
+            enabled: p.enabled !== false,
+          };
+        }
       }
     } catch {
       // silently fail
@@ -98,6 +144,14 @@
           pixabayApiKey,
           unsplashAccessKey,
           memorySyncEnabled,
+          // llm 段整组提交;掩码回显(含 ***)的 key 服务端保留原值不覆盖
+          llm: {
+            providers: Object.fromEntries(
+              Object.entries(llmProviders).map(([k, p]) => [k, {
+                apiKey: p.apiKey, baseUrl: p.baseUrl, visionModel: p.visionModel, enabled: p.enabled,
+              }]),
+            ),
+          },
         }),
       });
       // 此前不检查 res.ok：HTTP 500 也静默通过，用户误以为已保存 —— 2026-07-21 根因
@@ -117,6 +171,16 @@
         .map(([name]) => name);
       if (mismatches.length > 0) {
         throw new Error(`${mismatches.join("、")} Key 未能写入，请重试或联系管理员`);
+      }
+      // llm key 回读校验:本地是新明文(非掩码回显)时,远端应回掩码且前缀一致
+      const llmMismatch = LLM_PROVIDER_META.filter((meta) => {
+        const local = llmProviders[meta.key].apiKey;
+        if (!local.trim() || local.includes("***")) return false;
+        const remote = verify.llm?.providers?.[meta.key]?.apiKey ?? "";
+        return !remote.includes("***") || !remote.startsWith(local.slice(0, 6));
+      }).map((meta) => meta.name);
+      if (llmMismatch.length > 0) {
+        throw new Error(`${llmMismatch.join("、")} Key 未能写入，请重试或联系管理员`);
       }
       saveMessageType = "success";
       const configured = keyChecks.filter(([, , remote]) => remote).map(([name]) => name);
@@ -271,6 +335,65 @@
                 </select>
               </label>
             </div>
+          </section>
+
+          <!-- 大模型直连(P1-T7):DeepSeek / Kimi / GLM 三家 provider -->
+          <section class="config-section">
+            <h3 class="section-label">大模型直连</h3>
+            <p class="section-hint">配置保存在 ~/.autoviral/config.yaml，打包分发到新电脑时拷贝该文件、在此填 key 即用。</p>
+            {#each LLM_PROVIDER_META as meta}
+              {@const ping = llmPing[meta.key]}
+              <div class="llm-card" class:llm-off={!llmProviders[meta.key].enabled}>
+                <div class="llm-card-head">
+                  <div class="llm-card-title">
+                    <span class="llm-card-name">{meta.name}</span>
+                    <span class="llm-card-hint">{meta.hint}</span>
+                  </div>
+                  <button
+                    class="toggle-switch"
+                    class:on={llmProviders[meta.key].enabled}
+                    onclick={() => llmProviders[meta.key].enabled = !llmProviders[meta.key].enabled}
+                    role="switch"
+                    aria-checked={llmProviders[meta.key].enabled}
+                    aria-label={`启用 ${meta.name}`}
+                  >
+                    <span class="toggle-thumb"></span>
+                  </button>
+                </div>
+                <label class="field-label">
+                  API Key
+                  <div class="input-row">
+                    <input
+                      type={llmShowKey[meta.key] ? "text" : "password"}
+                      class="field-input"
+                      bind:value={llmProviders[meta.key].apiKey}
+                      placeholder="sk-..."
+                    />
+                    <button class="toggle-vis" onclick={() => llmShowKey[meta.key] = !llmShowKey[meta.key]} aria-label="切换可见">
+                      {llmShowKey[meta.key] ? "隐藏" : "显示"}
+                    </button>
+                  </div>
+                </label>
+                <label class="field-label">
+                  Base URL
+                  <input type="text" class="field-input" bind:value={llmProviders[meta.key].baseUrl} placeholder="https://..." />
+                </label>
+                <label class="field-label">
+                  视觉模型（可选）
+                  <input type="text" class="field-input" bind:value={llmProviders[meta.key].visionModel} placeholder="如 glm-4v" />
+                </label>
+                <div class="llm-card-foot">
+                  <button class="ping-btn" disabled={ping?.state === "testing"} onclick={() => pingLlmProvider(meta.key)}>
+                    {ping?.state === "testing" ? "测试中..." : "测试连通性"}
+                  </button>
+                  {#if ping?.state === "ok"}
+                    <span class="ping-result ping-ok">✓ 连通 {ping.latencyMs}ms</span>
+                  {:else if ping?.state === "fail"}
+                    <span class="ping-result ping-fail" title={ping.error}>✗ {ping.error}</span>
+                  {/if}
+                </div>
+              </div>
+            {/each}
           </section>
 
           <!-- Creator Data Collection -->
@@ -538,6 +661,96 @@
     margin: 0;
     padding-bottom: 0.25rem;
     border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  }
+
+  .section-hint {
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    margin: 0;
+    line-height: 1.5;
+  }
+
+  /* 大模型直连卡片(P1-T7) */
+  .llm-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    padding: 0.75rem;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    background: rgba(255, 255, 255, 0.02);
+    transition: opacity 0.15s ease;
+  }
+
+  .llm-card.llm-off {
+    opacity: 0.45;
+  }
+
+  .llm-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .llm-card-title {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+  }
+
+  .llm-card-name {
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: var(--text);
+  }
+
+  .llm-card-hint {
+    font-size: 0.68rem;
+    color: var(--text-dim);
+  }
+
+  .llm-card-foot {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-height: 1.6rem;
+  }
+
+  .ping-btn {
+    padding: 0.35rem 0.7rem;
+    border-radius: 7px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text-secondary);
+    font-size: 0.72rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .ping-btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text);
+  }
+
+  .ping-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  .ping-result {
+    font-size: 0.7rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .ping-result.ping-ok {
+    color: #4ade80;
+  }
+
+  .ping-result.ping-fail {
+    color: #f87171;
   }
 
   .field-group {

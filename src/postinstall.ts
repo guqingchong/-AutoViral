@@ -124,6 +124,8 @@ async function main(): Promise<void> {
         execSync("npm install", {
           cwd: codeSceneDir,
           stdio: "inherit",
+          // 10 分钟超时:防止 npm 挂起把整个 postinstall 拖死(工程债 C1,2026-08-17)
+          timeout: 10 * 60 * 1000,
           env: { ...process.env, PUPPETEER_SKIP_DOWNLOAD: "true" },
         });
       }

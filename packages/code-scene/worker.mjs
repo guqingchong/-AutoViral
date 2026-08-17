@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { renderVideo } from "@revideo/renderer";
 
@@ -64,4 +64,7 @@ try {
 } catch (err) {
   console.error(JSON.stringify({ ok: false, error: String(err?.message ?? err) }));
   process.exit(1);
+} finally {
+  // 每任务的 generated project 文件是一次性产物,渲染结束(成败)即清理(工程债 C2,2026-08-17)
+  await rm(projectFile, { force: true }).catch(() => {});
 }
