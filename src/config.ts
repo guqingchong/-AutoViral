@@ -17,6 +17,35 @@ export interface HeygemTunnelConfig {
   remotePort: number;  // 实例内 HeyGem API 端口
 }
 
+// ── LLM 直连配置（2026-08-16 架构改造，docs/desigen/01 §3.6）─────────────────
+
+export interface LlmProviderConfig {
+  protocol: "anthropic" | "openai";
+  baseUrl: string;
+  apiKey: string;
+  /** 视觉模型（评审看图/模板克专用）；不配则该 provider 不可用于看图场景（配置校验期报错） */
+  visionModel?: string;
+  /** 启用开关（设置页「大模型直连」卡片,2026-08-17 P1-T7）；false 时该 provider 不参与路由，缺省视为启用 */
+  enabled?: boolean;
+}
+
+export interface LlmConfig {
+  /** providers 里的 key，裸模型名路由时使用 */
+  defaultProvider?: string;
+  /** 首期三家：deepseek / kimi / glm（均为 OpenAI 兼容协议） */
+  providers?: Record<string, LlmProviderConfig>;
+  /** 分阶段模型路由：值形如 "deepseek:deepseek-v4-pro" 或裸模型名（走 defaultProvider） */
+  models?: Partial<Record<"research" | "plan" | "assets" | "assembly" | "eval" | "script", string>>;
+  /** 可选价格表（元/百万 tokens），用于 llm_usage 成本估算：{ "deepseek:deepseek-v4-pro": {input:4.5, output:13.5, cacheRead:0.15} } */
+  priceTable?: Record<string, { input: number; output: number; cacheRead?: number }>;
+  guard?: {
+    maxStepsPerTurn?: number;    // 默认 200，防工具死循环
+    maxTurnMinutes?: number;     // 默认 30
+    dailyTokenBudget?: number;   // 成本熔断
+    bashBlocklist?: string[];    // bash 命令黑名单正则
+  };
+}
+
 /** SSH 隧道默认值：AutoDL 个人用户无公网代理权限，只能通过 SSH 隧道访问实例服务 */
 export const HEYGEM_TUNNEL_DEFAULTS: HeygemTunnelConfig = {
   host: "connect.nmb1.seetacloud.com",
@@ -48,6 +77,8 @@ export interface Config {
   model: string;
   /** 文案/脚本生成专用模型(默认 opus;批量链路的 article/script 三段式生成用,与 creator 会话 model 解耦) */
   scriptModel?: string;
+  /** LLM 直连（API agent loop）。未配置时维持 CLI 现状——零迁移成本 */
+  llm?: LlmConfig;
   jimeng: { accessKey: string; secretKey: string };
   openrouter?: { apiKey: string };
   minimax?: { apiKey: string; groupId?: string };
@@ -189,6 +220,24 @@ export async function loadConfig(): Promise<Config> {
       // 仅在 YAML 未配置时兜底：设置页可填 minimaxKey，若 env 永远优先，
       // 用户在设置页保存的 key 会被静默屏蔽（2026-08-04 设置页显性化修复）
       config.minimax = { apiKey: process.env.MINIMAX_API_KEY };
+    }
+    // LLM 直连 env 覆盖（2026-08-16）：同样遵守"YAML 优先、env 兜底"原则
+    if (process.env.AUTOVIRAL_LLM_API_KEY || process.env.AUTOVIRAL_LLM_BASE_URL) {
+      const key = config.llm?.defaultProvider ?? "deepseek";
+      const existing = config.llm?.providers?.[key];
+      config.llm = {
+        ...config.llm,
+        defaultProvider: key,
+        providers: {
+          ...config.llm?.providers,
+          [key]: {
+            protocol: existing?.protocol ?? "openai",
+            baseUrl: existing?.baseUrl ?? process.env.AUTOVIRAL_LLM_BASE_URL ?? "https://api.deepseek.com/v1",
+            apiKey: existing?.apiKey || (process.env.AUTOVIRAL_LLM_API_KEY ?? ""),
+            visionModel: existing?.visionModel,
+          },
+        },
+      };
     }
     if (process.env.EVERMEMOS_API_KEY) {
       if (!config.memory) {

@@ -6,7 +6,8 @@ import { promisify } from "node:util";
 import { join, extname, basename, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import yaml from "js-yaml";
-import { loadConfig, saveConfig, dataDir, getConfigDir, HEYGEM_TUNNEL_DEFAULTS, H3_TUNNEL_DEFAULTS, type AnalyticsSource, type HeygemTunnelConfig, type H3TunnelConfig } from "../config.js";
+import { loadConfig, saveConfig, dataDir, getConfigDir, HEYGEM_TUNNEL_DEFAULTS, H3_TUNNEL_DEFAULTS, type AnalyticsSource, type HeygemTunnelConfig, type H3TunnelConfig, type LlmConfig, type LlmProviderConfig } from "../config.js";
+import { PROVIDER_PRESETS } from "../llm/provider-keys.js";
 import { getDb } from "../db/connection.js";
 import { exportBackup, importBackup } from "../db/backup.js";
 import { migrateLegacyWorks } from "../db/migrate-legacy.js";
@@ -214,6 +215,76 @@ function parseAnalytics(body: Record<string, unknown>): import("../config.js").C
   };
 }
 
+// ── LLM 直连设置页(P1-T7,2026-08-17):apiKey 掩码/合并/连通性测试 ──
+
+const LLM_KEY_MASK = "***";
+
+/** apiKey 脱敏:前 6 + *** + 后 4;短 key 全掩码。前端凭 *** 识别"未改动" */
+function maskApiKey(key: string | undefined): string {
+  if (!key) return "";
+  return key.length > 10 ? `${key.slice(0, 6)}${LLM_KEY_MASK}${key.slice(-4)}` : LLM_KEY_MASK;
+}
+
+/**
+ * GET 呈现用:三家预设永远出现(未配置也给默认 baseUrl,设置页直接可填),
+ * 用户自定义的额外 provider 原样保留;apiKey 一律掩码,绝不明文出接口。
+ */
+function presentLlm(llm: LlmConfig | undefined): Record<string, unknown> {
+  const providers: Record<string, unknown> = {};
+  for (const [key, preset] of Object.entries(PROVIDER_PRESETS)) {
+    const o = llm?.providers?.[key];
+    providers[key] = {
+      baseUrl: o?.baseUrl ?? preset.baseUrl,
+      apiKey: maskApiKey(o?.apiKey),
+      visionModel: o?.visionModel ?? preset.visionModel ?? "",
+      enabled: o?.enabled !== false,
+    };
+  }
+  for (const [key, o] of Object.entries(llm?.providers ?? {})) {
+    if (!(key in providers)) {
+      providers[key] = { ...o, apiKey: maskApiKey(o.apiKey), enabled: o.enabled !== false };
+    }
+  }
+  return {
+    defaultProvider: llm?.defaultProvider ?? "deepseek",
+    models: llm?.models ?? {},
+    providers,
+  };
+}
+
+/**
+ * PUT 合并:llm 段整组更新,但——
+ * ① apiKey 含掩码标记 ***(设置页回显未改)时保留原值不覆盖;空串=显式清除
+ * ② providers 未提及的 key 原样保留(预设三家之外的自定义 provider 不被整组更新误删)
+ * ③ models/priceTable/guard 等其余字段未提交时保留(Phase 3 路由 UI 才接管)
+ */
+function mergeLlm(prev: LlmConfig | undefined, incoming: Partial<LlmConfig>): LlmConfig {
+  const providers: Record<string, LlmProviderConfig> = { ...(prev?.providers ?? {}) };
+  if (incoming.providers) {
+    for (const [key, p] of Object.entries(incoming.providers)) {
+      if (!p || typeof p !== "object") continue;
+      const old = providers[key];
+      providers[key] = {
+        protocol: "openai",
+        baseUrl: typeof p.baseUrl === "string" && p.baseUrl ? p.baseUrl : (old?.baseUrl ?? ""),
+        apiKey: typeof p.apiKey === "string"
+          ? (p.apiKey.includes(LLM_KEY_MASK) ? (old?.apiKey ?? "") : p.apiKey)
+          : (old?.apiKey ?? ""),
+        visionModel: typeof p.visionModel === "string" ? (p.visionModel || undefined) : old?.visionModel,
+        enabled: typeof p.enabled === "boolean" ? p.enabled : old?.enabled,
+      };
+    }
+  }
+  return {
+    ...prev,
+    ...(incoming.defaultProvider !== undefined ? { defaultProvider: incoming.defaultProvider } : {}),
+    ...(incoming.models !== undefined ? { models: incoming.models } : {}),
+    ...(incoming.priceTable !== undefined ? { priceTable: incoming.priceTable } : {}),
+    ...(incoming.guard !== undefined ? { guard: incoming.guard } : {}),
+    providers,
+  };
+}
+
 // GET /api/config
 apiRoutes.get("/api/config", async (c) => {
   const config = await loadConfig();
@@ -249,8 +320,38 @@ apiRoutes.get("/api/config", async (c) => {
     pexelsApiKey: config.pexels?.apiKey ?? "",
     pixabayApiKey: config.pixabay?.apiKey ?? "",
     unsplashAccessKey: config.unsplash?.accessKey ?? "",
+    // LLM 直连:覆盖 ...config 里的明文 llm 段,apiKey 掩码+预设补全(P1-T7)
+    llm: presentLlm(config.llm),
     ...flattenAnalytics(config),
   });
+});
+
+// POST /api/llm/ping — 连通性测试(P1-T7):拉 models 列表,返回延迟;支持未保存的表单值直接测
+apiRoutes.post("/api/llm/ping", async (c) => {
+  const body = await c.req.json<{ provider?: string; baseUrl?: string; apiKey?: string }>().catch(() => ({} as { provider?: string; baseUrl?: string; apiKey?: string }));
+  const key = body.provider ?? "deepseek";
+  const config = await loadConfig();
+  const saved = config.llm?.providers?.[key];
+  const baseUrl = (body.baseUrl || saved?.baseUrl || PROVIDER_PRESETS[key]?.baseUrl || "").replace(/\/+$/, "");
+  const apiKey = body.apiKey && !body.apiKey.includes(LLM_KEY_MASK) ? body.apiKey : (saved?.apiKey ?? "");
+  if (!baseUrl) return c.json({ ok: false, error: "未配置 baseUrl" }, 400);
+  if (!apiKey) return c.json({ ok: false, error: "未配置 apiKey——请先填写或保存" }, 400);
+  const started = Date.now();
+  try {
+    const res = await fetch(`${baseUrl}/models`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(15_000),
+    });
+    const latencyMs = Date.now() - started;
+    if (!res.ok) {
+      const text = (await res.text()).slice(0, 200);
+      return c.json({ ok: false, latencyMs, error: `HTTP ${res.status}: ${text}` });
+    }
+    const data = await res.json().catch(() => ({} as { data?: unknown[] }));
+    return c.json({ ok: true, latencyMs, models: Array.isArray(data?.data) ? data.data.length : undefined });
+  } catch (err) {
+    return c.json({ ok: false, latencyMs: Date.now() - started, error: err instanceof Error ? err.message : String(err) });
+  }
 });
 
 /** 校验前端提交的隧道候选数组:逐条补默认值,丢弃缺 host/port 的无效行 */
@@ -367,9 +468,19 @@ apiRoutes.put("/api/config", async (c) => {  const body = await c.req.json<Recor
     if (!config.unsplash) config.unsplash = { accessKey: "" };
     config.unsplash.accessKey = body.unsplashAccessKey as string;
   }
+  // LLM 直连段(设置页「大模型直连」):整组提交、掩码 key 保留原值,见 mergeLlm
+  const llmChanged = body.llm !== undefined;
+  if (llmChanged) {
+    config.llm = mergeLlm(config.llm, (body.llm ?? {}) as Partial<LlmConfig>);
+  }
   config.analytics = parseAnalytics(body);
 
   await saveConfig(config);
+  if (llmChanged) {
+    // provider 实例缓存了旧 baseUrl/apiKey,必须清缓存否则新配置要重启才生效
+    const { _resetProviders } = await import("../llm/registry.js");
+    _resetProviders();
+  }
   // 调研开关/频率变更后立即重排 cron，无需重启服务
   if (body.researchEnabled !== undefined || body.researchCron !== undefined) {
     const { startTrendScheduler } = await import("../services/scheduler.js");
@@ -384,7 +495,8 @@ apiRoutes.put("/api/config", async (c) => {  const body = await c.req.json<Recor
     heygemApiToken: (config.heygem?.apiToken ?? "").length,
     heygemBaseUrl: (config.heygem?.baseUrl ?? "").length,
   });
-  return c.json(config);
+  // llm 段同样掩码返回,apiKey 明文不出接口(P1-T7)
+  return c.json({ ...config, llm: presentLlm(config.llm) });
 });
 
 // ---------------------------------------------------------------------------
@@ -1063,16 +1175,22 @@ apiRoutes.get("/api/works/:id/quality", async (c) => {
       return c.json(JSON.parse(await readFile(reportPath, "utf-8")));
     } catch { /* 报告损坏时重新跑 */ }
   }
-  // 报告不存在(旧作品)→ 找到成片现场跑一次(取最新修改的 final)
+  // 报告不存在(旧作品)→ 找到成片现场跑一次。
+  // 2026-08-16 修正：优先精确匹配 final.mp4（真成片）——原逻辑只找 *_final.mp4，
+  // 会把 job_<id>_final.mp4 模板分段当成果片，QC 报告打在 8s 分段上（f2c/d34 连踩）
   const outDir = join(dataDir, "works", workId, "output");
-  const finals = existsSync(outDir)
-    ? (await readdir(outDir)).filter((f) => f.endsWith("_final.mp4"))
-    : [];
-  if (finals.length === 0) return c.json({ error: "无成片可检查" }, 404);
-  const withMtime = await Promise.all(finals.map(async (f) => ({ f, m: (await stat(join(outDir, f))).mtimeMs })));
-  withMtime.sort((a, b) => b.m - a.m);
+  const entries = existsSync(outDir) ? await readdir(outDir) : [];
+  const exactFinal = entries.find((f) => /^final\.(mp4|mov|webm)$/i.test(f));
+  const segments = entries.filter((f) => f.endsWith("_final.mp4"));
+  if (!exactFinal && segments.length === 0) return c.json({ error: "无成片可检查" }, 404);
+  let target = exactFinal;
+  if (!target) {
+    const withMtime = await Promise.all(segments.map(async (f) => ({ f, m: (await stat(join(outDir, f))).mtimeMs })));
+    withMtime.sort((a, b) => b.m - a.m);
+    target = withMtime[0].f;
+  }
   const { runQualityGate } = await import("../services/quality-gate.js");
-  const report = await runQualityGate(join(outDir, withMtime[0].f));
+  const report = await runQualityGate(join(outDir, target));
   await writeFile(reportPath, JSON.stringify(report, null, 2), "utf-8").catch(() => {});
   return c.json(report);
 });
@@ -1725,6 +1843,9 @@ export async function startWorkSession(id: string, extraInstruction?: string): P
   const hasDigitalHuman = !!work.digitalHumanId;
   // 已有 done 数字人任务 = 口播已渲染（可能来自批量渲染阶段），素材准备步骤直接取现成产物
   const digitalHumanDone = hasDigitalHuman && dhJobsRepo.listJobs(id).some((j) => j.status === "done");
+  // 模式判定(2026-08-16 用户决策)：全自动开关 = 创建入口(批量按钮落 auto_mode=1)。
+  // 不再用模板/数字人推断——深度介入作品也可以选模板,批量作品也可以不选模板。
+  const isUnattended = !!work.autoMode;
 
   const prompt = [
     `你是一个内容创作助手。你正在帮助用户创作: "${work.title}" (类型: ${work.type})。`,
@@ -1752,11 +1873,12 @@ export async function startWorkSession(id: string, extraInstruction?: string): P
     extraInstruction ?? "",
     ``,
     `当前步骤: "${stepName}"（key: ${currentStepKey}）。流水线阶段顺序: ${stepKeys.join(" → ")}。`,
-    hasTemplate || hasDigitalHuman
+    isUnattended
       ? [
           // 如实声明用户预设了哪些(此前无论是否选数字人都声称"已设定好模板和数字人",
           // 导致 agent 在未选数字人时自行绑定 avatar —— 2026-08-14 bug)
-          `**自动化模式**：用户已预先设定好${[hasTemplate ? "模板" : "", hasDigitalHuman ? "数字人" : ""].filter(Boolean).join("和")}，请直接执行当前步骤，不要询问用户确认。`,
+          `**自动化模式（无人值守）**：用户已预先设定好${[hasTemplate ? "模板" : "", hasDigitalHuman ? "数字人" : ""].filter(Boolean).join("和")}，请直接执行当前步骤，不要询问用户确认。`,
+          `**自主拍板铁律**：本作品全程无真人在线。所有创意决策——立场角度、钩子版本(多版本自行择优落地,不要列出来让人挑)、标题与封面、素材来源、配乐——均由你按 skills 的推荐方案自行决定并立即执行。禁止向用户提问、罗列备选等用户选择、或停下来等确认;系统提示与 skill 中"请用户确认/等用户确认"类规则对本作品一律不适用。`,
           `完成当前步骤后，必须调用以下命令推进流水线（把 NEXT_STEP 替换为下一阶段 key）：`,
           `curl -X POST http://localhost:3271/api/works/${id}/pipeline/advance -H "Content-Type: application/json" -d '{"completedStep":"${currentStepKey}","nextStep":"NEXT_STEP"}'`,
           `推进后系统会自动给你发送继续指令，请接着执行下一阶段，如此循环直到最后一个阶段完成。`,
@@ -1829,12 +1951,12 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
       }
     }
 
-    const isAutoMode = !!(work.templateId || work.digitalHumanId);
+    const isAutoMode = !!work.autoMode;
     const autoModeDirective = isAutoMode
       ? [
           ``,
           `## AUTOMATED MODE`,
-          `This work is running in automated mode (template: ${work.templateId ?? "N/A"}, digital human: ${work.digitalHumanId ?? "N/A"}).`,
+          `This work is running in automated mode (batch auto-pipeline).`,
           `DO NOT ask the user to choose from options. Automatically select the best option and proceed.`,
           `DO NOT wait for user confirmation between steps. Execute each step completely and move to the next one automatically.`,
           `After completing this step, automatically trigger the next pipeline step via:`,
@@ -2411,6 +2533,18 @@ async function waitForCreatorIdle(workId: string, timeoutMs = 120_000): Promise<
   const session = wsBridge.getSession(workId);
   if (!session) return;
 
+  // API loop 路径：等当前回合的 promise 结束
+  if (session.loopTurnPromise && session.loopState === "running") {
+    log("info", "api", "eval_waiting_for_creator", workId, { via: "loop" });
+    const start = Date.now();
+    await Promise.race([
+      session.loopTurnPromise.catch(() => {}),
+      new Promise<void>((r) => setTimeout(r, timeoutMs)),
+    ]);
+    log("info", "api", "eval_creator_idle", workId, { waitedMs: Date.now() - start });
+    return;
+  }
+
   // If creator CLI is still running, wait for it to exit
   if (session.cliProcess) {
     log("info", "api", "eval_waiting_for_creator", workId, {});
@@ -2523,6 +2657,18 @@ async function runEvaluation(workId: string, completedStep: string, nextStep?: s
       if (freshWork) {
         freshWork.pipeline[completedStep].status = "done";
         freshWork.pipeline[completedStep].completedAt = new Date().toISOString();
+        // 与 advance 普通路径一致：自动补齐 pending 的前序阶段(可选步骤跳过场景)。
+        // active/evaluating 的前序阶段不可能出现——advance 入口守卫已拦截越级推进
+        const keys = Object.keys(freshWork.pipeline);
+        const idx = keys.indexOf(completedStep);
+        for (let i = 0; i < idx; i++) {
+          const s = freshWork.pipeline[keys[i]];
+          if (s.status === "pending") {
+            s.status = "done";
+            s.completedAt = s.completedAt ?? new Date().toISOString();
+            log("info", "api", "pipeline_auto_complete_skipped", workId, { step: keys[i], via: "eval-pass" });
+          }
+        }
         if (nextStep && freshWork.pipeline[nextStep]) {
           freshWork.pipeline[nextStep].status = "active";
           freshWork.pipeline[nextStep].startedAt = new Date().toISOString();
@@ -2592,7 +2738,12 @@ async function runEvaluation(workId: string, completedStep: string, nextStep?: s
       const freshWork = await getWork(workId);
       if (freshWork) {
         freshWork.pipeline[completedStep].status = "active";
-        await storeUpdateWork(workId, { pipeline: freshWork.pipeline });
+        // 必须重派生 status：f2c 事故中该步曾被评审旁路标 done → status=reviewing,
+        // fail 只回退 pipeline 不重算,导致评审页(reviewing)与作品页(active)矛盾
+        await storeUpdateWork(workId, {
+          pipeline: freshWork.pipeline,
+          status: deriveStatusFromPipeline(freshWork.pipeline, freshWork.status),
+        });
         broadcastPipelineUpdate(workId, freshWork.pipeline);
       }
 
@@ -2715,9 +2866,32 @@ apiRoutes.post("/api/works/:id/pipeline/advance", async (c) => {
 
     const { completedStep, nextStep } = body;
     if (!completedStep) return c.json({ error: "completedStep is required" }, 400);
+    if (!work.pipeline[completedStep]) return c.json({ error: `Unknown step: ${completedStep}` }, 400);
+
+    // ── 一致性守卫(2026-08-16 f2c 事故)─────────────────────────────────
+    // 守卫1:评审进行中的阶段重复 advance 会绕过评审直接标 done(evaluating 态
+    // 会掉进下方普通推进分支)。必须显式拒绝,让 agent 等待评审结果。
+    if (work.pipeline[completedStep].status === "evaluating") {
+      return c.json({ error: `阶段「${work.pipeline[completedStep].name}」评审进行中，重复推进将绕过评审。请等待评审结果（通过后会自动推进）。` }, 409);
+    }
+    // 守卫2:越级推进禁令。前序阶段处于 active/evaluating(进行中)时不允许推进
+    // 后续阶段——f2c 曾在 assets=active 时推进 assembly 并过审,造成
+    // assets=active + assembly=done + status=reviewing 的三视图不一致。
+    // pending(未开始)的前序阶段维持原有"自动补齐"语义(兼容可选步骤跳过)。
+    {
+      const keys = Object.keys(work.pipeline);
+      const idx = keys.indexOf(completedStep);
+      for (let i = 0; i < idx; i++) {
+        const st = work.pipeline[keys[i]].status;
+        if (st === "active" || st === "evaluating" || st === "eval_blocked") {
+          return c.json({ error: `前序阶段「${work.pipeline[keys[i]].name}」仍在进行中(${st})，禁止越级推进。请先完成并推进该阶段。` }, 400);
+        }
+      }
+    }
 
     // ── Evaluation gate ─────────────────────────────────────────────────
-    if (work.evaluationMode && work.pipeline[completedStep]?.status !== "evaluating") {
+    // (evaluating 态的重入已被上方守卫1拦截,此处恒为非评审中)
+    if (work.evaluationMode) {
       work.pipeline[completedStep].status = "evaluating" as any;
       await storeUpdateWork(id, { pipeline: work.pipeline, status: deriveStatusFromPipeline(work.pipeline, work.status) });
       broadcastPipelineUpdate(id, work.pipeline);
@@ -3340,9 +3514,10 @@ export function buildTemplateSection(templateId?: string): string {
       }
     }
     lines.push(`- 执行规则:`);
-    lines.push(`  1. 本作品视觉结构必须严格按此模板,禁止自由发挥版式/配色/动效`);
-    lines.push(`  2. 完整模板 JSON: curl -s http://localhost:3271/api/templates/${t.id}`);
-    lines.push(`  3. 视频合成(assembly)步骤必须调用模板渲染引擎 POST /api/works/{workId}/render,把素材映射进变量槽位,禁止手写 ffmpeg 自由合成`);
+    lines.push(`  1. 模板覆盖"文字信息卡"类镜头(标题卡/章节卡/要点卡/总结卡)：这些镜头的版式/配色/动效严格按模板,禁止自由发挥`);
+    lines.push(`  2. 模板管不了也不该管的镜头,按素材路由走专门管线并独立渲染：数据→/api/assets/chart|data-card；结构/流程/逻辑→/api/assets/code-scene(程序化动画,优先于静态卡)；原文证据→snapshot-card；实拍/氛围→Pexels或AI生成。这些分段与模板分段按分镜顺序 ffmpeg concat 混排——混排是标准做法,不算"自由合成"`);
+    lines.push(`  3. 模板分段必须调用模板渲染引擎 POST /api/works/{workId}/render 产出,把素材映射进变量槽位；混排成片的视觉统一靠全片统一调色(见合成阶段调色规范),而不是全片只用模板`);
+    lines.push(`  4. 完整模板 JSON: curl -s http://localhost:3271/api/templates/${t.id}`);
   }
   return lines.join("\n");
 }
@@ -3455,6 +3630,8 @@ async function runBatchConvert(
           assetBudget: assetBudget as any,
           dualOutput,
           evaluationMode: body.evaluationMode ?? true,
+          // 批量按钮 = 全自动模式唯一开关(2026-08-16 用户决策)
+          autoMode: true,
         });
         item.workId = work.id;
 
@@ -3734,9 +3911,17 @@ apiRoutes.get("/api/h3/instance/status", async (c) => {
 apiRoutes.get("/api/autodl/reminders", async (c) => {
   interface NeedItem { id: string; title: string; certainty?: "confirmed" | "possible" }
   const h3NeededBy: NeedItem[] = [];
+  const h3Upcoming: NeedItem[] = [];
   const heygemNeededBy: NeedItem[] = [];
+  const heygemUpcoming: NeedItem[] = [];
   try {
     const works = worksRepo.listWorks();
+    // 时机门(2026-08-16):只有临近素材阶段的进行中作品才催开机。
+    // 此前把排队中/分镜未产出的作品也列为 possible,用户看到横幅就提前开机,
+    // 但串行 runner 下后面的作品几小时后才到素材阶段——GPU 空烧。
+    const runningIds = new Set(
+      workQueueRepo.listQueue().filter((i) => i.status === "running").map((i) => i.workId),
+    );
     for (const w of works) {
       if (w.type !== "short-video") continue;
       if (w.status === "published" || w.status === "draft") continue;
@@ -3744,10 +3929,14 @@ apiRoutes.get("/api/autodl/reminders", async (c) => {
       const steps = worksRepo.getWorkSteps(w.id);
       const assetsStep = steps.find((s) => s.step_key === "assets");
       if (assetsStep && assetsStep.status === "done") continue;
+      const planStep = steps.find((s) => s.step_key === "plan");
+      // 临近素材 = 素材阶段进行中，或分镜已完成且作品正在 runner 上执行
+      const nearAssets = assetsStep?.status === "active"
+        || (planStep?.status === "done" && runningIds.has(w.id));
 
       if (w.digital_human_id) {
         const done = dhJobsRepo.listJobs(w.id).some((j) => j.status === "done");
-        if (!done) heygemNeededBy.push({ id: w.id, title: w.title });
+        if (!done) (nearAssets ? heygemNeededBy : heygemUpcoming).push({ id: w.id, title: w.title });
       }
 
       const sbPath = join(dataDir, "works", w.id, "plan", "storyboard.md");
@@ -3755,10 +3944,12 @@ apiRoutes.get("/api/autodl/reminders", async (c) => {
         try {
           const sb = readFileSync(sbPath, "utf-8");
           if (/ai_video|i2v|local-h3|H3|AI\s*生(成)?视频/i.test(sb)) {
-            h3NeededBy.push({ id: w.id, title: w.title, certainty: "confirmed" });
+            // 分镜已确认需要 H3：临近素材阶段才催开机，否则列入 upcoming 预告
+            (nearAssets ? h3NeededBy : h3Upcoming).push({ id: w.id, title: w.title, certainty: "confirmed" });
           }
         } catch { /* 读取失败按无需求处理 */ }
-      } else if (w.asset_source && ["ai", "auto", "smart"].includes(w.asset_source)) {
+      } else if (nearAssets && w.asset_source && ["ai", "auto", "smart"].includes(w.asset_source)) {
+        // 分镜未产出但临近素材：按素材来源预估(possible)
         h3NeededBy.push({ id: w.id, title: w.title, certainty: "possible" });
       }
     }
@@ -3767,8 +3958,8 @@ apiRoutes.get("/api/autodl/reminders", async (c) => {
   }
   const [h3, heygem] = await Promise.all([getH3InstanceView(), getInstanceView()]);
   return c.json({
-    h3: { state: h3.state, consoleUrl: h3.consoleUrl, neededBy: h3NeededBy },
-    heygem: { state: heygem.state, consoleUrl: heygem.consoleUrl, neededBy: heygemNeededBy },
+    h3: { state: h3.state, consoleUrl: h3.consoleUrl, neededBy: h3NeededBy, upcoming: h3Upcoming },
+    heygem: { state: heygem.state, consoleUrl: heygem.consoleUrl, neededBy: heygemNeededBy, upcoming: heygemUpcoming },
   });
 });
 

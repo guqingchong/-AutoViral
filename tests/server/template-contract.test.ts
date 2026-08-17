@@ -49,7 +49,10 @@ describe("buildTemplateSection 模板契约注入", () => {
     expect(out).toContain("结构摘要");
     expect(out).toContain("bg [video]");
     expect(out).toContain("POST /api/works/{workId}/render");
-    expect(out).toContain("禁止手写 ffmpeg");
+    // 2026-08-16 混合制契约：模板只管文字信息卡镜头，其余走专门管线混排
+    expect(out).toContain("文字信息卡");
+    expect(out).toContain("code-scene");
+    expect(out).toContain("concat 混排");
   });
 
   it("图文模板 → LayoutSpec 摘要 + dual-output 自动套用说明", () => {
