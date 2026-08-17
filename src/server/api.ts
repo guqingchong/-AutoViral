@@ -2819,7 +2819,7 @@ function buildEvalPrompt(work: Work, step: string, attempt: number, historyText:
 - **作品目录: ${workDir}**
 
 ## 评审标准
-请阅读 skills/content-evaluator/criteria/${step}.md 获取该阶段的详细评审标准。如果文件不存在，请使用通用的内容质量标准进行评审。
+请阅读评审标准文件(绝对路径): ${join(homedir(), ".claude", "skills", "content-evaluator", "criteria", `${step}.md`)}。如果文件不存在，请使用通用的内容质量标准进行评审，不要花时间寻找该文件。
 
 ## 创作产出摘要
 ${historyText.slice(0, 6000) || "(无文本产出记录)"}
