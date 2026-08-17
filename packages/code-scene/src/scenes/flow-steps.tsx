@@ -1,6 +1,7 @@
-import { makeScene2D, Rect, Txt, Circle } from "@revideo/2d";
+import { makeScene2D, Node, Rect, Txt, Circle } from "@revideo/2d";
 import { chain, createRef, easeInOutCubic, easeOutCubic, waitFor } from "@revideo/core";
 import { getSceneTheme } from "../themes";
+import { DESIGN_W, DESIGN_H, designScale } from "../layout";
 
 export interface FlowStepsParams {
   title: string;                                  // ≤12 字
@@ -11,7 +12,7 @@ export interface FlowStepsParams {
 /** 流程步骤推进:标题淡入 → 步骤自右滑入 → 当前步脉冲强调逐步推进 */
 export default function makeFlowSteps(params: FlowStepsParams) {
   const theme = getSceneTheme(params.theme);
-  const H = 1920;
+  const H = DESIGN_H;
   const steps = params.steps.slice(0, 5);
   const n = steps.length;
   const areaH = 1150;
@@ -20,17 +21,20 @@ export default function makeFlowSteps(params: FlowStepsParams) {
 
   return makeScene2D("flow-steps", function* (view) {
     view.fill(theme.background);
+    // 内容挂在按实际分辨率缩放的容器下,布局数学保持在设计空间(1080x1920)
+    const root = createRef<Node>();
+    view.add(<Node ref={root} scale={designScale(view.size())} />);
     const title = createRef<Txt>();
-    view.add(<Txt ref={title} text={params.title} fontSize={72} fontWeight={700} fill={theme.textColor} y={-H / 2 + 160} opacity={0} />);
+    root().add(<Txt ref={title} text={params.title} fontSize={72} fontWeight={700} fill={theme.textColor} y={-H / 2 + 160} opacity={0} />);
 
     const cards = steps.map(() => createRef<Rect>());
     steps.forEach((s, i) => {
       const y = topY + i * stepGap;
       const accent = theme.palette[i % theme.palette.length];
-      view.add(
+      root().add(
         <Rect ref={cards[i]} width={920} height={stepGap - 40} radius={24}
           fill={"#ffffff10"} stroke={accent} lineWidth={3}
-          position={[1080, y]} opacity={0}>
+          position={[DESIGN_W, y]} opacity={0}>
           <Circle size={96} fill={accent} x={-360}>
             <Txt text={String(i + 1)} fontSize={52} fontWeight={700} fill={"#ffffff"} />
           </Circle>

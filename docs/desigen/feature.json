@@ -1,0 +1,711 @@
+{
+  "feature": "llm-direct-architecture",
+  "title": "AutoViral LLM 直连架构改造（废弃 claude CLI，进程内 agent loop）",
+  "version": "2.3",
+  "created": "2026-08-16",
+  "status": "pending-approval",
+  "docs": {
+    "design": "docs/desigen/01-LLM直连架构-详细设计方案.md",
+    "plan": "docs/desigen/02-LLM直连架构-详细实施方案.md"
+  },
+  "decisions": {
+    "providers": [
+      "deepseek（文本/工具）",
+      "kimi-coding-plan（research+搜索+视觉备用）",
+      "glm-coding-plan（仅视觉 glm-4v）"
+    ],
+    "modelRouting": "分阶段路由（plan/assembly/eval=强模型，research/script/assets=便宜模型，视觉=各家 vision 模型）",
+    "cliPolicy": "彻底抛弃 CLI，Phase 4 删除全部 spawn 路径，不留 fallback",
+    "hardConstraint": "结构压缩（P2-T2）不就位，autoMode 批量不解禁"
+  },
+  "phases": [
+    {
+      "id": 0,
+      "name": "LLM 基建",
+      "estimateDays": 2,
+      "status": "done"
+    },
+    {
+      "id": 1,
+      "name": "交互式作品 creator 会话",
+      "estimateDays": 3,
+      "status": "pending"
+    },
+    {
+      "id": 2,
+      "name": "评审+无人值守+机器门禁",
+      "estimateDays": 3,
+      "status": "pending"
+    },
+    {
+      "id": 3,
+      "name": "全量切换+模型路由+设置页",
+      "estimateDays": 3,
+      "status": "pending"
+    },
+    {
+      "id": 4,
+      "name": "trends 会话+删 CLI",
+      "estimateDays": 1,
+      "status": "pending"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "P0-T1",
+      "phase": 0,
+      "title": "类型与配置段",
+      "files": {
+        "create": [
+          "src/llm/types.ts"
+        ],
+        "modify": [
+          "src/config.ts"
+        ]
+      },
+      "steps": [
+        "写 src/llm/types.ts（与设计方案 §3.1 逐字一致）",
+        "config.ts 加 LlmConfig（Config 加 llm? 字段，默认不落）",
+        "loadConfig 加 AUTOVIRAL_LLM_API_KEY/BASE_URL env 覆盖",
+        "npm run build 通过 + 现有测试不红"
+      ],
+      "acceptance": [
+        "tsc 编译通过"
+      ],
+      "deps": [],
+      "status": "done"
+    },
+    {
+      "id": "P0-T2",
+      "phase": 0,
+      "title": "OpenAI 兼容 provider（DeepSeek/Kimi/GLM 三家）",
+      "files": {
+        "create": [
+          "src/llm/openai-compat.ts",
+          "src/llm/provider-keys.ts"
+        ],
+        "modify": []
+      },
+      "steps": [
+        "provider-keys.ts 三家预设（baseUrl/visionModel）",
+        "chatStream：chat/completions SSE 解析 + 消息转换（tool_calls/image_url）",
+        "流式 tool_calls 分片累积完整后发 tool_use 事件",
+        "usage 事件（含 prompt_cache_hit_tokens→cacheReadTokens）",
+        "reasoning_content→thinking_delta（GLM）",
+        "chatJson：非流式 + extractJsonFromText + withRetry",
+        "Kimi $web_search 接入（Phase 1 交付）：builtin_function 注入 + loop 映射 WebSearch 事件 + 冒烟实测返回结构"
+      ],
+      "acceptance": [
+        "mock fetch 单测覆盖 SSE 断行/tool_calls 累积/usage"
+      ],
+      "deps": [
+        "P0-T1"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "P0-T3",
+      "phase": 0,
+      "title": "重试与模型路由",
+      "files": {
+        "create": [
+          "src/llm/retry.ts",
+          "src/llm/registry.ts"
+        ],
+        "modify": []
+      },
+      "steps": [
+        "withRetry（3 次 [5s,15s,30s]，4xx noRetry）",
+        "resolveModelFor（'provider:model' 前缀解析，未配置报可读错误）",
+        "getProvider 懒构造缓存"
+      ],
+      "acceptance": [
+        "retry/registry 单测绿"
+      ],
+      "deps": [
+        "P0-T1"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "P0-T4",
+      "phase": 0,
+      "title": "单测 + 三家真实冒烟",
+      "files": {
+        "create": [
+          "tests/llm/openai-compat.test.ts",
+          "tests/llm/retry.test.ts",
+          "tests/llm/registry.test.ts",
+          "scripts/llm-smoke.ts",
+          "docs/desigen/smoke-results.md"
+        ],
+        "modify": []
+      },
+      "steps": [
+        "mock fetch 单测（SSE 跨 chunk 断行/tool_calls 累积/429 重试/400 直抛/abort）",
+        "llm-smoke.ts：三家各跑文本流式/单工具回合/vision 看图，打印 usage 与缓存命中",
+        "冒烟结果记录 smoke-results.md"
+      ],
+      "acceptance": [
+        "npx vitest run tests/llm 全绿",
+        "三家冒烟全通"
+      ],
+      "deps": [
+        "P0-T2",
+        "P0-T3"
+      ],
+      "status": "done",
+      "note": "单测 7/7 绿；三家冒烟完成：deepseek 文本/工具✅视觉✗(API 无)、kimi-for-coding 三项全✅、glm-4v 视觉✅（smoke-results.md）"
+    },
+    {
+      "id": "P1-T1",
+      "phase": 1,
+      "title": "工具执行器（文件类）",
+      "files": {
+        "create": [
+          "src/agent/tools/index.ts",
+          "src/agent/tools/read.ts",
+          "src/agent/tools/write.ts",
+          "src/agent/tools/edit.ts",
+          "src/agent/tools/glob.ts",
+          "src/agent/tools/grep.ts",
+          "tests/agent/tools.test.ts"
+        ],
+        "modify": []
+      },
+      "steps": [
+        "ToolExecutor/ToolContext 接口 + buildCreatorTools/buildEvaluatorTools（评审只读子集）",
+        "read：超 20k 截断；图片扩展名→ImageBlock；路径逃逸断言（允许根：workDir/dataDir/~/.claude/skills/~/.autoviral）",
+        "write：mkdir -p；edit：old_string 唯一匹配校验",
+        "glob 自实现 **/* 递归；grep 优先 spawn rg 否则 Node 递归",
+        "单测：路径逃逸拒绝/图片 ImageBlock/edit 唯一性"
+      ],
+      "acceptance": [
+        "tests/agent/tools.test.ts 绿"
+      ],
+      "deps": [
+        "P0-T4"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "P1-T2",
+      "phase": 1,
+      "title": "Bash 执行器（Windows）",
+      "files": {
+        "create": [
+          "src/agent/tools/bash.ts",
+          "tests/agent/bash.test.ts"
+        ],
+        "modify": []
+      },
+      "steps": [
+        "探测 bash.exe（Git Bash 路径+where，缓存）；有则 bash -lc，无则 cmd /c",
+        "120s 超时（可覆写）；输出 >30k 截头 10k 留尾 15k",
+        "bashBlocklist 正则拦截",
+        "实测清单：ffmpeg ebur128/curl 本地 API/caption_generate.py/管道重定向组合"
+      ],
+      "acceptance": [
+        "skills 真实命令样本在 Git Bash 语义下全通"
+      ],
+      "deps": [
+        "P1-T1"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "P1-T3",
+      "phase": 1,
+      "title": "AgentLoop 核心 + 会话持久化",
+      "files": {
+        "create": [
+          "src/agent/loop.ts",
+          "src/agent/session-store.ts",
+          "tests/agent/loop.test.ts"
+        ],
+        "modify": []
+      },
+      "steps": [
+        "runTurn 工具迭代循环；AskUserQuestion→记录 pendingAskToolUseId 并结束回合(awaiting_user)，用户下条输入作为该 tool_use 的 tool_result 回填（保持配对）；无关新指令则降级为新 user 消息+补'未回答'tool_result",
+        "三道闸（200 步/30min/同工具同参 3 连）→LoopGuardError",
+        "agent-session.json 读写 + 3s 防抖 + 损坏全新重试 1 次",
+        "单测：mock provider 3 工具回合，断言 messages 序列/turn 边界/守卫"
+      ],
+      "acceptance": [
+        "tests/agent/loop.test.ts 绿"
+      ],
+      "deps": [
+        "P1-T2"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "P1-T4",
+      "phase": 1,
+      "title": "ws-compat 事件映射",
+      "files": {
+        "create": [
+          "src/agent/ws-compat.ts"
+        ],
+        "modify": [
+          "src/ws-bridge.ts"
+        ]
+      },
+      "steps": [
+        "ws-bridge.ts:928-975 turn 收尾抽成 finalizeTurn 导出",
+        "bindLoopToSession 按设计方案 §4.5 表逐事件实现（text_delta 50ms 合批；tool_result 30k 截断）",
+        "对照测试：loop 事件序列→WS 事件名/字段与 CLI 时代逐字一致"
+      ],
+      "acceptance": [
+        "事件映射对照测试绿"
+      ],
+      "deps": [
+        "P1-T3"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "P1-T5",
+      "phase": 1,
+      "title": "WsBridge 切换 + api.ts 适配",
+      "files": {
+        "create": [],
+        "modify": [
+          "src/ws-bridge.ts",
+          "src/server/api.ts"
+        ]
+      },
+      "steps": [
+        "WsSession 加 loop/loopState/loopTurnPromise/agentSessionId；isWorkActive 加 loopState",
+        "createSession/sendMessage 改走 loop（llm 未配置→可读报错）；buildSystemPrompt 原样作 system",
+        "killSession 加 abortTurn；断连宽限改 abortTurn",
+        "waitForCreatorIdle 加 loopTurnPromise 分支",
+        "验收 6 项：WS 序列一致/kill 还原续聊/AskUserQuestion 接续理解重点验证/CLI-API A/B 对比/bash 实测/Kimi 搜索可用+单部 token 成本实测粗算"
+      ],
+      "acceptance": [
+        "交互式作品 research→plan 全流程走通",
+        "A/B 对比无明显劣化",
+        "research 阶段真实搜索可用；单部成本粗算完成"
+      ],
+      "deps": [
+        "P1-T4"
+      ],
+      "status": "done",
+      "note": "live e2e 通过（2026-08-17 00:05）：交互式作品会话走 API loop（session_create_api），DeepSeek v4-pro 正确响应、深度介入模式提问行为正确、agent-session.json/chat.jsonl 双写正常"
+    },
+    {
+      "id": "P1-T6",
+      "phase": 1,
+      "title": "工程债 C1/C2",
+      "files": {
+        "create": [],
+        "modify": [
+          "packages/code-scene/*",
+          "tests/server/*"
+        ]
+      },
+      "steps": [
+        "code-scene postinstall 加 timeout",
+        "渲染测试串行化",
+        "generated 临时文件渲染后清理",
+        "布局 1080x1920 硬编码参数化",
+        "3 个测试 flake（api-bench/api-digital-human/dual-output）修复或 quarantine"
+      ],
+      "acceptance": [
+        "C1/C2 项全部关闭"
+      ],
+      "deps": [],
+      "status": "done"
+    },
+    {
+      "id": "P1-T7",
+      "phase": 1,
+      "title": "设置页 llm provider 段（首期显性化，用户指定）",
+      "files": {
+        "create": [],
+        "modify": [
+          "src/server/api.ts",
+          "web/src/pages/SettingsPanel.svelte"
+        ]
+      },
+      "steps": [
+        "GET /api/config 返回 llm.providers 三家（apiKey 掩码 sk-***）",
+        "PUT /api/config llm 段整组更新（掩码值原样保留不覆盖）",
+        "SettingsPanel 新增「大模型直连」段：DeepSeek/Kimi/GLM 三卡片（apiKey 密码框/baseUrl 默认值/visionModel/启用开关/连通性测试按钮）",
+        "配置落 ~/.autoviral/config.yaml；文档注明该文件即打包迁移单元"
+      ],
+      "acceptance": [
+        "设置页可配三家 key 并实测连通性",
+        "新电脑只需填 key 即用"
+      ],
+      "deps": [
+        "P0-T3"
+      ],
+      "status": "done"
+    },
+    {
+      "id": "P2-T1",
+      "phase": 2,
+      "title": "评审 loop（含 vision 路由）",
+      "files": {
+        "create": [
+          "src/agent/evaluator.ts"
+        ],
+        "modify": [
+          "src/ws-bridge.ts"
+        ]
+      },
+      "steps": [
+        "parseEvalResultText 抽共享（ws-bridge.ts:1205-1227）",
+        "runApiEvaluator：独立 loop、全新 messages、评审只读工具集",
+        "ImageBlock 回合路由 visionModel；无 visionModel 配置校验期报错",
+        "验收：评审日志确认 ImageBlock 进请求；eval_blocked 3 轮流复现"
+      ],
+      "acceptance": [
+        "assets 评审实际看图",
+        "3 轮不过→eval_blocked→队列 failed 路径通"
+      ],
+      "deps": [
+        "P1-T5"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "P2-T2",
+      "phase": 2,
+      "title": "结构压缩 + autoMode 解禁",
+      "files": {
+        "create": [
+          "src/agent/compact.ts"
+        ],
+        "modify": [
+          "src/agent/loop.ts"
+        ]
+      },
+      "steps": [
+        "estimateTokens（CJK×0.6+其他×0.25）",
+        "maybeCompact：超 120k 留 messages[0]+最近 8 条，中段确定性摘要+steps 阶段摘要注入",
+        "autoMode 作品允许走 API loop",
+        "验收：autoMode 端到端（含人为 fail→打回→修复→pass）"
+      ],
+      "acceptance": [
+        "autoMode 作品出片 ≤40min 对照 8-16 基线"
+      ],
+      "deps": [
+        "P2-T1"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "P2-T3",
+      "phase": 2,
+      "title": "机器门禁（A1/A2/B2）",
+      "files": {
+        "create": [],
+        "modify": [
+          "src/server/api.ts",
+          "src/services/quality-gate.ts"
+        ]
+      },
+      "steps": [
+        "assertAssemblyDeliverables：final.mp4/publish-text.md/QC 针对成片且 mtime 晚于成片/字幕 ≤15 字且 CPS≤8，缺一 400",
+        "quality-gate 响度改 ebur128 实测（I∈[-16,-14]、TP≤-1.5），废弃 volumedetect mean",
+        "单测：缺 publish-text 的 advance 被 400"
+      ],
+      "acceptance": [
+        "门禁单测绿",
+        "缺件作品无法进评审"
+      ],
+      "deps": [
+        "P2-T2"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "P2-T4",
+      "phase": 2,
+      "title": "配额防护（A3）+ reconcile 回归（A4）",
+      "files": {
+        "create": [],
+        "modify": [
+          "src/services/work-queue.ts",
+          "src/agent/loop.ts",
+          "tests/server/reconcile.test.ts"
+        ]
+      },
+      "steps": [
+        "QuotaExhaustedError 冒泡；tick 捕获→running 项 paused+30min 指数回退试探，不烧 resumeAttempts",
+        "reconcile 会话感知回归用例：活跃会话+final.mp4→不转正"
+      ],
+      "acceptance": [
+        "配额错误不再烧 attempts",
+        "回归测试绿"
+      ],
+      "deps": [
+        "P2-T2"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "P3-T1",
+      "phase": 3,
+      "title": "六个 CLI runner 切换（含审查补全）",
+      "files": {
+        "create": [],
+        "modify": [
+          "src/services/llm-json.ts",
+          "src/services/template-clone.ts",
+          "src/services/template-research.ts",
+          "src/services/trend-research.ts",
+          "src/server/api.ts",
+          "src/test-runner.ts",
+          "src/test-evaluator.ts"
+        ]
+      },
+      "steps": [
+        "runJsonPrompt→chatJson（spawn 分支删除）",
+        "runVisionCli→chatStream+ImageBlock",
+        "runResearchCli（模板调研学习）→chatJson",
+        "trend-research collectTrends（定时趋势调研）→chatJson+Kimi $web_search",
+        "api.ts runCliBrief（趋势 fallback）→chatJson",
+        "test-runner/test-evaluator（测试辅助）→chatJson（统一切换不豁免）"
+      ],
+      "acceptance": [
+        "文案/脚本生成通",
+        "模板克隆双平台各通一个（顺带 C3）"
+      ],
+      "deps": [
+        "P2-T1"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "P3-T2",
+      "phase": 3,
+      "title": "模型路由生效 + usage 记账熔断",
+      "files": {
+        "create": [
+          "src/services/llm-usage.ts"
+        ],
+        "modify": [
+          "src/agent/loop.ts",
+          "src/db/migrate.ts"
+        ]
+      },
+      "steps": [
+        "迁移 v24：llm_usage 表（ts/work_id/stage/provider/model/tokens/cache_read/cost_yuan）",
+        "chatStream 完成落账；价格表 config 可配",
+        "日累计超 dailyLimitYuan→队列 paused+广播错误"
+      ],
+      "acceptance": [
+        "usage 日志确认各阶段命中配置模型",
+        "熔断触发一次实测"
+      ],
+      "deps": [
+        "P2-T2"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "P3-T3",
+      "phase": 3,
+      "title": "设置页六阶段模型路由（provider 管理已提前到 P1-T7）",
+      "files": {
+        "create": [],
+        "modify": [
+          "web/src/pages/SettingsPanel.svelte",
+          "web/src/App.svelte",
+          "web/src/pages/Explore.svelte",
+          "web/src/pages/Works.svelte"
+        ]
+      },
+      "steps": [
+        "六阶段模型下拉（选项从 /api/config llm.providers 动态生成）",
+        "替换四处 opus/sonnet/haiku 硬编码"
+      ],
+      "acceptance": [
+        "设置页配置保存生效并重载 provider"
+      ],
+      "deps": [
+        "P3-T2"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "P3-T4",
+      "phase": 3,
+      "title": "B1 数据回流评估表",
+      "files": {
+        "create": [
+          "src/services/feedback-loop.ts"
+        ],
+        "modify": [
+          "src/db/migrate.ts"
+        ]
+      },
+      "steps": [
+        "迁移 v25：topic_scores 表",
+        "发布 48h 抓三率（复用 analytics-collector）→写回 topic-scorecard 权重",
+        "验收：三率回流有数据"
+      ],
+      "acceptance": [
+        "scorecard 权重被真实三率更新"
+      ],
+      "deps": [],
+      "status": "pending"
+    },
+    {
+      "id": "P4-T1",
+      "phase": 4,
+      "title": "trends 会话平移",
+      "files": {
+        "create": [],
+        "modify": [
+          "src/agent/ws-compat.ts",
+          "src/ws-bridge.ts"
+        ]
+      },
+      "steps": [
+        "search_query/search_result/analyzing/research_done 事件序列在 loop 复刻（ws-bridge.ts:771-804 过滤逻辑平移）"
+      ],
+      "acceptance": [
+        "趋势调研全流程走 API loop"
+      ],
+      "deps": [
+        "P3-T1"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "P4-T2",
+      "phase": 4,
+      "title": "删除 CLI + 总验收",
+      "files": {
+        "create": [],
+        "modify": [
+          "src/ws-bridge.ts",
+          "src/services/llm-json.ts"
+        ]
+      },
+      "steps": [
+        "删除全部 9 处 CLI 调用（ws-bridge×2+resolveClaudeCommand/llm-json/template-clone/template-research/trend-research/api.ts runCliBrief/test-runner/test-evaluator）+ cliSessionId 停用",
+        "rg \"claude\" src/ scripts/ tests/ 只剩注释与 fixture",
+        "全量 npx vitest run + autoMode 批量作品端到端总验收"
+      ],
+      "acceptance": [
+        "总验收 6 条全过（≤40min/≤20元/门禁全过/A-B 不劣化/测试绿/无 CLI 残留）"
+      ],
+      "deps": [
+        "P4-T1"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "P1-T8",
+      "phase": 1,
+      "title": "Kimi $web_search builtin_function 两段协议支持(验收暴露缺口,用户批准补齐)",
+      "files": {
+        "create": [
+          "tests/llm/builtin-search.test.ts",
+          "scripts/kimi-search-probe.ts"
+        ],
+        "modify": [
+          "src/llm/types.ts",
+          "src/llm/openai-compat.ts",
+          "src/llm/provider-keys.ts",
+          "src/agent/loop.ts",
+          "src/ws-bridge.ts"
+        ]
+      },
+      "steps": [
+        "ToolDef/ToolUseBlock/ToolResultBlock 加 builtin/rawArguments/name 字段",
+        "openai-compat:builtin_function 映射+流式解析+回填逐字序列化",
+        "loop:builtinTools 合并下发+内置工具回填不本地执行",
+        "ws-bridge:按 preset.builtinSearchTool 挂载",
+        "live 探针实证搜索注入"
+      ],
+      "acceptance": [
+        "tests/llm 3 例绿",
+        "kimi-search-probe live 通过(inputTokens 显著增长+真实热点内容)"
+      ],
+      "deps": [
+        "P1-T3"
+      ],
+      "status": "done"
+    }
+  ],
+  "backlog": [
+    {
+      "id": "A1",
+      "title": "三件齐机器门禁",
+      "mergedInto": "P2-T3"
+    },
+    {
+      "id": "A2",
+      "title": "QC 响度 ebur128 实测",
+      "mergedInto": "P2-T3"
+    },
+    {
+      "id": "A3",
+      "title": "配额 403 队列防护",
+      "mergedInto": "P2-T4"
+    },
+    {
+      "id": "A4",
+      "title": "reconcile 抢跑回归测试",
+      "mergedInto": "P2-T4",
+      "note": "代码已修 8-16"
+    },
+    {
+      "id": "B1",
+      "title": "数据回流评估表",
+      "mergedInto": "P3-T4"
+    },
+    {
+      "id": "B2",
+      "title": "字幕 CPS 检查",
+      "mergedInto": "P2-T3"
+    },
+    {
+      "id": "B3",
+      "title": "color-director",
+      "mergedInto": null,
+      "note": "skills 二期，本次不做"
+    },
+    {
+      "id": "B4",
+      "title": "爆款裂变/评论区预埋",
+      "mergedInto": null,
+      "note": "产品二期"
+    },
+    {
+      "id": "C1",
+      "title": "code-scene 四项推迟项",
+      "mergedInto": "P1-T6"
+    },
+    {
+      "id": "C2",
+      "title": "3 个测试 flake",
+      "mergedInto": "P1-T6"
+    },
+    {
+      "id": "C3",
+      "title": "小红书克隆实机验证",
+      "mergedInto": "P3-T1",
+      "note": "需用户扫码 5 分钟"
+    },
+    {
+      "id": "C4",
+      "title": "AutoDL /etc/autodl.sh 自启验证",
+      "mergedInto": null,
+      "note": "下次实例重启时验证"
+    },
+    {
+      "id": "C5",
+      "title": "打包分发私有镜像+部署文档",
+      "mergedInto": null,
+      "note": "单独排期"
+    }
+  ],
+  "reviewNotes": "2026-08-16 DeepSeek 审查通过并修订：9处CLI清单补全（trend-research/api.ts runCliBrief/test-runner/test-evaluator 纳入 P3-T1）；视觉评审全程 vision 模型禁热切换；AskUserQuestion 改 tool_result 配对回填；R2/R6 升危；Kimi $web_search 提前到 Phase 1；Phase 1 增加 token 成本实测；v2.2 用户指定：provider 接口地址+API key 设置页显性化提前到 Phase 1（P1-T7），面向打包分发到其他电脑；P3-T3 缩为六阶段模型路由 UI；v2.3 冒烟实证修订：DeepSeek 公开 API 无视觉（v4-vision 不存在，400）；Kimi Coding Plan 端点 api.kimi.com/coding/v1（模型 kimi-for-coding，文本/工具/视觉三通）；GLM glm-4v 为视觉主力（符合用户 GLM 仅视觉约束）"
+}

@@ -6,7 +6,7 @@
  * spawn 渲染、质量门禁、资产登记。
  */
 import { spawn } from "node:child_process";
-import { writeFile, mkdir } from "node:fs/promises";
+import { writeFile, mkdir, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -130,6 +130,9 @@ async function doRender(input: CodeSceneInput): Promise<CodeSceneResult> {
     await runWorker(specPath);
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : String(err), code: err instanceof WorkerTimeout ? "TIMEOUT" : "RENDER_FAILED" };
+  } finally {
+    // spec 是一次性输入,渲染结束即清理,避免污染用户可见的 assets 目录(工程债 C2,2026-08-17)
+    rm(specPath, { force: true }).catch(() => {});
   }
   if (!existsSync(outputPath)) {
     return { success: false, error: "worker 完成但未产出文件", code: "RENDER_FAILED" };
