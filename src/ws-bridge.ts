@@ -26,6 +26,7 @@ import { listSharedAssets } from "./shared-assets.js";
 import { MemoryClient } from "./memory.js";
 import { syncMessage } from "./memory-sync.js";
 import { parseEvalResultText } from "./agent/evaluator.js";
+import { isQuotaErrorText, reportQuotaExhausted } from "./services/quota-guard.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -414,7 +415,7 @@ ${unattended
       try { existing.cliProcess.kill("SIGTERM"); } catch { /* dead */ }
     }
 
-    // LLM 直连：llm.providers 已配置且非 autoMode → API agent loop（Phase 1）
+    // LLM 直连：llm.providers 已配置 → API agent loop（P2-T2 起含 autoMode）
     if (await this.useApiDriver(workId)) {
       logBridge("session_create_api", workId, { model });
       return this.createSessionApi(workId, initialPrompt, model);
@@ -486,15 +487,15 @@ ${unattended
   // ── LLM 直连（API agent loop）路径，2026-08-17 Phase 1 ─────────────────────
 
   /**
-   * 是否走 API loop：llm.providers 已配置 且 作品非 autoMode（无人值守批量
-   * 在 Phase 2 结构压缩就位前仍走 CLI——硬性顺序约束）。
+   * 是否走 API loop：llm.providers 已配置即走。
+   * P2-T2(2026-08-17)起 autoMode 解禁——结构压缩(maybeCompact)+三道闸就位,
+   * 无人值守规则由 buildSystemPrompt 的 isUnattended 段注入(与 CLI 同一来源)。
    */
   private async useApiDriver(workId: string): Promise<boolean> {
     try {
       const config = await loadConfig();
       if (!config.llm?.providers || Object.keys(config.llm.providers).length === 0) return false;
-      const work = await getWork(workId);
-      return !work?.autoMode;
+      return true;
     } catch {
       return false;
     }
@@ -1118,6 +1119,8 @@ ${unattended
       const text = data.toString();
       if (text.trim()) {
         stderrTail = (stderrTail + text).slice(-800);
+        // A3 配额防护:CLI 报 usage limit/quota → 全局冷却(2026-08-16 撞墙事件)
+        if (isQuotaErrorText(text)) reportQuotaExhausted("cli");
         this.broadcastToBrowsers(session.workId, {
           event: "cli_stderr",
           data: { text },
