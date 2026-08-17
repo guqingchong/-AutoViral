@@ -71,7 +71,8 @@ describe("builtin_function(Kimi $web_search)协议", () => {
       { role: "user", content: [{ type: "tool_result", tool_use_id: "tool_1", name: "$web_search", content: SEARCH_ARGS }] },
     ];
     const p = new OpenAICompatProvider("kimi", { baseUrl: "https://x/v1", apiKey: "k" });
-    await p.chatStream({ model: "m", system: "s", messages, tools: [], maxTokens: 100 }, () => {});
+    // 本会话仍挂载该内置工具 → 保持 builtin_function
+    await p.chatStream({ model: "m", system: "s", messages, tools: [{ name: "$web_search", builtin: true, description: "d", input_schema: {} }], maxTokens: 100 }, () => {});
 
     const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
     const assistantMsg = sent.messages.find((m: any) => m.role === "assistant");
@@ -80,6 +81,24 @@ describe("builtin_function(Kimi $web_search)协议", () => {
     const toolMsg = sent.messages.find((m: any) => m.role === "tool");
     expect(toolMsg.name).toBe("$web_search");
     expect(toolMsg.content).toBe(SEARCH_ARGS);
+  });
+
+  it("跨 provider 恢复:当前请求未挂载内置工具时 builtin 降级为 function(deepseek 方言不接受 builtin_function)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(sseStream([JSON.stringify({ choices: [{ delta: { content: "继续" }, finish_reason: "stop" }] })]), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const messages: AgentMessage[] = [
+      { role: "assistant", content: [{ type: "tool_use", id: "tool_1", name: "$web_search", input: JSON.parse(SEARCH_ARGS), builtin: true, rawArguments: SEARCH_ARGS }] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "tool_1", name: "$web_search", content: SEARCH_ARGS }] },
+    ];
+    const p = new OpenAICompatProvider("deepseek", { baseUrl: "https://x/v1", apiKey: "k" });
+    await p.chatStream({ model: "deepseek-v4-pro", system: "s", messages, tools: [], maxTokens: 100 }, () => {});
+
+    const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
+    const assistantMsg = sent.messages.find((m: any) => m.role === "assistant");
+    expect(assistantMsg.tool_calls[0].type).toBe("function");
   });
 
   it("loop:builtin 工具不本地执行,arguments 逐字回填后继续回合", async () => {
