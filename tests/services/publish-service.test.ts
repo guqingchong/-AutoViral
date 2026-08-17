@@ -564,8 +564,12 @@ describe("publish-service", () => {
     expect(result1.jobs).toHaveLength(1);
     expect(result2.jobs).toHaveLength(1);
 
-    // Wait for both to settle
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    // Wait for both to settle — 轮询确定性等待,替代固定 100ms sleep
+    // (全量并行时 CPU 竞争会让第二个任务错过窗口,2026-08-17 flake 实证)
+    const settleDeadline = Date.now() + 5000;
+    while (executionOrder.length < 4 && Date.now() < settleDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
 
     // The first job must complete before the second starts (serialized per account)
     expect(executionOrder).toEqual(["start-1", "end-1", "start-2", "end-2"]);

@@ -109,6 +109,16 @@ export function createLoopEventSink(session: WsSession, bridge: WsBridge, opts: 
         flushText();
         bridge.finalizeTurn(session, ev.resultText ?? "");
         break;
+      case "vision_route":
+        flushThink();
+        flushText();
+        bridge.pushBlock(
+          session,
+          { type: "thinking", text: `[视觉路由] 含图片回合 → ${ev.text}`, collapsed: true, source, timestamp: now() } as ChatBlock,
+          "assistant_thinking",
+          { workId: session.workId, text: `[视觉路由] 含图片回合 → ${ev.text}`, source },
+        );
+        break;
       case "error":
         flushThink();
         flushText();

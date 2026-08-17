@@ -2622,7 +2622,19 @@ async function runEvaluation(workId: string, completedStep: string, nextStep?: s
   // Always spawn a fresh evaluator session (no --resume) so it reads the latest files
   // from disk without relying on cached file content from prior eval rounds.
   try {
-    const evalResult = await wsBridge.spawnEvaluator(session, evalPrompt);
+    // P2-T1:创作者走 API loop 的作品,评审也走 API loop(独立 AgentLoop+视觉路由);
+    // CLI 会话(autoMode 批量,P2-T2 前)维持 CLI 评审
+    const evalResult = session.loop
+      ? await (await import("../agent/evaluator.js")).runApiEvaluator({
+          workId,
+          step: completedStep,
+          evalPrompt,
+          config: await loadConfig(),
+          workDir,
+          session,
+          bridge: wsBridge,
+        })
+      : await wsBridge.spawnEvaluator(session, evalPrompt);
     evalResult.step = completedStep;
     evalResult.attempt = attempt;
     evalResult.timestamp = new Date().toISOString();

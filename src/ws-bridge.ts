@@ -25,6 +25,7 @@ import { getWork, updateWork, saveStepHistory, loadStepHistory, saveWorkChat, lo
 import { listSharedAssets } from "./shared-assets.js";
 import { MemoryClient } from "./memory.js";
 import { syncMessage } from "./memory-sync.js";
+import { parseEvalResultText } from "./agent/evaluator.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -1328,29 +1329,8 @@ ${unattended
               }
               const resultText = typeof msg.result === "string" && msg.result ? msg.result : turnText;
 
-              // Parse eval result JSON from response
-              let evalResult: EvalResult;
-              try {
-                // Try extracting JSON from markdown code block first
-                const jsonMatch = resultText.match(/```json\s*([\s\S]*?)\s*```/);
-                if (jsonMatch) {
-                  evalResult = JSON.parse(jsonMatch[1]);
-                } else {
-                  // Try parsing entire text as JSON
-                  evalResult = JSON.parse(resultText);
-                }
-              } catch {
-                // Fallback: if we can't parse JSON, create a default pass result
-                evalResult = {
-                  step: session.evalStep ?? "unknown",
-                  attempt: 1,
-                  verdict: "pass" as const,
-                  scores: {},
-                  issues: [],
-                  suggestions: [],
-                  timestamp: new Date().toISOString(),
-                };
-              }
+              // Parse eval result JSON from response(CLI/API 共用同一解析,P2-T1 抽出)
+              const evalResult: EvalResult = parseEvalResultText(resultText, session.evalStep ?? "unknown");
 
               // Persist chat
               saveWorkChat(session.workId, { blocks: session.messageHistory }).catch(() => {});

@@ -57,12 +57,25 @@ function toOpenAiMessages(system: string, messages: AgentMessage[]): Record<stri
       const toolResults = m.content.filter((b): b is ToolResultBlock => b.type === "tool_result");
       const rest = m.content.filter((b) => b.type !== "tool_result");
       for (const tr of toolResults) {
+        const contentArr = typeof tr.content === "string" ? null : tr.content;
         out.push({
           role: "tool",
           tool_call_id: tr.tool_use_id,
           ...(tr.name ? { name: tr.name } : {}),
-          content: typeof tr.content === "string" ? tr.content : flattenBlocks(tr.content),
+          content: contentArr ? flattenBlocks(contentArr) : (tr.content as string),
         });
+        // tool 角色消息不能携带图片(OpenAI 协议)——图片块拆成紧随的 user 消息,
+        // 否则视觉模型永远看不到工具返回的图(P2-T1 评审看图的关键路径)
+        const images = contentArr?.filter((b): b is ImageBlock => b.type === "image") ?? [];
+        if (images.length) {
+          out.push({
+            role: "user",
+            content: [
+              { type: "text", text: "[上述工具调用返回的图片内容]" },
+              ...images.map((img) => ({ type: "image_url", image_url: { url: `data:${img.mediaType};base64,${img.base64}` } })),
+            ],
+          });
+        }
       }
       if (rest.length) {
         out.push({ role: "user", content: toOpenAiUserContent(rest) });

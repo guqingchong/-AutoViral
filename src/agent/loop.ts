@@ -32,6 +32,7 @@ export interface LoopEvent {
     | "tool_result"
     | "turn_start"
     | "turn_complete"
+    | "vision_route"
     | "error";
   text?: string;
   toolName?: string;
@@ -49,6 +50,9 @@ export interface AgentLoopDeps {
   tools: ToolExecutorMap;
   /** 服务端执行的内置工具(如 Kimi $web_search)——随请求下发,调用时按平台协议回填 arguments */
   builtinTools?: ToolDef[];
+  /** 视觉路由(P2-T1):消息含图片时该回合改用此 provider+model(评审看图;glm-4v 实测不支持 tools,优先 kimi) */
+  visionProvider?: LlmProvider;
+  visionModel?: string;
   workDir: string;
   onLoopEvent: (ev: LoopEvent) => void;
   guard?: {
@@ -109,9 +113,20 @@ export class AgentLoop {
           return { resultText: "", stopReason: "aborted" };
         }
 
-        const { stopReason, assistant } = await this.deps.provider.chatStream(
+        // 视觉路由:消息里出现图片(Read 读图/工具返回图)且配置了视觉模型 → 本回合走视觉模型
+        const hasImage = this.messages.some((m) =>
+          m.content.some((b) =>
+            b.type === "image" ||
+            (b.type === "tool_result" && Array.isArray(b.content) && b.content.some((x) => x.type === "image"))));
+        const useVision = hasImage && !!this.deps.visionProvider && !!this.deps.visionModel;
+        if (useVision) {
+          console.log(`[agent-loop] vision route: ${this.deps.visionModel}(图片进请求)`);
+          this.deps.onLoopEvent({ type: "vision_route", text: this.deps.visionModel });
+        }
+
+        const { stopReason, assistant } = await (useVision ? this.deps.visionProvider! : this.deps.provider).chatStream(
           {
-            model: this.deps.model,
+            model: useVision ? this.deps.visionModel! : this.deps.model,
             system: this.deps.systemPrompt,
             messages: this.messages,
             tools: [
