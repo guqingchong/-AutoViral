@@ -25,7 +25,7 @@ export default function makeFlowSteps(params: FlowStepsParams) {
     const root = createRef<Node>();
     view.add(<Node ref={root} scale={designScale(view.size())} />);
     const title = createRef<Txt>();
-    root().add(<Txt ref={title} text={params.title} fontSize={72} fontWeight={700} fill={theme.textColor} y={-H / 2 + 160} opacity={0} />);
+    root().add(<Txt fontFamily="Noto Sans CJK SC" ref={title} text={params.title} fontSize={72} fontWeight={700} fill={theme.textColor} y={-H / 2 + 160} opacity={0} />);
 
     const cards = steps.map(() => createRef<Rect>());
     steps.forEach((s, i) => {
@@ -36,10 +36,10 @@ export default function makeFlowSteps(params: FlowStepsParams) {
           fill={"#ffffff10"} stroke={accent} lineWidth={3}
           position={[DESIGN_W, y]} opacity={0}>
           <Circle size={96} fill={accent} x={-360}>
-            <Txt text={String(i + 1)} fontSize={52} fontWeight={700} fill={"#ffffff"} />
+            <Txt fontFamily="Noto Sans CJK SC" text={String(i + 1)} fontSize={52} fontWeight={700} fill={"#ffffff"} />
           </Circle>
-          <Txt text={s.title} fontSize={52} fontWeight={700} fill={theme.textColor} x={0} y={s.desc ? -28 : 0} textAlign={"left"} width={560} />
-          {s.desc ? <Txt text={s.desc} fontSize={32} fill={theme.subTextColor} x={0} y={36} textAlign={"left"} width={560} /> : null}
+          <Txt fontFamily="Noto Sans CJK SC" text={s.title} fontSize={52} fontWeight={700} fill={theme.textColor} x={0} y={s.desc ? -28 : 0} textAlign={"left"} width={560} />
+          {s.desc ? <Txt fontFamily="Noto Sans CJK SC" text={s.desc} fontSize={32} fill={theme.subTextColor} x={0} y={36} textAlign={"left"} width={560} /> : null}
         </Rect>,
       );
     });
