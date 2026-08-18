@@ -30,13 +30,13 @@ export default function makeStructureGrowth(params: StructureGrowthParams) {
     const root = createRef<Node>();
     view.add(<Node ref={root} scale={designScale(view.size())} />);
     const title = createRef<Txt>();
-    root().add(<Txt ref={title} text={params.title} fontSize={72} fontWeight={700} fill={theme.textColor} y={-H / 2 + 160} opacity={0} />);
+    root().add(<Txt fontFamily="Noto Sans CJK SC" ref={title} text={params.title} fontSize={72} fontWeight={700} fill={theme.textColor} y={-H / 2 + 160} opacity={0} />);
 
     const center = createRef<Rect>();
     root().add(
       <Rect ref={center} width={360} height={160} radius={24} fill={theme.palette[0]}
         position={[centerPos.x, centerPos.y]} scale={0} shadowBlur={40} shadowColor={theme.palette[0] + "aa"}>
-        <Txt text={params.center} fontSize={56} fontWeight={700} fill={"#ffffff"} />
+        <Txt fontFamily="Noto Sans CJK SC" text={params.center} fontSize={56} fontWeight={700} fill={"#ffffff"} />
       </Rect>,
     );
 
@@ -51,10 +51,10 @@ export default function makeStructureGrowth(params: StructureGrowthParams) {
       root().add(
         <Rect ref={branches[i]} width={280} height={140} radius={20} fill={color}
           position={[pos.x, pos.y]} scale={0} shadowBlur={30} shadowColor={color + "88"}>
-          <Txt text={b.text} fontSize={48} fontWeight={700} fill={"#ffffff"} />
+          <Txt fontFamily="Noto Sans CJK SC" text={b.text} fontSize={48} fontWeight={700} fill={"#ffffff"} />
         </Rect>,
       );
-      root().add(<Txt ref={labels[i]} text={b.label} fontSize={34} fill={theme.subTextColor}
+      root().add(<Txt fontFamily="Noto Sans CJK SC" ref={labels[i]} text={b.label} fontSize={34} fill={theme.subTextColor}
         position={[(centerPos.x + pos.x) / 2, (centerPos.y + 80 + pos.y - 70) / 2 - 30]} opacity={0} />);
     });
 

@@ -25,7 +25,7 @@ export default function makeLogicChain(params: LogicChainParams) {
     const root = createRef<Node>();
     view.add(<Node ref={root} scale={designScale(view.size())} />);
     const title = createRef<Txt>();
-    root().add(<Txt ref={title} text={params.title} fontSize={72} fontWeight={700} fill={theme.textColor} y={-H / 2 + 160} opacity={0} />);
+    root().add(<Txt fontFamily="Noto Sans CJK SC" ref={title} text={params.title} fontSize={72} fontWeight={700} fill={theme.textColor} y={-H / 2 + 160} opacity={0} />);
 
     const nodes = items.map(() => createRef<Rect>());
     const arrows = items.slice(0, -1).map(() => createRef<Line>());
@@ -35,7 +35,7 @@ export default function makeLogicChain(params: LogicChainParams) {
       root().add(
         <Rect ref={nodes[i]} width={760} height={140} radius={70} fill={color}
           position={[0, y]} scale={0} shadowBlur={30} shadowColor={color + "88"}>
-          <Txt text={text} fontSize={46} fontWeight={700} fill={"#ffffff"} />
+          <Txt fontFamily="Noto Sans CJK SC" text={text} fontSize={46} fontWeight={700} fill={"#ffffff"} />
         </Rect>,
       );
       if (i < n - 1) {
