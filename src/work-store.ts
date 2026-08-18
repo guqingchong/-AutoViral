@@ -84,6 +84,7 @@ export interface Work {
   parentWorkId?: string;
   /** 全自动模式：选题页「批量转为作品(自动流水线)」按钮创建 = true；其余入口 = 深度介入（逐步确认） */
   autoMode?: boolean;
+  purpose?: string;  // 用途(04 方案)
   createdAt: string;
   updatedAt: string;
 }
@@ -102,6 +103,7 @@ export interface WorkSummary {
   digitalHumanId?: string;
   /** 全自动模式标记（作品卡片 ⚡/🖐 标签） */
   autoMode?: boolean;
+  purpose?: string;  // 用途(04 方案)
   /** 流水线各阶段状态（作品卡片实时进度条） */
   pipeline?: Array<{ key: string; name: string; status: string }>;
   /** 审核预览视频 URL（成片，区别于封面图 coverImage） */
@@ -215,6 +217,7 @@ function dbWorkToWork(w: DbWork, steps?: DbPipelineStep[]): Work {
     dualOutput: w.dual_output,
     parentWorkId: w.parent_work_id,
     autoMode: w.auto_mode,
+    purpose: w.purpose,
     createdAt: w.created_at,
     updatedAt: w.updated_at,
   };
@@ -284,6 +287,8 @@ export async function createWork(input: {
   dualOutput?: boolean;
   evaluationMode?: boolean;
   autoMode?: boolean;
+  /** 用途(04 方案)：grow_fans|sell_products|drive_traffic|brand_exposure|authority|short_drama */
+  purpose?: string;
 }): Promise<Work> {
   await maybeMigrateLegacy();
   const now = new Date().toISOString();
@@ -310,6 +315,7 @@ export async function createWork(input: {
     asset_budget: input.assetBudget,
     dual_output: input.dualOutput ?? false,
     auto_mode: input.autoMode ?? false,
+    purpose: input.purpose,
     tags: [],
     created_at: now,
     updated_at: now,
@@ -369,6 +375,7 @@ export async function updateWork(id: string, updates: Partial<Work>): Promise<Wo
   if (updates.assetBudget !== undefined) dbUpdates.asset_budget = updates.assetBudget;
   if (updates.dualOutput !== undefined) dbUpdates.dual_output = updates.dualOutput;
   if (updates.autoMode !== undefined) dbUpdates.auto_mode = updates.autoMode;
+  if (updates.purpose !== undefined) dbUpdates.purpose = updates.purpose;
   if (updates.pipeline !== undefined) {
     // Sync steps back to DB
     for (const [key, step] of Object.entries(updates.pipeline)) {
