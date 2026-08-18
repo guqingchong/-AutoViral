@@ -1,12 +1,9 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { listAssets, loadStepHistory } from "./work-store.js";
+import { runJsonPrompt } from "./services/llm-json.js";
 import { log } from "./logger.js";
-
-const execFileAsync = promisify(execFile);
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -198,7 +195,7 @@ async function evaluateQuality(workId: string): Promise<QualityDimension[]> {
 
     if (!publishText) return [];
 
-    // Call Claude haiku for quality assessment
+    // Call LLM 直连(script 档) for quality assessment —— 2026-08-18 P3-T1 起不再 spawn claude CLI
     const evalPrompt = `你是一个专业的社交媒体内容审核专家。请评估以下小红书/抖音内容的质量。
 
 发布文案:
@@ -217,20 +214,8 @@ ${(planText || "无").slice(0, 1000)}
   {"name":"整体可发布度","score":7,"feedback":"..."}
 ]}`;
 
-    const { stdout } = await execFileAsync("claude", [
-      "-p", evalPrompt,
-      "--output-format", "text",
-      "--model", "haiku",
-    ], { timeout: 60000 });
-
-    // Parse JSON from output
-    const stripped = stdout.replace(/```json?\s*/gi, "").replace(/```/g, "").trim();
-    const firstBrace = stripped.indexOf("{");
-    const lastBrace = stripped.lastIndexOf("}");
-    if (firstBrace >= 0 && lastBrace > firstBrace) {
-      const data = JSON.parse(stripped.slice(firstBrace, lastBrace + 1));
-      return data.dimensions ?? [];
-    }
+    const data = await runJsonPrompt<{ dimensions?: QualityDimension[] }>(evalPrompt, { stage: "script", timeoutMs: 60_000 });
+    return data.dimensions ?? [];
   } catch (err) {
     log("warn", "server", "quality_eval_failed", workId, {
       error: err instanceof Error ? err.message : String(err),

@@ -1,14 +1,12 @@
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { createWork, getWork, updateWork, listAssets } from "./work-store.js";
 import { loadConfig } from "./config.js";
+import { resolveModelFor } from "./llm/registry.js";
+import type { TextBlock } from "./llm/types.js";
 import { log } from "./logger.js";
 import type { WsBridge, ChatBlock } from "./ws-bridge.js";
-
-const execFileAsync = promisify(execFile);
 
 const TEST_RUNS_DIR = join(homedir(), ".autoviral", "test-runs");
 
@@ -375,13 +373,19 @@ ${agentText.slice(-2000)}
 
 用户回复：`;
 
-  const { stdout } = await execFileAsync("claude", [
-    "-p", prompt,
-    "--output-format", "text",
-    "--model", "haiku",
-  ], { timeout: 30000 });
-
-  return stdout.trim() || "好的，请继续";
+  // 2026-08-18 P3-T1:claude CLI(haiku) → LLM 直连 script 档
+  const config = await loadConfig();
+  const { provider, model } = resolveModelFor(config, "script");
+  const { assistant } = await provider.chatStream(
+    { model, system: "", messages: [{ role: "user", content: [{ type: "text", text: prompt }] }], tools: [], maxTokens: 512 },
+    () => {},
+  );
+  const text = assistant.content
+    .filter((b): b is TextBlock => b.type === "text")
+    .map((b) => b.text)
+    .join("")
+    .trim();
+  return text || "好的，请继续";
 }
 
 // ── Persistence ────────────────────────────────────────────────────────────

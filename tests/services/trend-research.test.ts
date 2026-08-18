@@ -1,20 +1,11 @@
 import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
-import { EventEmitter } from "node:events";
 import { resetInMemoryDb, closeDb } from "../../src/db/connection.js";
 import { migrate } from "../../src/db/migrate.js";
 
 // ---- Mocks (hoisted) ----
 
 vi.mock("node:child_process", () => {
-  const EE = require("node:events");
   return {
-    spawn: vi.fn(() => {
-      const proc = new EE.EventEmitter() as any;
-      proc.stdout = new EE.EventEmitter() as any;
-      proc.stderr = new EE.EventEmitter() as any;
-      proc.kill = vi.fn();
-      return proc;
-    }),
     execFile: vi.fn(() => {
       // promisify expects a callback-style function; the callback is appended by promisify
       // This default returns empty data — each test overrides via mockImplementation
@@ -22,33 +13,24 @@ vi.mock("node:child_process", () => {
   };
 });
 
-vi.mock("../../src/ws-bridge.js", () => ({
-  resolveClaudeCommand: vi.fn(() => "claude"),
+// 2026-08-18 P3-T1:趋势分析从 spawn CLI 切换为 LL 直连(chatJsonWithSearch);
+// mock 直连入口与路由解析,避免测试触网/依赖真实 config.yaml
+vi.mock("../../src/llm/search-json.js", () => ({
+  chatJsonWithSearch: vi.fn(),
+}));
+vi.mock("../../src/llm/registry.js", () => ({
+  resolveModelFor: vi.fn(() => ({ provider: { name: "mock-provider" }, model: "mock-model" })),
+}));
+vi.mock("../../src/config.js", () => ({
+  loadConfig: vi.fn(async () => ({})),
 }));
 
-import { spawn, execFile } from "node:child_process";
+import { execFile } from "node:child_process";
+import { chatJsonWithSearch } from "../../src/llm/search-json.js";
 import { fetchTrendData, collectTrends } from "../../src/services/trend-research.js";
 import { listTopics } from "../../src/db/topics-repo.js";
 
 // ---- Helpers ----
-
-/**
- * Make the spawn mock emit a given JSON result for Claude CLI.
- */
-function setupSpawnResult(topics: any[] = []) {
-  const payload = JSON.stringify({ topics });
-  vi.mocked(spawn).mockImplementation(() => {
-    const proc = new EventEmitter() as any;
-    proc.stdout = new EventEmitter() as any;
-    proc.stderr = new EventEmitter() as any;
-    proc.kill = vi.fn();
-    setTimeout(() => {
-      proc.stdout.emit("data", Buffer.from(JSON.stringify({ result: payload })));
-      proc.emit("exit", 0);
-    }, 10);
-    return proc;
-  });
-}
 
 /**
  * Make the execFile mock return a given stdout string.
@@ -115,21 +97,23 @@ describe("trend-research service", () => {
   describe("collectTrends", () => {
     it("collects trends and stores snapshot and topics", async () => {
       setupExecFileResult('{"items": [{"title": "热门话题"}]}');
-      setupSpawnResult([
-        {
-          title: "AI 绘画趋势",
-          heat: 5,
-          competition: "中",
-          opportunity: "金矿",
-          emotionType: "焦虑",
-          emotionSubtype: "被替代焦虑",
-          description: "AI 绘画在社交媒体上持续火爆",
-          tags: ["AI", "绘画", "科技"],
-          contentAngles: ["小白也能上手", "3 天学会"],
-          exampleHook: "你绝对想不到 AI 现在能画成这样",
-          category: "科技",
-        },
-      ]);
+      vi.mocked(chatJsonWithSearch).mockResolvedValue({
+        topics: [
+          {
+            title: "AI 绘画趋势",
+            heat: 5,
+            competition: "中",
+            opportunity: "金矿",
+            emotionType: "焦虑",
+            emotionSubtype: "被替代焦虑",
+            description: "AI 绘画在社交媒体上持续火爆",
+            tags: ["AI", "绘画", "科技"],
+            contentAngles: ["小白也能上手", "3 天学会"],
+            exampleHook: "你绝对想不到 AI 现在能画成这样",
+            category: "科技",
+          },
+        ],
+      });
 
       const results = await collectTrends(["douyin"], ["科技"]);
 
@@ -148,7 +132,7 @@ describe("trend-research service", () => {
     it("handles non-JSON raw data gracefully (no crash)", async () => {
       // Fetch returns non-JSON string (e.g. Python traceback)
       setupExecFileResult("Traceback (most recent call last):\n  File \"script.py\", line 1\nSyntaxError: ...");
-      setupSpawnResult([]);
+      vi.mocked(chatJsonWithSearch).mockResolvedValue({ topics: [] });
 
       const results = await collectTrends(["xiaohongshu"], []);
       expect(results).toHaveLength(1);
@@ -158,44 +142,27 @@ describe("trend-research service", () => {
 
     it("handles empty fetch data gracefully", async () => {
       setupExecFileResult("");
-      setupSpawnResult([]);
+      vi.mocked(chatJsonWithSearch).mockResolvedValue({ topics: [] });
 
       const results = await collectTrends(["douyin"], []);
       expect(results).toHaveLength(1);
       expect(results[0].topics).toEqual([]);
     });
 
-    it("handles spawn error in analyzeTrendsWithAgent", async () => {
+    it("handles LLM error in analyzeTrendsWithAgent", async () => {
       setupExecFileResult('{"items": []}');
-      // Make spawn emit error instead of exit
-      vi.mocked(spawn).mockImplementation(() => {
-        const proc = new EventEmitter() as any;
-        proc.stdout = new EventEmitter() as any;
-        proc.stderr = new EventEmitter() as any;
-        proc.kill = vi.fn();
-        setTimeout(() => proc.emit("error", new Error("spawn failed")), 5);
-        return proc;
-      });
+      // 直连版:LLM 调用失败 → 该平台空桶,不炸全局
+      vi.mocked(chatJsonWithSearch).mockRejectedValue(new Error("LLM API 500"));
 
       const results = await collectTrends(["douyin"], []);
       expect(results).toHaveLength(1);
       expect(results[0].topics).toEqual([]);
     });
 
-    it("handles spawn with empty output gracefully", async () => {
+    it("handles unparseable LLM output gracefully", async () => {
       setupExecFileResult('{"items": []}');
-      // spawn emits exit with empty stdout -> JSON.parse fails -> resolves []
-      vi.mocked(spawn).mockImplementation(() => {
-        const proc = new EventEmitter() as any;
-        proc.stdout = new EventEmitter() as any;
-        proc.stderr = new EventEmitter() as any;
-        proc.kill = vi.fn();
-        setTimeout(() => {
-          proc.stdout.emit("data", Buffer.from(""));
-          proc.emit("exit", 0);
-        }, 10);
-        return proc;
-      });
+      // 直连版:LLM 输出无法提取 JSON → chatJsonWithSearch 抛错 → 该平台空桶
+      vi.mocked(chatJsonWithSearch).mockRejectedValue(new Error("chatJsonWithSearch 无法从终局回复提取 JSON"));
 
       const results = await collectTrends(["douyin"], []);
       expect(results).toHaveLength(1);

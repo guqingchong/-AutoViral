@@ -689,6 +689,50 @@ CREATE INDEX IF NOT EXISTS idx_asset_library_source ON asset_library(source);
 ALTER TABLE works ADD COLUMN auto_mode INTEGER NOT NULL DEFAULT 0;
 `,
   },
+  {
+    version: 24,
+    name: "llm_usage",
+    sql: `
+-- LLM 直连用量记账(2026-08-18 P3-T2):每次 chatStream 完成落一条,
+-- 成本按 config.llm.priceTable(元/百万 tokens)估算;日累计超 budget.dailyLimitYuan 熔断
+CREATE TABLE IF NOT EXISTS llm_usage (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts TEXT NOT NULL DEFAULT (datetime('now')),
+  work_id TEXT,
+  stage TEXT,
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  input_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_read INTEGER NOT NULL DEFAULT 0,
+  cost_yuan REAL NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_llm_usage_ts ON llm_usage(ts);
+CREATE INDEX IF NOT EXISTS idx_llm_usage_work ON llm_usage(work_id);
+`,
+  },
+  {
+    version: 25,
+    name: "topic_scores",
+    sql: `
+-- B1 数据回流(2026-08-18 P3-T4):发布 48h 后抓三率(完播/点赞/互动),
+-- 按 品类×情绪 聚合为选题权重,回流到趋势打分(topicScore)
+CREATE TABLE IF NOT EXISTS topic_scores (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  work_id TEXT,
+  topic_id INTEGER,
+  category TEXT,
+  emotion_type TEXT,
+  views INTEGER,
+  completion_rate REAL,
+  like_rate REAL,
+  interaction_rate REAL,
+  computed_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_topic_scores_cat ON topic_scores(category, emotion_type);
+CREATE INDEX IF NOT EXISTS idx_topic_scores_work ON topic_scores(work_id);
+`,
+  },
 ];
 
 export function migrate(): void {

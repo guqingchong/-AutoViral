@@ -2,25 +2,27 @@
  * 优秀作品模板克隆(2026-08-13 模板库改造 功能 a,二期)。
  *
  * 用户粘贴优秀作品链接,克隆其视觉模板入库:
- *   - 小红书图文笔记:Playwright 持久会话打开 → 抓笔记图片 → claude CLI
- *     视觉分析(Read 本地图片)→ cover/content 两条 LayoutSpec → image-text 模板
- *   - 抖音视频:yt-dlp 下载 → ffmpeg 抽帧 → claude 视觉分析 →
+ *   - 小红书图文笔记:Playwright 持久会话打开 → 抓笔记图片 → 视觉模型
+ *     分析(图片直传)→ cover/content 两条 LayoutSpec → image-text 模板
+ *   - 抖音视频:yt-dlp 下载 → ffmpeg 抽帧 → 视觉分析 →
  *     Timeline layers(视频层用 {{clip_N}} 变量占位)→ video 模板
  *
  * 产出 status=draft,用户在模板库预览确认后启用;
  * 可继续用「再加工」(template-refine)打磨 —— 克隆/加工/预览形成闭环。
+ *
+ * 2026-08-18 P3-T1：视觉分析从 spawn claude CLI(Read 本地图片)切换为
+ * LLM 直连(chatVisionJson,图片 base64 直传,不再走 Read 工具)。
  */
 
-import { spawn } from "node:child_process";
 import { mkdir, writeFile, rename, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { dataDir } from "../config.js";
+import { dataDir, loadConfig } from "../config.js";
 import { createTemplate, deleteTemplate } from "../db/templates-repo.js";
 import { validateTemplate } from "../video/schema.js";
 import { normalizeLayoutSpec, type LayoutSpec } from "./image-text-template-generator.js";
-import { resolveClaudeCommand } from "../ws-bridge.js";
+import { chatVisionJson } from "../llm/vision-json.js";
 import { getContext } from "./platform-adapters/playwright-helper.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -43,69 +45,6 @@ export interface CloneOptions {
   /** 克隆完成后删除源文件(仅上传的临时副本置 true,用户本地文件绝不删除) */
   cleanupSource?: boolean;
   onStage?: (stage: CloneStage) => void;
-}
-
-/** 视觉分析 runner:spawn claude CLI,只允许 Read(读本地抽帧图片) */
-function runVisionCli(prompt: string, timeoutMs: number): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const cli = resolveClaudeCommand();
-    const hardenedPrompt =
-      prompt +
-      "\n\n## 输出纪律(必须严格遵守)\n" +
-      "- 用 Read 工具逐张查看给你的图片文件,然后输出分析结果 JSON。\n" +
-      "- 禁止创建、写入或保存任何文件。\n" +
-      "- 最终回复只包含 JSON,不要用 markdown 代码围栏,不要附加解释。\n";
-    const proc = spawn(cli, [
-      "-p", hardenedPrompt,
-      "--output-format", "json",
-      "--dangerously-skip-permissions",
-      "--allowedTools", "Read",
-      "--model", "sonnet",
-    ], {
-      cwd: process.env["HOME"] ?? process.cwd(),
-      env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: "cli" },
-      windowsHide: true,
-    });
-    try { proc.stdin?.end(); } catch { /* ignore */ }
-
-    const timeout = setTimeout(() => {
-      try { proc.kill(); } catch { /* ignore */ }
-      reject(new Error("视觉分析超时"));
-    }, timeoutMs);
-
-    let stdout = "";
-    let stderr = "";
-    proc.stdout?.on("data", (d: Buffer) => { stdout += d.toString(); });
-    proc.stderr?.on("data", (d: Buffer) => { stderr += d.toString(); });
-    proc.on("exit", (code) => {
-      clearTimeout(timeout);
-      if (code !== 0 && !stdout.trim()) {
-        return reject(new Error(`Claude CLI exited with code ${code}${stderr ? ": " + stderr.slice(0, 500) : ""}`));
-      }
-      try {
-        const envelope = JSON.parse(stdout);
-        resolve((envelope.result ?? "").toString());
-      } catch {
-        resolve(stdout);
-      }
-    });
-    proc.on("error", (err) => {
-      clearTimeout(timeout);
-      reject(err);
-    });
-  });
-}
-
-function extractJson<T>(text: string): T | null {
-  const cleaned = text.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
-  const first = cleaned.indexOf("{");
-  const last = cleaned.lastIndexOf("}");
-  if (first < 0 || last <= first) return null;
-  try {
-    return JSON.parse(cleaned.slice(first, last + 1)) as T;
-  } catch {
-    return null;
-  }
 }
 
 function deleteTemplateQuiet(id: string): void {
@@ -203,8 +142,8 @@ async function analyzeImageText(imagePaths: string[], hint: string | undefined):
     "你是顶级图文内容视觉设计师。以下是同一篇优秀小红书图文笔记的页面截图/图片。",
     "分析它的视觉版式,蒸馏成可复用的图文模板。",
     "",
-    "## 图片文件(用 Read 工具逐张查看)",
-    ...imagePaths.map((p) => `- ${p.replace(/\\/g, "/")}`),
+    "## 图片(随消息直接给出,按顺序逐张查看)",
+    ...imagePaths.map((p, i) => `- 图 ${i + 1}`),
     "",
     hint ? `## 用户补充(用户特别想克隆的点)\n${hint}` : "",
     "",
@@ -219,8 +158,8 @@ async function analyzeImageText(imagePaths: string[], hint: string | undefined):
     "- 封面版式抓第一眼冲击的结构;内容页抓正文排版结构",
   ].filter(Boolean).join("\n");
 
-  const text = await runVisionCli(prompt, 480_000);
-  const parsed = extractJson<CloneLayoutResponse>(text);
+  const config = await loadConfig();
+  const parsed = await chatVisionJson<CloneLayoutResponse>(config, imagePaths, prompt, { timeoutMs: 480_000 });
   if (!parsed?.cover || !parsed?.contentPage) {
     throw new Error("视觉分析产出无法解析为版式方案");
   }
@@ -369,8 +308,8 @@ async function analyzeVideoFrames(framePaths: string[], durationSec: number, hin
     "你是顶级短视频视觉设计师。以下是从同一条优秀短视频均匀抽取的帧(按时序排列)。",
     `视频总时长约 ${durationSec.toFixed(1)} 秒。分析它的视觉呈现,蒸馏成可复用的视频模板。`,
     "",
-    "## 帧图片(用 Read 工具逐张查看)",
-    ...framePaths.map((p) => `- ${p.replace(/\\/g, "/")}`),
+    "## 帧图片(随消息直接给出,按时序逐张查看)",
+    ...framePaths.map((p, i) => `- 帧 ${i + 1}`),
     "",
     hint ? `## 用户补充(用户特别想克隆的点)\n${hint}` : "",
     "",
@@ -389,8 +328,8 @@ async function analyzeVideoFrames(framePaths: string[], durationSec: number, hin
     "- 只克隆视觉结构(版式/配色/字体层级/转场节奏),不克隆具体内容文案本身——文案要参数化为变量",
   ].filter(Boolean).join("\n");
 
-  const text = await runVisionCli(prompt, 480_000);
-  const parsed = extractJson<CloneVideoResponse>(text);
+  const config = await loadConfig();
+  const parsed = await chatVisionJson<CloneVideoResponse>(config, framePaths, prompt, { timeoutMs: 480_000 });
   if (!parsed?.layers || !Array.isArray(parsed.layers) || parsed.layers.length === 0) {
     throw new Error("视觉分析产出无法解析为图层结构");
   }

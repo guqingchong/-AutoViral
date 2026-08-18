@@ -2,16 +2,18 @@
  * 模板调研学习（2026-08-03 Phase C 自进化）。
  *
  * 「模板调研学习」按钮的服务端实现：带着用户当前点选的要素，
- * 让带 WebSearch 权限的 Claude CLI 调研全网优秀短视频模板设计案例，
+ * 让带联网搜索能力的模型调研全网优秀短视频模板设计案例，
  * 蒸馏为可操作的设计技能存入 template_skills 表。之后每次生成模板时
  * 这些技能自动注入 prompt —— 模板生成能力随调研和使用持续进化。
  *
- * 与 runJsonPrompt 的区别：调研必须用 WebSearch/WebFetch，不能禁工具，
- * 所以这里是独立的 spawn runner（输出纪律 prompt 依然保留）。
+ * 2026-08-18 P3-T1：从 spawn Claude CLI（WebSearch 权限）切换为 LLM 直连——
+ * research 阶段模型 + 平台内置搜索（Kimi $web_search，无内置搜索能力时退化无搜索单发）。
  */
 
-import { spawn } from "node:child_process";
-import { resolveClaudeCommand } from "../ws-bridge.js";
+import { loadConfig } from "../config.js";
+import { resolveModelFor } from "../llm/registry.js";
+import { PROVIDER_PRESETS } from "../llm/provider-keys.js";
+import { chatJsonWithSearch } from "../llm/search-json.js";
 import { addSkill, findSimilarSkill, touchSkill } from "../db/template-skills-repo.js";
 import { CONTENT_FORMS, LAYOUTS, PALETTES, MOTIONS, DECORATIONS, type TemplateElements } from "./template-dna.js";
 
@@ -25,75 +27,8 @@ interface LlmSkillsResponse {
   skills?: Array<{ skill?: string; source?: string }>;
 }
 
-function extractJson(text: string): LlmSkillsResponse | null {
-  const cleaned = text.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
-  const first = cleaned.indexOf("{");
-  const last = cleaned.lastIndexOf("}");
-  if (first < 0 || last <= first) return null;
-  try {
-    return JSON.parse(cleaned.slice(first, last + 1)) as LlmSkillsResponse;
-  } catch {
-    return null;
-  }
-}
-
 function labelOf(options: { key: string; label: string }[], key?: string): string {
   return options.find((o) => o.key === key)?.label ?? "不限";
-}
-
-/** 带 WebSearch 权限的 CLI 调研调用（模板生成用的 runJsonPrompt 禁工具，不能用） */
-function runResearchCli(prompt: string, timeoutMs: number): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const cli = resolveClaudeCommand();
-    const hardenedPrompt =
-      prompt +
-      "\n\n## 输出纪律（必须严格遵守）\n" +
-      "- 调研完成后，把最终 JSON 直接作为你的回复文本输出。\n" +
-      "- 禁止创建、写入或保存任何文件。\n" +
-      "- 最终回复只包含 JSON，不要用 markdown 代码围栏，不要附加解释。\n";
-    const proc = spawn(cli, [
-      "-p",
-      hardenedPrompt,
-      "--output-format",
-      "json",
-      "--dangerously-skip-permissions",
-      "--allowedTools",
-      "WebSearch WebFetch",
-      "--model",
-      "sonnet",
-    ], {
-      cwd: process.env["HOME"] ?? process.cwd(),
-      env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: "cli" },
-      windowsHide: true,
-    });
-    try { proc.stdin?.end(); } catch { /* ignore */ }
-
-    const timeout = setTimeout(() => {
-      try { proc.kill(); } catch { /* ignore */ }
-      reject(new Error("模板调研超时（8 分钟）"));
-    }, timeoutMs);
-
-    let stdout = "";
-    let stderr = "";
-    proc.stdout?.on("data", (d: Buffer) => { stdout += d.toString(); });
-    proc.stderr?.on("data", (d: Buffer) => { stderr += d.toString(); });
-    proc.on("exit", (code) => {
-      clearTimeout(timeout);
-      if (code !== 0 && !stdout.trim()) {
-        return reject(new Error(`Claude CLI exited with code ${code}${stderr ? ": " + stderr.slice(0, 500) : ""}`));
-      }
-      try {
-        const envelope = JSON.parse(stdout);
-        resolve((envelope.result ?? "").toString());
-      } catch {
-        resolve(stdout);
-      }
-    });
-    proc.on("error", (err) => {
-      clearTimeout(timeout);
-      reject(err);
-    });
-  });
 }
 
 /**
@@ -135,14 +70,22 @@ export async function researchTemplates(elements: TemplateElements = {}): Promis
     '输出: {"skills":[{"skill":"...","source":"调研来源简述"}]}',
   ].filter(Boolean).join("\n");
 
-  const text = await runResearchCli(prompt, 8 * 60_000);
-  const parsed = extractJson(text);
+  const config = await loadConfig();
+  const { provider, model } = resolveModelFor(config, "research");
+  const builtinSearchTool = PROVIDER_PRESETS[provider.name]?.builtinSearchTool;
+  if (!builtinSearchTool) {
+    console.warn(`[template-research] research 档 provider=${provider.name} 无内置搜索能力,退化为无搜索单发`);
+  }
+  const parsed = await chatJsonWithSearch<LlmSkillsResponse>(provider, model, prompt, {
+    timeoutMs: 8 * 60_000,
+    builtinSearchTool,
+  });
   const rawSkills = (parsed?.skills ?? [])
     .map((s) => ({ skill: (s.skill ?? "").trim(), source: (s.source ?? "").trim() }))
     .filter((s) => s.skill.length >= 10);
 
   if (rawSkills.length === 0) {
-    throw new Error("调研未产出有效技能（CLI 输出无法解析为技能列表）");
+    throw new Error("调研未产出有效技能（模型输出无法解析为技能列表）");
   }
 
   let added = 0;
