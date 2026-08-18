@@ -311,13 +311,20 @@ export class WsBridge {
     // 常用端点的精确用法直接写进上下文,禁止靠 grep 源码/读报错摸索。
     const apiContract = `## 内部 API 契约(精确用法,直接照用;禁止 grep 源码找用法)
 - 推进流水线: POST http://localhost:${port}/api/works/${work.id}/pipeline/advance  body: {"completedStep":"当前步骤key","nextStep":"下一步骤key"}
-- 代码渲染动画(结构图/流程图/逻辑链条 → 程序化 mp4): POST http://localhost:${port}/api/assets/code-scene
+- 代码渲染动画(结构图/流程图/逻辑链条等 → 程序化 mp4): POST http://localhost:${port}/api/assets/code-scene
   body: {"workId":"${work.id}","filename":"英文小写带连字符","template":{"name":"NAME","params":{...}}}
-  NAME 与 params 三选一:
+  NAME 与 params(十模板,按镜头内容选型):
   · flow-steps(流程步骤): {"title":"≤12字","steps":[{"title":"≤8字","desc":"≤16字,可省"}] ×2-5}
   · structure-growth(中心辐射): {"title":"≤12字","center":"≤6字","branches":[{"text":"≤6字","label":"≤8字"}] ×2-4}
   · logic-chain(逻辑链条): {"title":"≤12字","chain":["每节≤10字"] ×2-4}
-  可选: "duration":1-30(秒,默认6)、"theme":"finance_dark|warm_gold|ink_green|minimal_light"
+  · big-number(大数字冲击): {"title":"≤12字","value":数字,"format":"plain|percent|wan|yi","caption":"≤20字,可省","source":"可省"}
+  · compare-split(左右对比): {"title":"≤12字","left":{"label":"≤6字","points":["≤14字"]×2-4},"right":{同左},"verdict":"≤24字,可省"}
+  · timeline(时间轴): {"title":"≤12字","events":[{"time":"≤8字","label":"≤16字"}] ×2-5}
+  · pyramid(金字塔层级): {"title":"≤12字","levels":["≤12字,自下而上塔底在前"] ×2-5}
+  · quote-card(金句卡): {"quote":"≤40字","author":"可省","source":"可省"}
+  · checklist(清单打勾): {"title":"≤12字","items":["≤18字"] ×2-6}
+  · bar-compare(条形对比): {"title":"≤12字","bars":[{"label":"≤10字","value":数字}] ×2-5,"unit":"可省"}
+  可选: "duration":1-30(秒,默认6)、"theme":"finance_dark|warm_gold|ink_green|minimal_light"(与作品模板色系统一)
 - assembly 阶段的 advance 有机器门禁,以下缺一即被 400 拦截(提前备齐):
   ① output/ 下文件名含 final 的成片视频 ② output/publish-text.md(发布文案)
   ③ output/quality-report.json——对当前成片跑质量门禁生成,videoPath 指向该片且生成时间不早于成片 ④ output/ 下 .ass 字幕(单可视行 ≤15 字、CPS ≤8)

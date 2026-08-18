@@ -2,13 +2,20 @@ import { readFile, writeFile, mkdir, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { renderVideo } from "@revideo/renderer";
 
+// 修复: Edge/Chromium 字体回退依赖 locale,无 LANG 时中文渲染为豆腐块
+process.env.LANG = process.env.LANG || "zh_CN.UTF-8";
+process.env.LC_ALL = process.env.LC_ALL || "zh_CN.UTF-8";
+
 // 用法: node worker.mjs <jobSpec.json>
 // jobSpec: { jobId, scene, params, duration, width, height, outFile, outDir, customCode? }
 const specPath = process.argv[2];
 if (!specPath) { console.error("usage: node worker.mjs <jobSpec.json>"); process.exit(2); }
 
 const spec = JSON.parse(await readFile(specPath, "utf-8"));
+
 const jobId = spec.jobId ?? `job_${Date.now()}`;
+
+
 const duration = Math.min(Math.max(spec.duration ?? 6, 1), 30);
 const W = spec.width ?? 1080, H = spec.height ?? 1920;
 
@@ -19,6 +26,10 @@ if (spec.scene === "custom") {
 }
 
 // 每任务生成独立 project 文件:size/range/参数全部内联为字面量(避免 bundle 内读 env 的不确定性)
+
+
+
+
 const sceneExpr = spec.scene === "custom"
   ? "customScene"
   : `getSceneFactory(${JSON.stringify(spec.scene)})(${JSON.stringify(spec.params ?? {})})`;

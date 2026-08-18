@@ -1154,6 +1154,13 @@ apiRoutes.get("/api/assets/code-scene/templates", (c) => {
       { name: "structure-growth", label: "中心辐射结构图", params: "title, center, branches[2-4]{text,label,color?}", bestFor: "中心-分支结构(资金闭环/三段论)" },
       { name: "flow-steps", label: "流程步骤推进", params: "title, steps[2-5]{title,desc?}", bestFor: "流程/标准/步骤(退出三标准)" },
       { name: "logic-chain", label: "逻辑链条递进", params: "title, chain[2-4]string", bestFor: "因果/递进链条(政策→影响→应对)" },
+      { name: "big-number", label: "大数字冲击", params: "title, value(数字), format?(plain/percent/wan/yi), unit?, caption?, kicker?, source?", bestFor: "关键数据呈现(债务规模/增速/占比)" },
+      { name: "compare-split", label: "对比对照", params: "title, left{label,points[2-4]}, right{label,points[2-4]}, verdict?, kicker?, source?", bestFor: "政策前后/方案 PK/新旧对比" },
+      { name: "timeline", label: "时间轴", params: "title, events[2-5]{time,label}, kicker?, source?", bestFor: "政策沿革/事件脉络/发展历程" },
+      { name: "pyramid", label: "金字塔层级", params: "title, levels[2-5]string(自下而上,塔底在前), kicker?, source?", bestFor: "体系结构/层级关系/需求层次" },
+      { name: "quote-card", label: "金句卡", params: "quote(≤40字), author?, source?", bestFor: "金句/原话引用/核心论断" },
+      { name: "checklist", label: "清单打勾", params: "title, items[2-6]string, kicker?, source?", bestFor: "要点清单/避坑清单/条件罗列" },
+      { name: "bar-compare", label: "条形数据对比", params: "title, bars[2-5]{label,value}, unit?, highlightIndex?, source?", bestFor: "轻量数据排行/量级对比(复杂图表仍走 /api/assets/chart)" },
     ],
     themes: ["finance_dark", "warm_gold", "ink_green", "minimal_light"],
     duration: "1-30s,建议 4-8s",
@@ -3557,7 +3564,7 @@ function buildAssetConstraintSection(assetForm?: string, assetSource?: string, a
       `政策/网页原文快照 POST /api/assets/snapshot-card;图标 GET /api/assets/icons。主题配色须与作品模板一致,数据来源必须署名。` +
       `快照卡必须传 highlights 红框标注关键条款/段落(禁止整页裸截,截正文区避开广告与侧栏);` +
       `图表数值与旁白口径必须一致——旁白说"超六成",图表须标">60%"或"超60%",禁止写成精确值 60%;` +
-      `结构/流程/逻辑镜头调用 POST /api/assets/code-scene 生成程序化动画(三模板:structure-growth/flow-steps/logic-chain,先 GET /api/assets/code-scene/templates 查参数);`,
+      `结构/流程/逻辑镜头调用 POST /api/assets/code-scene 生成程序化动画(十模板:structure-growth/flow-steps/logic-chain/big-number/compare-split/timeline/pyramid/quote-card/checklist/bar-compare,先 GET /api/assets/code-scene/templates 查参数);`,
   );
   // smart 精品混合:按镜头内容路由到最优来源,是"出品即精品"的默认策略
   if (assetSource === "smart") {
