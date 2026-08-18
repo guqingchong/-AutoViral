@@ -24,10 +24,17 @@
   }: Props = $props();
 
   const PROVIDER_META = [
-    { key: "deepseek", name: "DeepSeek", hint: "策划/合成/评审主力" },
-    { key: "kimi", name: "Kimi Coding Plan", hint: "调研(联网搜索)" },
-    { key: "glm", name: "GLM Coding Plan", hint: "视觉看图(glm-4v)" },
+    { key: "deepseek", name: "DeepSeek", hint: "策划/合成/评审主力(无视觉能力)" },
+    { key: "kimi", name: "Kimi Coding Plan", hint: "调研(联网搜索)+视觉看图" },
+    { key: "glm", name: "GLM 开放平台", hint: "视觉看图(glm-4v),按量计费" },
   ];
+
+  /** 各 provider 视觉模型建议值(空清单=该 provider 无视觉能力,字段隐藏) */
+  const VISION_SUGGESTIONS: Record<string, string[]> = {
+    kimi: ["kimi-for-coding"],
+    glm: ["glm-4v", "glm-4.6"],
+    deepseek: [],
+  };
 
   const STAGE_META = [
     { key: "research", label: "调研", hint: "话题调研/素材搜索(联网)" },
@@ -78,6 +85,10 @@
 </script>
 
 <div class="llm-settings">
+  <p class="llm-hint">
+    视觉模型只需在一家配置：评审看图/模板克隆时，系统按 Kimi → GLM 顺序自动选用已配置的视觉模型。
+    DeepSeek 公开 API 无视觉能力，无需填写。三家 Key 都在此页填写，保存到本机 ~/.autoviral/config.yaml。
+  </p>
   {#each PROVIDER_META as meta}
     {@const p = providers[meta.key]}
     {@const pingState = ping[meta.key]}
@@ -117,10 +128,20 @@
           Base URL
           <input type="text" class="llm-input" bind:value={p.baseUrl} placeholder="https://..." />
         </label>
-        <label class="llm-field">
-          视觉模型（可选）
-          <input type="text" class="llm-input" bind:value={p.visionModel} placeholder="如 glm-4v" />
-        </label>
+        {#if VISION_SUGGESTIONS[meta.key]?.length}
+          <label class="llm-field">
+            视觉模型（看图用，选填）
+            <select class="llm-input" bind:value={p.visionModel}>
+              <option value="">不启用</option>
+              {#each VISION_SUGGESTIONS[meta.key] as vm}
+                <option value={vm}>{vm}</option>
+              {/each}
+              {#if p.visionModel && !VISION_SUGGESTIONS[meta.key].includes(p.visionModel)}
+                <option value={p.visionModel}>{p.visionModel}(自定义)</option>
+              {/if}
+            </select>
+          </label>
+        {/if}
         <div class="llm-card-foot">
           <button class="llm-ping" disabled={pingState?.state === "testing"} onclick={() => pingProvider(meta.key)}>
             {pingState?.state === "testing" ? "测试中..." : "测试连通性"}
