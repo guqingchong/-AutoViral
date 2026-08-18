@@ -30,10 +30,18 @@ export interface CodeSceneInput {
   theme?: string;
 }
 
-const TEMPLATE_LIMITS: Record<string, { items: string; min: number; max: number }> = {
+const TEMPLATE_LIMITS: Record<string, { items?: string; min?: number; max?: number }> = {
   "structure-growth": { items: "branches", min: 2, max: 4 },
   "flow-steps": { items: "steps", min: 2, max: 5 },
   "logic-chain": { items: "chain", min: 2, max: 4 },
+  // 2026-08-18 03 方案:模板库扩充
+  "big-number": {},                                        // 主参数 value(数字)
+  "compare-split": {},                                     // 主参数 left/right
+  "timeline": { items: "events", min: 2, max: 5 },
+  "pyramid": { items: "levels", min: 2, max: 5 },
+  "quote-card": {},                                        // 主参数 quote(替代 title)
+  "checklist": { items: "items", min: 2, max: 6 },
+  "bar-compare": { items: "bars", min: 2, max: 5 },
 };
 
 /** 纯校验:返回错误列表(空数组=合法) */
@@ -53,16 +61,35 @@ export function validateCodeSceneInput(input: CodeSceneInput): string[] {
       errors.push(`未知场景模板: ${t.name}(可选: ${Object.keys(TEMPLATE_LIMITS).join("/")})`);
     } else {
       const p = t.params ?? {};
-      const title = p.title;
-      if (typeof title !== "string" || !title.trim()) errors.push("params.title 必填");
-      else if ([...title].length > 12) errors.push(`params.title ≤12 字(当前 ${[...title].length})`);
+      // quote-card 以 quote 为主参数,其余模板以 title 为主参数
+      if (t.name === "quote-card") {
+        if (typeof p.quote !== "string" || !p.quote.trim()) errors.push("params.quote 必填");
+        else if ([...p.quote].length > 60) errors.push(`params.quote ≤60 字(当前 ${[...p.quote].length})`);
+      } else {
+        const title = p.title;
+        if (typeof title !== "string" || !title.trim()) errors.push("params.title 必填");
+        else if ([...title].length > 12) errors.push(`params.title ≤12 字(当前 ${[...title].length})`);
+      }
       if (t.name === "structure-growth" && (typeof p.center !== "string" || !p.center.trim())) {
         errors.push("params.center 必填");
       }
-      const items = p[limit.items];
-      if (!Array.isArray(items)) errors.push(`params.${limit.items} 必须是数组`);
-      else if (items.length < limit.min || items.length > limit.max) {
-        errors.push(`params.${limit.items} 数量须 ${limit.min}-${limit.max}(当前 ${items.length})`);
+      if (t.name === "big-number" && typeof p.value !== "number") {
+        errors.push("params.value 必填且为数字");
+      }
+      if (t.name === "compare-split") {
+        for (const side of ["left", "right"] as const) {
+          const s = p[side] as { label?: string; points?: unknown[] } | undefined;
+          if (!s || typeof s.label !== "string" || !Array.isArray(s.points) || s.points.length < 1 || s.points.length > 4) {
+            errors.push(`params.${side}.{label,points[1-4]} 必填`);
+          }
+        }
+      }
+      if (limit.items) {
+        const items = p[limit.items];
+        if (!Array.isArray(items)) errors.push(`params.${limit.items} 必须是数组`);
+        else if (items.length < limit.min! || items.length > limit.max!) {
+          errors.push(`params.${limit.items} 数量须 ${limit.min}-${limit.max}(当前 ${items.length})`);
+        }
       }
     }
   }

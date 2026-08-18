@@ -38,7 +38,8 @@ interface OpenAiToolCallDelta {
  *  否则降级为普通 function(跨 provider 恢复会话时对方方言不认识 builtin_function,
  *  2026-08-17 实测 deepseek 400:unknown variant) */
 function toOpenAiMessages(system: string, messages: AgentMessage[], builtinTools: Set<string> = new Set(), allowImages = true, passReasoningBack = false): Record<string, unknown>[] {
-  const out: Record<string, unknown>[] = [{ role: "system", content: system }];
+  // 空 system 不下发(2026-08-18 实测 kimi 400: the message at position 0 with role 'system' must not be empty)
+  const out: Record<string, unknown>[] = system.trim() ? [{ role: "system", content: system }] : [];
   for (const m of messages) {
     if (m.role === "assistant") {
       const text = m.content
