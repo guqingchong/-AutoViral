@@ -19,7 +19,7 @@
  */
 
 import { existsSync } from "node:fs";
-import { readdir, stat } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { dataDir } from "../config.js";
 import { listWorks as dbListWorks, getWorkSteps } from "../db/works-repo.js";
@@ -78,6 +78,23 @@ function stepsToPipeline(workId: string): Record<string, PipelineStep> {
   return pipeline;
 }
 
+/** 最近一轮 assembly 评审结论（eval-assembly-N.json 取最大 N）。
+ *  返回 "fail" 时对账不得转正——2026-08-18 事故：评审 round 2 fail(国旗素材 critical)
+ *  后 agent 返工途中服务崩溃，重启对账仅凭 final.mp4 存在就把作品抬进 reviewing,
+ *  未过审版本流入人工待审栏。 */
+async function lastAssemblyEvalVerdict(workId: string): Promise<"pass" | "fail" | null> {
+  try {
+    const workDir = join(dataDir, "works", workId);
+    const files = (await readdir(workDir)).filter((f) => /^eval-assembly-\d+\.json$/.test(f));
+    if (!files.length) return null;
+    const latest = files.sort((a, b) => parseInt(b.match(/\d+/)![0]) - parseInt(a.match(/\d+/)![0]))[0];
+    const j = JSON.parse(await readFile(join(workDir, latest), "utf-8"));
+    return j.verdict === "pass" ? "pass" : j.verdict === "fail" ? "fail" : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function reconcileWorkStates(trigger: "startup" | "periodic" = "periodic"): Promise<ReconcileResult> {
   const result: ReconcileResult = { checked: 0, fixed: 0, details: [] };
   const works = dbListWorks();
@@ -110,6 +127,12 @@ export async function reconcileWorkStates(trigger: "startup" | "periodic" = "per
     // ── 1. 组装完成转正 ─────────────────────────────────────────────
     // 活跃会话的作品跳过：agent 会自己 advance（触发评审），对账不抢跑
     if (w.status === "assembling" && !sessionAliveCheck?.(w.id)) {
+      // 评审 fail 未翻案时不转正：评审流拥有最终决定权,对账只收拾"无评审参与"的遗留
+      const lastVerdict = await lastAssemblyEvalVerdict(w.id);
+      if (lastVerdict === "fail") {
+        result.details.push(`${w.id} 跳过转正(最近 assembly 评审 fail,待返工/重审)`);
+        continue;
+      }
       const activeRender = listRenderJobs("running", w.id).length + listRenderJobs("pending", w.id).length;
       if (activeRender === 0) {
         // 关键时序判定：只当"成品产生于本轮 assembly 开始之后"才转正。
