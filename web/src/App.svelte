@@ -16,6 +16,7 @@
   import ArticleEditor from "./pages/ArticleEditor.svelte";
   import Calendar from "./pages/Calendar.svelte";
   import NewWorkModal from "./components/NewWorkModal.svelte";
+  import LlmSettings from "./components/LlmSettings.svelte";
   import { fetchConfig, updateConfig, fetchWorks, createWorkApi, type WorkSummary, type ContentCategory } from "./lib/api";
   import { t, getLanguage, setLanguage, subscribe } from "./lib/i18n";
   import { activeTab, type Tab } from "./lib/navigation.js";
@@ -34,6 +35,17 @@
   let interval: string = $state("1h");
   let model: string = $state("");  // P3-T3:llm.models.research("provider:model"),空串=默认阶段路由
   let llmModelOptions = $state<{ value: string; label: string }[]>([]);
+
+  // ── 大模型直连(P1-T7/P3-T3,2026-08-18 修复接入真实设置抽屉) ──
+  interface LlmProviderForm { apiKey: string; baseUrl: string; visionModel: string; enabled: boolean; }
+  let llmProviders = $state<Record<string, LlmProviderForm>>({
+    deepseek: { apiKey: "", baseUrl: "", visionModel: "", enabled: true },
+    kimi: { apiKey: "", baseUrl: "", visionModel: "", enabled: true },
+    glm: { apiKey: "", baseUrl: "", visionModel: "", enabled: true },
+  });
+  let llmDefaultProvider = $state("deepseek");
+  let llmModels = $state<Record<string, string>>({});
+  let llmModelSuggestions = $state<Record<string, string[]>>({});
 
   // P3-T3:调研模型选项从 llm.providers 建议清单动态生成(取代 opus/sonnet/haiku 硬编码)
   function buildLlmModelOptions(data: any): { value: string; label: string }[] {
@@ -246,8 +258,19 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           interval, autoRun,
-          // P3-T3:调研模型写 llm.models.research(服务端键级合并,空串=回退默认)
-          llm: { models: { research: model } },
+          // P3-T3:调研模型写 llm.models.research;阶段路由与 provider 卡片整组提交
+          // (掩码回显含 *** 的 key 服务端保留原值;models 键级合并,空串=回退默认)
+          llm: {
+            defaultProvider: llmDefaultProvider,
+            providers: Object.fromEntries(
+              Object.entries(llmProviders).map(([k, p]) => [k, {
+                apiKey: p.apiKey, baseUrl: p.baseUrl, visionModel: p.visionModel, enabled: p.enabled,
+              }]),
+            ),
+            models: Object.fromEntries(
+              Object.entries({ ...llmModels, research: model }).filter(([, v]) => v),
+            ),
+          },
           researchEnabled: autoRun,
           researchCron: buildResearchCron(),
           pexelsApiKey, pixabayApiKey, unsplashAccessKey,
@@ -269,6 +292,18 @@
       }
       if (minimaxKey.trim() !== (verify.minimaxKey ?? "")) {
         throw new Error("MiniMax Key 未能写入，请重试");
+      }
+      // llm key 回读校验:本地是新明文(非掩码回显)时,远端应回掩码且前缀一致
+      const LLM_NAMES: Record<string, string> = { deepseek: "DeepSeek", kimi: "Kimi", glm: "GLM" };
+      const llmMismatch = Object.entries(llmProviders)
+        .filter(([, p]) => p.apiKey.trim() && !p.apiKey.includes("***"))
+        .filter(([k, p]) => {
+          const remote = verify.llm?.providers?.[k]?.apiKey ?? "";
+          return !remote.includes("***") || !remote.startsWith(p.apiKey.slice(0, 6));
+        })
+        .map(([k]) => LLM_NAMES[k] ?? k);
+      if (llmMismatch.length > 0) {
+        throw new Error(`${llmMismatch.join("、")} Key 未能写入，请重试`);
       }
       settingsMessage = tt("settingsSaved");
       setTimeout(() => { settingsMessage = ""; }, 3000);
@@ -303,6 +338,19 @@
         const data = await res.json();
         model = data.llm?.models?.research ?? "";
         llmModelOptions = buildLlmModelOptions(data);
+        // 大模型直连卡片+路由回显(GET 已做预设补全+key 掩码)
+        llmDefaultProvider = data.llm?.defaultProvider ?? "deepseek";
+        llmModels = { ...(data.llm?.models ?? {}) };
+        for (const key of ["deepseek", "kimi", "glm"]) {
+          const p = data.llm?.providers?.[key] ?? {};
+          llmProviders[key] = {
+            apiKey: p.apiKey ?? "",
+            baseUrl: p.baseUrl ?? "",
+            visionModel: p.visionModel ?? "",
+            enabled: p.enabled !== false,
+          };
+          llmModelSuggestions[key] = p.modelSuggestions ?? [];
+        }
         pexelsApiKey = data.pexelsApiKey ?? "";
         pixabayApiKey = data.pixabayApiKey ?? "";
         unsplashAccessKey = data.unsplashAccessKey ?? "";
@@ -502,6 +550,16 @@
             </div>
             <p class="hint-sm">开启后按上方频率自动执行全平台选题调研；调研领域沿用选题中心保存的关注领域（未设置时自动沿用上一次的领域）。</p>
           </div>
+        </div>
+
+        <div class="field-group">
+          <span class="field-label-upper">大模型直连（DeepSeek / Kimi / GLM）</span>
+          <LlmSettings
+            bind:providers={llmProviders}
+            bind:defaultProvider={llmDefaultProvider}
+            bind:models={llmModels}
+            bind:modelSuggestions={llmModelSuggestions}
+          />
         </div>
 
         <div class="field-group">

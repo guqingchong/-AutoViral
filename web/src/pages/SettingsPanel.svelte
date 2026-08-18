@@ -1,4 +1,5 @@
 ﻿<script lang="ts">
+  import LlmSettings from "../components/LlmSettings.svelte";
   import { onMount } from "svelte";
 
   let { show = false, onclose }: { show: boolean; onclose?: () => void } = $props();
@@ -51,55 +52,11 @@
     glm: { apiKey: "", baseUrl: "", visionModel: "", enabled: true },
   });
   let llmProviders = $state<Record<string, LlmProviderForm>>(emptyLlmProviders());
-  let llmShowKey = $state<Record<string, boolean>>({});
-  let llmPing = $state<Record<string, { state: "idle" | "testing" | "ok" | "fail"; latencyMs?: number; error?: string }>>({});
 
-  // ── 阶段模型路由(P3-T3,2026-08-18):六阶段 → "provider:model" ──
-  const LLM_STAGE_META = [
-    { key: "research", label: "调研", hint: "话题调研/素材搜索(联网)" },
-    { key: "plan", label: "策划", hint: "分镜规划/脚本" },
-    { key: "assets", label: "素材", hint: "素材准备/生图提示" },
-    { key: "assembly", label: "合成", hint: "视频合成/字幕" },
-    { key: "eval", label: "评审", hint: "阶段质量评审" },
-    { key: "script", label: "文案", hint: "发布文案/杂项 JSON" },
-  ] as const;
   let llmModels = $state<Record<string, string>>({});
   let llmModelSuggestions = $state<Record<string, string[]>>({});
 
-  /** 某阶段下拉的可选项:所有启用 provider 的建议模型,格式 "provider:model";当前值不在清单时保留显示 */
-  function stageOptions(stageKey: string): { value: string; label: string }[] {
-    const opts: { value: string; label: string }[] = [];
-    for (const meta of LLM_PROVIDER_META) {
-      if (!llmProviders[meta.key]?.enabled) continue;
-      for (const m of llmModelSuggestions[meta.key] ?? []) {
-        opts.push({ value: `${meta.key}:${m}`, label: `${meta.name} / ${m}` });
-      }
-    }
-    const cur = llmModels[stageKey];
-    if (cur && !opts.some((o) => o.value === cur)) {
-      opts.push({ value: cur, label: `${cur}(自定义)` });
-    }
-    return opts;
-  }
 
-  async function pingLlmProvider(key: string) {
-    const p = llmProviders[key];
-    llmPing[key] = { state: "testing" };
-    try {
-      const res = await fetch("/api/llm/ping", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        // apiKey 为掩码回显(含 ***)时服务端自动回落到已保存的 key
-        body: JSON.stringify({ provider: key, baseUrl: p.baseUrl, apiKey: p.apiKey }),
-      });
-      const data = await res.json();
-      llmPing[key] = data.ok
-        ? { state: "ok", latencyMs: data.latencyMs }
-        : { state: "fail", latencyMs: data.latencyMs, error: data.error ?? `HTTP ${res.status}` };
-    } catch (err) {
-      llmPing[key] = { state: "fail", error: err instanceof Error ? err.message : String(err) };
-    }
-  }
 
   async function loadConfig() {
     loading = true;
@@ -352,93 +309,12 @@
           <!-- 默认 provider(P3-T3:取代 CLI 时代的 opus/sonnet/haiku 默认模型) -->
           <section class="config-section">
             <h3 class="section-label">默认大模型</h3>
-            <div class="field-group">
-              <label class="field-label">
-                默认 provider
-                <select class="field-select" bind:value={llmDefaultProvider}>
-                  {#each LLM_PROVIDER_META as meta}
-                    <option value={meta.key}>{meta.name}（{meta.hint}）</option>
-                  {/each}
-                </select>
-              </label>
-              <p class="field-hint">阶段路由未单独设置的阶段走该 provider 的默认模型；API Key 在下方「大模型直连」卡片配置。</p>
-            </div>
-          </section>
-
-          <!-- 大模型直连(P1-T7):DeepSeek / Kimi / GLM 三家 provider -->
-          <section class="config-section">
-            <h3 class="section-label">大模型直连</h3>
-            <p class="section-hint">配置保存在 ~/.autoviral/config.yaml，打包分发到新电脑时拷贝该文件、在此填 key 即用。</p>
-            {#each LLM_PROVIDER_META as meta}
-              {@const ping = llmPing[meta.key]}
-              <div class="llm-card" class:llm-off={!llmProviders[meta.key].enabled}>
-                <div class="llm-card-head">
-                  <div class="llm-card-title">
-                    <span class="llm-card-name">{meta.name}</span>
-                    <span class="llm-card-hint">{meta.hint}</span>
-                  </div>
-                  <button
-                    class="toggle-switch"
-                    class:on={llmProviders[meta.key].enabled}
-                    onclick={() => llmProviders[meta.key].enabled = !llmProviders[meta.key].enabled}
-                    role="switch"
-                    aria-checked={llmProviders[meta.key].enabled}
-                    aria-label={`启用 ${meta.name}`}
-                  >
-                    <span class="toggle-thumb"></span>
-                  </button>
-                </div>
-                <label class="field-label">
-                  API Key
-                  <div class="input-row">
-                    <input
-                      type={llmShowKey[meta.key] ? "text" : "password"}
-                      class="field-input"
-                      bind:value={llmProviders[meta.key].apiKey}
-                      placeholder="sk-..."
-                    />
-                    <button class="toggle-vis" onclick={() => llmShowKey[meta.key] = !llmShowKey[meta.key]} aria-label="切换可见">
-                      {llmShowKey[meta.key] ? "隐藏" : "显示"}
-                    </button>
-                  </div>
-                </label>
-                <label class="field-label">
-                  Base URL
-                  <input type="text" class="field-input" bind:value={llmProviders[meta.key].baseUrl} placeholder="https://..." />
-                </label>
-                <label class="field-label">
-                  视觉模型（可选）
-                  <input type="text" class="field-input" bind:value={llmProviders[meta.key].visionModel} placeholder="如 glm-4v" />
-                </label>
-                <div class="llm-card-foot">
-                  <button class="ping-btn" disabled={ping?.state === "testing"} onclick={() => pingLlmProvider(meta.key)}>
-                    {ping?.state === "testing" ? "测试中..." : "测试连通性"}
-                  </button>
-                  {#if ping?.state === "ok"}
-                    <span class="ping-result ping-ok">✓ 连通 {ping.latencyMs}ms</span>
-                  {:else if ping?.state === "fail"}
-                    <span class="ping-result ping-fail" title={ping.error}>✗ {ping.error}</span>
-                  {/if}
-                </div>
-              </div>
-            {/each}
-
-            <!-- 阶段模型路由(P3-T3):一部片各阶段各走各的模型 -->
-            <div class="llm-routing">
-              <h4 class="llm-routing-title">阶段模型路由</h4>
-              <p class="field-hint">每个阶段独立选模型；不选则走默认 provider（DeepSeek）。一部片的各阶段自动切换，无需改配置。</p>
-              {#each LLM_STAGE_META as stage}
-                <label class="field-label llm-stage-row">
-                  <span class="llm-stage-name">{stage.label}<span class="llm-stage-hint">{stage.hint}</span></span>
-                  <select class="field-input llm-stage-select" bind:value={llmModels[stage.key]}>
-                    <option value="">默认（defaultProvider）</option>
-                    {#each stageOptions(stage.key) as opt}
-                      <option value={opt.value}>{opt.label}</option>
-                    {/each}
-                  </select>
-                </label>
-              {/each}
-            </div>
+            <LlmSettings
+              bind:providers={llmProviders}
+              bind:defaultProvider={llmDefaultProvider}
+              bind:models={llmModels}
+              bind:modelSuggestions={llmModelSuggestions}
+            />
           </section>
 
           <!-- Creator Data Collection -->
