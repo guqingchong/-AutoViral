@@ -477,7 +477,7 @@
       "deps": [
         "P2-T1"
       ],
-      "status": "pending"
+      "status": "done(代码+测试;生效待服务重启)"
     },
     {
       "id": "P3-T2",
@@ -504,7 +504,7 @@
       "deps": [
         "P2-T2"
       ],
-      "status": "pending"
+      "status": "done(代码+测试;生效待服务重启)"
     },
     {
       "id": "P3-T3",
@@ -529,7 +529,7 @@
       "deps": [
         "P3-T2"
       ],
-      "status": "pending"
+      "status": "done(代码+前端构建过;UI 实测待重启)"
     },
     {
       "id": "P3-T4",
@@ -552,7 +552,7 @@
         "scorecard 权重被真实三率更新"
       ],
       "deps": [],
-      "status": "pending"
+      "status": "done(代码+测试;三率回流待真实发布数据)"
     },
     {
       "id": "P4-T1",
