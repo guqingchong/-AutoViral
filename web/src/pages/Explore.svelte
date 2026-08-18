@@ -47,7 +47,21 @@
   let autoResearchOn = $state(false);
   let showConfigModal = $state(false);
   let configInterval = $state("1h");
-  let configModel = $state("sonnet");
+  let configModel = $state("");
+  let llmModelOptions = $state<{ value: string; label: string }[]>([]);
+
+  // P3-T3:调研模型选项从 llm.providers 建议清单动态生成(取代 opus/sonnet/haiku 硬编码)
+  function buildLlmModelOptions(data: any): { value: string; label: string }[] {
+    const names: Record<string, string> = { deepseek: "DeepSeek", kimi: "Kimi", glm: "GLM" };
+    const opts: { value: string; label: string }[] = [];
+    for (const [key, p] of Object.entries<any>(data.llm?.providers ?? {})) {
+      if (p.enabled === false) continue;
+      for (const m of p.modelSuggestions ?? []) {
+        opts.push({ value: `${key}:${m}`, label: `${names[key] ?? key} / ${m}` });
+      }
+    }
+    return opts;
+  }
 
   async function loadAutoResearch() {
     try {
@@ -56,7 +70,8 @@
         const data = await res.json();
         autoResearchOn = data.autoRun ?? false;
         configInterval = data.interval ?? "1h";
-        configModel = data.model ?? "sonnet";
+        configModel = data.llm?.models?.research ?? "";
+        llmModelOptions = buildLlmModelOptions(data);
       }
     } catch {}
   }
@@ -75,7 +90,8 @@
       await fetch("/api/config", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ autoRun: autoResearchOn, interval: configInterval, model: configModel }),
+        // P3-T3:调研模型写 llm.models.research(服务端键级合并,空串=回退默认)
+        body: JSON.stringify({ autoRun: autoResearchOn, interval: configInterval, llm: { models: { research: configModel } } }),
       });
     } catch {
       autoResearchOn = !autoResearchOn;
@@ -454,9 +470,10 @@
       <div class="config-field">
         <span class="config-label">{tt("aiModel")}</span>
         <select bind:value={configModel}>
-          <option value="haiku">{tt("claudeHaikuFast")}</option>
-          <option value="sonnet">{tt("claudeSonnetBalanced")}</option>
-          <option value="opus">{tt("claudeOpusCapable")}</option>
+          <option value="">{lang === "zh" ? "默认（阶段路由）" : "Default (stage routing)"}</option>
+          {#each llmModelOptions as opt}
+            <option value={opt.value}>{opt.label}</option>
+          {/each}
         </select>
       </div>
 

@@ -8,6 +8,7 @@ import { homedir } from "node:os";
 import yaml from "js-yaml";
 import { loadConfig, saveConfig, dataDir, getConfigDir, HEYGEM_TUNNEL_DEFAULTS, H3_TUNNEL_DEFAULTS, type AnalyticsSource, type HeygemTunnelConfig, type H3TunnelConfig, type LlmConfig, type LlmProviderConfig } from "../config.js";
 import { PROVIDER_PRESETS } from "../llm/provider-keys.js";
+import { runJsonPrompt } from "../services/llm-json.js";
 import { getDb } from "../db/connection.js";
 import { exportBackup, importBackup } from "../db/backup.js";
 import { migrateLegacyWorks } from "../db/migrate-legacy.js";
@@ -21,7 +22,6 @@ import {
 } from "../work-store.js";
 import { MemoryClient } from "../memory.js";
 import type { WsBridge } from "../ws-bridge.js";
-import { resolveClaudeCommand } from "../ws-bridge.js";
 import { getProvider, getDefaultProvider, listProviders } from "../providers/registry.js";
 import { listSharedAssetsWithMeta, getSharedAssetPath, validateCategory, sanitizeFilename, saveSharedAsset, deleteSharedAsset, moveSharedAsset } from "../shared-assets.js";
 import * as avatarsRepo from "../db/avatars-repo.js";
@@ -238,6 +238,7 @@ function presentLlm(llm: LlmConfig | undefined): Record<string, unknown> {
       apiKey: maskApiKey(o?.apiKey),
       visionModel: o?.visionModel ?? preset.visionModel ?? "",
       enabled: o?.enabled !== false,
+      modelSuggestions: preset.modelSuggestions ?? [],
     };
   }
   for (const [key, o] of Object.entries(llm?.providers ?? {})) {
@@ -256,7 +257,8 @@ function presentLlm(llm: LlmConfig | undefined): Record<string, unknown> {
  * PUT 合并:llm 段整组更新,但——
  * ① apiKey 含掩码标记 ***(设置页回显未改)时保留原值不覆盖;空串=显式清除
  * ② providers 未提及的 key 原样保留(预设三家之外的自定义 provider 不被整组更新误删)
- * ③ models/priceTable/guard 等其余字段未提交时保留(Phase 3 路由 UI 才接管)
+ * ③ models 按键级合并(2026-08-18 P3-T3:页面只提交自己管的那个阶段,不再整组覆盖;
+ *   空字符串=清除该阶段自定义,回退 defaultProvider)
  */
 function mergeLlm(prev: LlmConfig | undefined, incoming: Partial<LlmConfig>): LlmConfig {
   const providers: Record<string, LlmProviderConfig> = { ...(prev?.providers ?? {}) };
@@ -278,7 +280,13 @@ function mergeLlm(prev: LlmConfig | undefined, incoming: Partial<LlmConfig>): Ll
   return {
     ...prev,
     ...(incoming.defaultProvider !== undefined ? { defaultProvider: incoming.defaultProvider } : {}),
-    ...(incoming.models !== undefined ? { models: incoming.models } : {}),
+    ...(incoming.models !== undefined
+      ? {
+          models: Object.fromEntries(
+            Object.entries({ ...(prev?.models ?? {}), ...incoming.models }).filter(([, v]) => typeof v === "string" && v),
+          ),
+        }
+      : {}),
     ...(incoming.priceTable !== undefined ? { priceTable: incoming.priceTable } : {}),
     ...(incoming.guard !== undefined ? { guard: incoming.guard } : {}),
     providers,
@@ -1448,46 +1456,8 @@ apiRoutes.put("/api/interests", async (c) => {
 });
 
 // ---------------------------------------------------------------------------
-// Trend Research via Claude CLI
+// Trend Research via LLM 直连（2026-08-18 P3-T1：runCliBrief spawn 分支删除 → chatJson script 档）
 // ---------------------------------------------------------------------------
-
-/** Run claude CLI with a prompt and return the text result. */
-function runCliBrief(prompt: string, timeoutMs = 60000): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const args = [
-      "-p", prompt,
-      "--output-format", "json",
-      "--dangerously-skip-permissions",
-      "--model", "haiku",
-    ];
-
-    const cliCmd = resolveClaudeCommand();
-    const proc = spawn(cliCmd, args, {
-      cwd: homedir(),
-      stdio: ["ignore", "pipe", "pipe"],
-      shell: false,
-      windowsHide: true,
-      env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: "cli" },
-    });
-
-    let stdout = "";
-    proc.stdout?.on("data", (d: Buffer) => { stdout += d.toString(); });
-    proc.on("exit", (code) => {
-      if (code !== 0 && !stdout) {
-        reject(new Error(`CLI exited with code ${code}`));
-        return;
-      }
-      try {
-        const envelope = JSON.parse(stdout);
-        resolve(envelope.result ?? "");
-      } catch {
-        resolve(stdout);
-      }
-    });
-    proc.on("error", reject);
-    setTimeout(() => { try { proc.kill(); } catch {} reject(new Error("Timeout")); }, timeoutMs);
-  });
-}
 
 async function researchTrends(platforms: string[]): Promise<{ collected: string[]; errors: string[] }> {
   const collected: string[] = [];
@@ -1507,7 +1477,7 @@ async function researchTrends(platforms: string[]): Promise<{ collected: string[
         `**强制规则：**`,
         `1. **100% 的推荐话题必须直接属于用户关注的领域或其紧密相关子领域。禁止返回任何与关注领域无关的泛热门话题。**`,
         `2. 每个关注领域至少覆盖 2-3 个话题。如果一个领域太大（如"科技"），请拆分为具体子方向`,
-        `3. 如果某个关注领域在当前平台热搜中完全没有相关条目，请用 WebSearch 深度搜索该领域`,
+        `3. 如果某个关注领域在当前平台热搜中完全没有相关条目，请基于你的知识对该领域做深度推演`,
           `4. 每个话题的 title 中必须包含该关注领域的具体关键词，不能是泛化的热门话题`,
         `5. 如果用户领域偏专业/技术，用该领域的专业视角找趋势，不要强行套用娱乐化情绪模板`,
       ].join("\n")
@@ -1532,7 +1502,7 @@ async function researchTrends(platforms: string[]): Promise<{ collected: string[
       : "";
     const dataClause = scriptData
       ? `\n以下是通过 API 获取的 ${platformLabel} 实时热搜数据。请筛选其中与用户关注领域相关的条目：\n\`\`\`json\n${scriptData.slice(0, 4000)}\n\`\`\`\n`
-      : `\n无法通过 API 获取实时数据。请使用 WebSearch 按以下关键词搜索：\n${interestSearchTerms || `"${platformLabel} 爆款内容 趋势 ${year}" "${platformLabel} 热门话题 最新 ${year}"`}\n${interests.length ? `\n**注意**：搜索结果必须围绕用户关注领域展开。不要返回与用户领域无关的泛热门内容。` : ""}\n`;
+      : `\n无法通过 API 获取实时数据。请基于你的知识，围绕以下方向推演当前趋势：\n${interestSearchTerms || `"${platformLabel} 爆款内容 趋势 ${year}" "${platformLabel} 热门话题 最新 ${year}"`}\n${interests.length ? `\n**注意**：结果必须围绕用户关注领域展开。不要返回与用户领域无关的泛热门内容。` : ""}\n`;
 
     const prompt = [
       `你是一个专业的社交媒体趋势研究员。请分析 ${platformLabel} 平台上用户关注领域的最新内容趋势。`,
@@ -1585,16 +1555,7 @@ async function researchTrends(platforms: string[]): Promise<{ collected: string[
     ].join("\n");
 
     try {
-      const result = await runCliBrief(prompt);
-      const stripped = result.replace(/```json?\s*/gi, "").replace(/```/g, "").trim();
-      const firstBrace = stripped.indexOf("{");
-      const lastBrace = stripped.lastIndexOf("}");
-      if (firstBrace < 0 || lastBrace <= firstBrace) {
-        errors.push(platform);
-        continue;
-      }
-
-      const data = JSON.parse(stripped.slice(firstBrace, lastBrace + 1));
+      const data = await runJsonPrompt<{ topics?: unknown[] }>(prompt, { stage: "script", timeoutMs: 120_000 });
       if (!data.topics || !Array.isArray(data.topics)) {
         errors.push(platform);
         continue;

@@ -96,6 +96,7 @@ export async function runApiEvaluator(opts: ApiEvaluatorOpts): Promise<EvalResul
       maxStepsPerTurn: config.llm?.guard?.maxStepsPerTurn,
       maxTurnMinutes: config.llm?.guard?.maxTurnMinutes,
     },
+    usageContext: { workId: opts.workId, stage: `eval:${step}` },
   });
 
   try {

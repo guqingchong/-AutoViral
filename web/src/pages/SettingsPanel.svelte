@@ -14,7 +14,7 @@
   let openrouterKey = $state("");
   let researchEnabled = $state(false);
   let researchCron = $state("0 9 * * *");
-  let model = $state("sonnet");
+  let llmDefaultProvider = $state("deepseek");
   let douyinUrl = $state("")
   let memorySyncEnabled = $state(false)
   let chanjingAppId = $state("");
@@ -54,6 +54,34 @@
   let llmShowKey = $state<Record<string, boolean>>({});
   let llmPing = $state<Record<string, { state: "idle" | "testing" | "ok" | "fail"; latencyMs?: number; error?: string }>>({});
 
+  // ── 阶段模型路由(P3-T3,2026-08-18):六阶段 → "provider:model" ──
+  const LLM_STAGE_META = [
+    { key: "research", label: "调研", hint: "话题调研/素材搜索(联网)" },
+    { key: "plan", label: "策划", hint: "分镜规划/脚本" },
+    { key: "assets", label: "素材", hint: "素材准备/生图提示" },
+    { key: "assembly", label: "合成", hint: "视频合成/字幕" },
+    { key: "eval", label: "评审", hint: "阶段质量评审" },
+    { key: "script", label: "文案", hint: "发布文案/杂项 JSON" },
+  ] as const;
+  let llmModels = $state<Record<string, string>>({});
+  let llmModelSuggestions = $state<Record<string, string[]>>({});
+
+  /** 某阶段下拉的可选项:所有启用 provider 的建议模型,格式 "provider:model";当前值不在清单时保留显示 */
+  function stageOptions(stageKey: string): { value: string; label: string }[] {
+    const opts: { value: string; label: string }[] = [];
+    for (const meta of LLM_PROVIDER_META) {
+      if (!llmProviders[meta.key]?.enabled) continue;
+      for (const m of llmModelSuggestions[meta.key] ?? []) {
+        opts.push({ value: `${meta.key}:${m}`, label: `${meta.name} / ${m}` });
+      }
+    }
+    const cur = llmModels[stageKey];
+    if (cur && !opts.some((o) => o.value === cur)) {
+      opts.push({ value: cur, label: `${cur}(自定义)` });
+    }
+    return opts;
+  }
+
   async function pingLlmProvider(key: string) {
     const p = llmProviders[key];
     llmPing[key] = { state: "testing" };
@@ -73,12 +101,6 @@
     }
   }
 
-  const modelOptions = [
-    { value: "opus", label: "Claude Opus" },
-    { value: "sonnet", label: "Claude Sonnet" },
-    { value: "haiku", label: "Claude Haiku" },
-  ];
-
   async function loadConfig() {
     loading = true;
     try {
@@ -90,7 +112,7 @@
         openrouterKey = data.openrouterKey ?? data.apiKey ?? "";
         researchEnabled = data.researchEnabled ?? data.autoRun ?? false;
         researchCron = data.researchCron ?? data.interval ?? "0 9 * * *";
-        model = data.model ?? "sonnet";
+        llmDefaultProvider = data.llm?.defaultProvider ?? "deepseek";
         douyinUrl = data.douyinUrl ?? ""
         memorySyncEnabled = data.memorySyncEnabled ?? false
         chanjingAppId = data.chanjingAppId ?? ""
@@ -111,7 +133,10 @@
             visionModel: p.visionModel ?? "",
             enabled: p.enabled !== false,
           };
+          llmModelSuggestions[meta.key] = p.modelSuggestions ?? [];
         }
+        // 阶段路由(P3-T3):llm.models 原样铺进六个下拉
+        llmModels = { ...(data.llm?.models ?? {}) };
       }
     } catch {
       // silently fail
@@ -133,7 +158,6 @@
           openrouterKey,
           researchEnabled,
           researchCron,
-          model,
           douyinUrl,
           chanjingAppId,
           chanjingSecretKey,
@@ -146,11 +170,14 @@
           memorySyncEnabled,
           // llm 段整组提交;掩码回显(含 ***)的 key 服务端保留原值不覆盖
           llm: {
+            defaultProvider: llmDefaultProvider,
             providers: Object.fromEntries(
               Object.entries(llmProviders).map(([k, p]) => [k, {
                 apiKey: p.apiKey, baseUrl: p.baseUrl, visionModel: p.visionModel, enabled: p.enabled,
               }]),
             ),
+            // 阶段路由:空字符串=未设置(服务端回退 defaultProvider),不提交空项
+            models: Object.fromEntries(Object.entries(llmModels).filter(([, v]) => v)),
           },
         }),
       });
@@ -322,18 +349,19 @@
             </div>
           </section>
 
-          <!-- Model Selection -->
+          <!-- 默认 provider(P3-T3:取代 CLI 时代的 opus/sonnet/haiku 默认模型) -->
           <section class="config-section">
-            <h3 class="section-label">模型选择</h3>
+            <h3 class="section-label">默认大模型</h3>
             <div class="field-group">
               <label class="field-label">
-                默认模型
-                <select class="field-select" bind:value={model}>
-                  {#each modelOptions as opt}
-                    <option value={opt.value}>{opt.label}</option>
+                默认 provider
+                <select class="field-select" bind:value={llmDefaultProvider}>
+                  {#each LLM_PROVIDER_META as meta}
+                    <option value={meta.key}>{meta.name}（{meta.hint}）</option>
                   {/each}
                 </select>
               </label>
+              <p class="field-hint">阶段路由未单独设置的阶段走该 provider 的默认模型；API Key 在下方「大模型直连」卡片配置。</p>
             </div>
           </section>
 
@@ -394,6 +422,23 @@
                 </div>
               </div>
             {/each}
+
+            <!-- 阶段模型路由(P3-T3):一部片各阶段各走各的模型 -->
+            <div class="llm-routing">
+              <h4 class="llm-routing-title">阶段模型路由</h4>
+              <p class="field-hint">每个阶段独立选模型；不选则走默认 provider（DeepSeek）。一部片的各阶段自动切换，无需改配置。</p>
+              {#each LLM_STAGE_META as stage}
+                <label class="field-label llm-stage-row">
+                  <span class="llm-stage-name">{stage.label}<span class="llm-stage-hint">{stage.hint}</span></span>
+                  <select class="field-input llm-stage-select" bind:value={llmModels[stage.key]}>
+                    <option value="">默认（defaultProvider）</option>
+                    {#each stageOptions(stage.key) as opt}
+                      <option value={opt.value}>{opt.label}</option>
+                    {/each}
+                  </select>
+                </label>
+              {/each}
+            </div>
           </section>
 
           <!-- Creator Data Collection -->
@@ -671,8 +716,7 @@
   }
 
   /* 大模型直连卡片(P1-T7) */
-  .llm-card {
-    display: flex;
+  .llm-card {    display: flex;
     flex-direction: column;
     gap: 0.55rem;
     padding: 0.75rem;
@@ -751,6 +795,47 @@
 
   .ping-result.ping-fail {
     color: #f87171;
+  }
+
+  /* 阶段模型路由(P3-T3) */
+  .llm-routing {
+    margin-top: 0.75rem;
+    padding-top: 0.65rem;
+    border-top: 1px dashed rgba(255, 255, 255, 0.1);
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .llm-routing-title {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.85);
+    margin: 0;
+  }
+
+  .llm-stage-row {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 0.6rem;
+  }
+
+  .llm-stage-name {
+    min-width: 7.5rem;
+    font-size: 0.78rem;
+    color: rgba(255, 255, 255, 0.8);
+    display: flex;
+    flex-direction: column;
+  }
+
+  .llm-stage-hint {
+    font-size: 0.65rem;
+    color: rgba(255, 255, 255, 0.4);
+  }
+
+  .llm-stage-select {
+    flex: 1;
   }
 
   .field-group {

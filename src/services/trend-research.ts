@@ -1,4 +1,4 @@
-﻿import { spawn, execFile } from "node:child_process";
+﻿import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,8 +6,12 @@ import { createSnapshot } from "../db/trends-repo.js";
 import { createTopic, listTopics } from "../db/topics-repo.js";
 import { recordDataSourceReference } from "../db/data-sources-repo.js";
 import type { DbTopic } from "../db/types.js";
-import { resolveClaudeCommand } from "../ws-bridge.js";
+import { loadConfig } from "../config.js";
+import { resolveModelFor } from "../llm/registry.js";
+import { PROVIDER_PRESETS } from "../llm/provider-keys.js";
+import { chatJsonWithSearch } from "../llm/search-json.js";
 import { buildTonePrompt } from "./tone-profile.js";
+import { getTopicWeights } from "./feedback-loop.js";
 import { fetchZhihuHotList, zhihuSearch } from "./zhihu-data-api.js";
 
 const execFileAsync = promisify(execFile);
@@ -163,7 +167,14 @@ export async function collectTrends(platforms: string[], interests: string[] = [
   }
 
   // 全局 TopN：综合分降序，同分优先热度；截断后按平台分组入库
-  const ranked = [...candidates].sort((a, b) => topicScore(b) - topicScore(a) || (Number(b.heat) || 0) - (Number(a.heat) || 0));
+  // P3-T4 数据回流:品类×情绪 的历史三率权重修正综合分(样本<2 的组合权重恒 1)
+  const feedbackWeights = getTopicWeights();
+  const weightOf = (t: { category?: string; emotion_type?: string }) => {
+    const w = feedbackWeights.find((x) => x.category === t.category && (!t.emotion_type || x.emotionType === t.emotion_type));
+    return w && w.samples >= 2 ? w.weight : 1;
+  };
+  const scored = (t: (typeof candidates)[number]) => topicScore(t) * weightOf(t);
+  const ranked = [...candidates].sort((a, b) => scored(b) - scored(a) || (Number(b.heat) || 0) - (Number(a.heat) || 0));
   const finalTopics = opts.topN && opts.topN > 0 ? ranked.slice(0, opts.topN) : ranked;
 
   for (const t of finalTopics) {
@@ -180,8 +191,7 @@ export async function collectTrends(platforms: string[], interests: string[] = [
   return results;
 }
 
-function analyzeTrendsWithAgent(platform: string, rawData: string, interests: string[], snapshotId: number, toneProfile?: Record<string, unknown> | null): Promise<Omit<DbTopic, "id" | "created_at" | "status">[]> {
-  return new Promise((resolve) => {
+async function analyzeTrendsWithAgent(platform: string, rawData: string, interests: string[], snapshotId: number, toneProfile?: Record<string, unknown> | null): Promise<Omit<DbTopic, "id" | "created_at" | "status">[]> {
     const PLATFORM_LABELS: Record<string, string> = {
       xiaohongshu: "小红书", douyin: "抖音", bilibili: "B站",
       zhihu: "知乎", kuaishou: "快手", channels: "视频号", wechat_mp: "微信公众号",
@@ -198,7 +208,7 @@ function analyzeTrendsWithAgent(platform: string, rawData: string, interests: st
           `**强制规则：**`,
           `1. **100% 的推荐话题必须直接属于用户关注的领域或其紧密相关子领域。禁止返回任何与关注领域无关的泛热门话题。**`,
           `2. 每个关注领域至少覆盖 3-5 个话题。如果一个领域太大（如"科技"），请拆分为具体子方向（如 AI、芯片、新能源、自动驾驶）`,
-          `3. 如果某个关注领域在当前平台热搜中完全没有相关条目，请用 WebSearch 深度搜索该领域，而不是用泛热门话题填充`,
+          `3. 如果某个关注领域在当前平台热搜中完全没有相关条目，请用联网搜索深度搜索该领域，而不是用泛热门话题填充`,
           `4. 每个话题的 title 中必须包含该关注领域的具体关键词，不能是泛化的"热门话题"`,
           `5. 如果用户领域偏专业/技术（如"芯片制造""量子计算"），用该领域的专业视角找趋势，不要强行套用娱乐化情绪模板`,
         ].join("\n")
@@ -216,8 +226,8 @@ function analyzeTrendsWithAgent(platform: string, rawData: string, interests: st
         ]).join(" ")
       : "";
     const dataClause = rawData
-      ? `\n以下是通过 API 获取的 ${platformLabel} 实时热搜数据。请先从中筛选出与用户关注领域直接相关的条目（如果没有则跳过）。然后**必须使用 WebSearch 工具**搜索以下关键词，每个关键词一次独立搜索，补充领域专属内容：\n${interestSearchTerms || `"${platformLabel} 爆款内容 趋势 ${year}"`}\n\n**重要**：WebSearch 搜索是关键步骤，不要跳过。用户关注领域的热门话题通常不在泛热搜榜上，必须通过定向搜索获取。\n\n热搜原始数据：\n\`\`\`json\n${rawData.slice(0, 3000)}\n\`\`\`\n`
-      : `\n无法通过 API 获取实时数据。请使用 WebSearch 按以下关键词搜索（每个关键词一次独立搜索）：\n${interestSearchTerms || `"${platformLabel} 爆款内容 趋势 ${year}" "${platformLabel} 热门话题 最新 ${year}"`}\n${interests.length ? `\n**注意**：搜索结果必须围绕用户关注领域展开。不要返回与用户领域无关的泛热门内容。` : ""}\n`;
+      ? `\n以下是通过 API 获取的 ${platformLabel} 实时热搜数据。请先从中筛选出与用户关注领域直接相关的条目（如果没有则跳过）。然后**必须使用联网搜索工具**搜索以下关键词，每个关键词一次独立搜索，补充领域专属内容：\n${interestSearchTerms || `"${platformLabel} 爆款内容 趋势 ${year}"`}\n\n**重要**：联网搜索是关键步骤，不要跳过。用户关注领域的热门话题通常不在泛热搜榜上，必须通过定向搜索获取。\n\n热搜原始数据：\n\`\`\`json\n${rawData.slice(0, 3000)}\n\`\`\`\n`
+      : `\n无法通过 API 获取实时数据。请使用联网搜索按以下关键词搜索（每个关键词一次独立搜索）：\n${interestSearchTerms || `"${platformLabel} 爆款内容 趋势 ${year}" "${platformLabel} 热门话题 最新 ${year}"`}\n${interests.length ? `\n**注意**：搜索结果必须围绕用户关注领域展开。不要返回与用户领域无关的泛热门内容。` : ""}\n`;
     const tonePrefix = buildTonePrompt(toneProfile);
     const prompt = [
       `你是一个专业的社交媒体趋势研究员。请分析 ${platformLabel} 平台上用户关注领域的最新内容趋势。`,
@@ -272,62 +282,38 @@ function analyzeTrendsWithAgent(platform: string, rawData: string, interests: st
       `- **如果用户关注领域较专业，topics 中技术/行业类话题应占比 ≥ 70%**`,
     ].join("\n");
 
-    const cli = resolveClaudeCommand();
-    console.log(`[trends] spawning Claude CLI for ${platformLabel} (cli=${cli}, interests=[${interests.join(",")}])`);
-    const proc = spawn(cli, ["-p", prompt, "--output-format", "json", "--dangerously-skip-permissions", "--model", "sonnet"], {
-      cwd: process.env.HOME ?? process.cwd(),
-      env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: "cli" },
-      windowsHide: true, // Windows 下不弹出控制台窗口
-    });
-    // Close stdin immediately to prevent 3s wait
-    try { proc.stdin?.end(); } catch { /* ignore */ }
-    let stdout = "";
-    let stderr = "";
-    proc.stdout?.on("data", (d: Buffer) => { stdout += d.toString(); });
-    proc.stderr?.on("data", (d: Buffer) => { stderr += d.toString(); });
-    proc.on("exit", (code) => {
-      if (code !== 0 || stderr) {
-        console.error(`[trends] Claude CLI exit code=${code}, stderr=${stderr.slice(0, 500)}`);
-      }
-      try {
-        const envelope = JSON.parse(stdout);
-        const text = (envelope.result ?? "").replace(/```json?\s*/gi, "").replace(/```/g, "").trim();
-        const first = text.indexOf("{");
-        const last = text.lastIndexOf("}");
-        if (first < 0 || last <= first) {
-          console.error(`[trends] Claude CLI returned no JSON object. result preview: ${text.slice(0, 200)}`);
-          return resolve([]);
-        }
-        const parsed = JSON.parse(text.slice(first, last + 1));
-        const topics = (parsed.topics ?? []).map((t: any) => ({
-          platform,
-          title: String(t.title ?? ""),
-          description: String(t.description ?? ""),
-          heat: Number(t.heat) || 1,
-          competition: String(t.competition ?? "中"),
-          opportunity: String(t.opportunity ?? "蓝海"),
-          emotion_type: String(t.emotionType ?? ""),
-          emotion_subtype: String(t.emotionSubtype ?? ""),
-          tags: Array.isArray(t.tags) ? t.tags.map(String) : [],
-          content_angles: Array.isArray(t.contentAngles) ? t.contentAngles.map(String) : [],
-          example_hook: String(t.exampleHook ?? ""),
-          category: String(t.category ?? ""),
-          source_url: String(t.sourceUrl ?? ""),
-        }));
-        console.log(`[trends] Claude CLI returned ${topics.length} topics for ${platformLabel}`);
-        resolve(topics);
-      } catch (err) {
-        console.error(`[trends] Claude CLI JSON parse error:`, err instanceof Error ? err.message : err);
-        console.error(`[trends] stdout preview:`, stdout.slice(0, 1000));
-        resolve([]);
-      }
-    });
-    proc.on("error", (err) => {
-      console.error(`[trends] Claude CLI spawn error:`, err.message);
-      resolve([]);
-    });
-    setTimeout(() => { try { proc.kill(); } catch {} resolve([]); }, 480000); // 8 分钟：深度调研提示词要求多轮 WebSearch，3 分钟必被腰斩
-  });
+    // 2026-08-18 P3-T1：spawn Claude CLI → LLM 直连（research 档 + 平台内置搜索）
+    const config = await loadConfig();
+    const { provider, model } = resolveModelFor(config, "research");
+    const builtinSearchTool = PROVIDER_PRESETS[provider.name]?.builtinSearchTool;
+    console.log(`[trends] ${platformLabel} 趋势调研 → ${provider.name}:${model}${builtinSearchTool ? `(内置搜索:${builtinSearchTool})` : "(无内置搜索,退化为单发)"}`);
+    try {
+      const parsed = await chatJsonWithSearch<{ topics?: any[] }>(provider, model, prompt, {
+        timeoutMs: 480_000, // 8 分钟：深度调研要求多轮搜索，3 分钟必被腰斩
+        maxRounds: 12,
+        builtinSearchTool,
+      });
+      const topics = (parsed.topics ?? []).map((t: any) => ({
+        platform,
+        title: String(t.title ?? ""),
+        description: String(t.description ?? ""),
+        heat: Number(t.heat) || 1,
+        competition: String(t.competition ?? "中"),
+        opportunity: String(t.opportunity ?? "蓝海"),
+        emotion_type: String(t.emotionType ?? ""),
+        emotion_subtype: String(t.emotionSubtype ?? ""),
+        tags: Array.isArray(t.tags) ? t.tags.map(String) : [],
+        content_angles: Array.isArray(t.contentAngles) ? t.contentAngles.map(String) : [],
+        example_hook: String(t.exampleHook ?? ""),
+        category: String(t.category ?? ""),
+        source_url: String(t.sourceUrl ?? ""),
+      }));
+      console.log(`[trends] ${provider.name} returned ${topics.length} topics for ${platformLabel}`);
+      return topics;
+    } catch (err) {
+      console.error(`[trends] 趋势调研失败(${platformLabel}):`, err instanceof Error ? err.message : err);
+      return [];
+    }
 }
 
 export { listTopics, getTopic } from "../db/topics-repo.js";

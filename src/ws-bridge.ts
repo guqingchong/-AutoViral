@@ -695,6 +695,7 @@ ${unattended
           maxStepsPerTurn: config.llm?.guard?.maxStepsPerTurn,
           maxTurnMinutes: config.llm?.guard?.maxTurnMinutes,
         },
+        usageContext: { workId, stage: stageKey },
       },
       messages,
     );

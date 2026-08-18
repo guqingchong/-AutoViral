@@ -63,6 +63,8 @@ export interface AgentLoopDeps {
   };
   /** 结构压缩阈值(tokens 估算,默认 120k)——测试可传小值 */
   compactThreshold?: number;
+  /** 用量记账上下文(P3-T2):挂上后每次 chatStream 的 usage 事件落 llm_usage 并做日预算熔断 */
+  usageContext?: { workId?: string; stage?: string };
 }
 
 export class LoopGuardError extends Error {}
@@ -109,6 +111,35 @@ export class AgentLoop {
     restored?: AgentMessage[],
   ) {
     this.messages = restored ?? [];
+  }
+
+  /** usage 事件落账(P3-T2) + 日预算熔断。异步执行,不阻塞主循环;失败仅告警 */
+  private recordUsage(ev: { inputTokens: number; outputTokens: number; cacheReadTokens?: number }, useVision: boolean): void {
+    const ctx = this.deps.usageContext;
+    if (!ctx) return;
+    const provider = useVision && this.deps.visionProvider ? this.deps.visionProvider : this.deps.provider;
+    const model = useVision && this.deps.visionModel ? this.deps.visionModel : this.deps.model;
+    void (async () => {
+      try {
+        const { loadConfig } = await import("../config.js");
+        const { recordUsage, enforceDailyBudget } = await import("../services/llm-usage.js");
+        const { listQueue, setStatus } = await import("../db/work-queue-repo.js");
+        const config = await loadConfig();
+        recordUsage(config, {
+          workId: ctx.workId, stage: ctx.stage, provider: provider.name, model,
+          inputTokens: ev.inputTokens, outputTokens: ev.outputTokens, cacheReadTokens: ev.cacheReadTokens,
+        });
+        enforceDailyBudget(config, () => {
+          let n = 0;
+          for (const item of listQueue()) {
+            if (item.status === "running" || item.status === "queued") { setStatus(item.workId, "paused"); n++; }
+          }
+          return n;
+        });
+      } catch (err) {
+        console.warn("[agent-loop] usage 记账失败(不阻断主流程):", err instanceof Error ? err.message : err);
+      }
+    })();
   }
 
   abortTurn(): void {
@@ -186,6 +217,7 @@ export class AgentLoop {
           (ev) => {
             if (ev.type === "text_delta") this.deps.onLoopEvent({ type: "text_delta", text: ev.text });
             else if (ev.type === "thinking_delta") this.deps.onLoopEvent({ type: "thinking_delta", text: ev.text });
+            else if (ev.type === "usage") this.recordUsage(ev, useVision);
           },
         );
 

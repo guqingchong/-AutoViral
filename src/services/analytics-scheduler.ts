@@ -15,6 +15,7 @@ import { evolveFromPerformance } from "./self-evolution.js";
 import { createBaseline as createBaselineRecord } from "../db/baselines-repo.js";
 import { getWork } from "../work-store.js";
 import { collectAll } from "../analytics-collector.js";
+import { collectFeedback } from "./feedback-loop.js";
 import cron from "node-cron";
 import type { Config } from "../config.js";
 
@@ -52,6 +53,13 @@ export function startScheduler(
       } catch (e) {
         console.error(`[analytics-scheduler] ${adapter.platform} account error:`, e);
       }
+    }
+    // P3-T4 数据回流:发布满 48h 的作品抓三率 → topic_scores(选题权重)
+    try {
+      const fb = collectFeedback();
+      console.log(`[analytics-scheduler] 数据回流:三率入库 ${fb.processed} 条,跳过 ${fb.skipped} 条`);
+    } catch (e) {
+      console.error("[analytics-scheduler] 数据回流失败:", e);
     }
   });
 

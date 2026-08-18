@@ -32,7 +32,21 @@
 
   // Config state
   let interval: string = $state("1h");
-  let model: string = $state("sonnet");
+  let model: string = $state("");  // P3-T3:llm.models.research("provider:model"),空串=默认阶段路由
+  let llmModelOptions = $state<{ value: string; label: string }[]>([]);
+
+  // P3-T3:调研模型选项从 llm.providers 建议清单动态生成(取代 opus/sonnet/haiku 硬编码)
+  function buildLlmModelOptions(data: any): { value: string; label: string }[] {
+    const names: Record<string, string> = { deepseek: "DeepSeek", kimi: "Kimi", glm: "GLM" };
+    const opts: { value: string; label: string }[] = [];
+    for (const [key, p] of Object.entries<any>(data.llm?.providers ?? {})) {
+      if (p.enabled === false) continue;
+      for (const m of p.modelSuggestions ?? []) {
+        opts.push({ value: `${key}:${m}`, label: `${names[key] ?? key} / ${m}` });
+      }
+    }
+    return opts;
+  }
   let autoRun: boolean = $state(false);
   /** 自动调研频率与执行时间（映射为 cron 存 research.schedule） */
   let researchFreq: string = $state("daily");
@@ -231,7 +245,9 @@
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          interval, model, autoRun,
+          interval, autoRun,
+          // P3-T3:调研模型写 llm.models.research(服务端键级合并,空串=回退默认)
+          llm: { models: { research: model } },
           researchEnabled: autoRun,
           researchCron: buildResearchCron(),
           pexelsApiKey, pixabayApiKey, unsplashAccessKey,
@@ -281,11 +297,12 @@
     try {
       const c = await fetchConfig();
       interval = c.interval;
-      model = c.model;
       autoRun = c.autoRun;
       const res = await fetch("/api/config");
       if (res.ok) {
         const data = await res.json();
+        model = data.llm?.models?.research ?? "";
+        llmModelOptions = buildLlmModelOptions(data);
         pexelsApiKey = data.pexelsApiKey ?? "";
         pixabayApiKey = data.pixabayApiKey ?? "";
         unsplashAccessKey = data.unsplashAccessKey ?? "";
@@ -471,9 +488,10 @@
             <label class="field-row">
               <span class="field-label-sm">{tt("aiModel")}</span>
               <select bind:value={model}>
-                <option value="haiku">{tt("claudeHaikuFast")}</option>
-                <option value="sonnet">{tt("claudeSonnetBalanced")}</option>
-                <option value="opus">{tt("claudeOpusCapable")}</option>
+                <option value="">{tt("stageRoutingDefault")}</option>
+                {#each llmModelOptions as opt}
+                  <option value={opt.value}>{opt.label}</option>
+                {/each}
               </select>
             </label>
             <div class="field-row">
