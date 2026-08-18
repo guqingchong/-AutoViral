@@ -394,7 +394,7 @@
       "deps": [
         "P2-T1"
       ],
-      "status": "in-progress(live e2e 中)"
+      "status": "done(live 验收: w_20260817_1740_5e3 出片入待审)"
     },
     {
       "id": "P2-T3",
