@@ -27,6 +27,8 @@ export interface LlmProviderConfig {
   visionModel?: string;
   /** 启用开关（设置页「大模型直连」卡片,2026-08-17 P1-T7）；false 时该 provider 不参与路由，缺省视为启用 */
   enabled?: boolean;
+  /** 多轮回填 reasoning_content（Kimi thinking 模式必须；DeepSeek 必须不回填）。缺省走预设 */
+  passReasoningBack?: boolean;
 }
 
 export interface LlmConfig {

@@ -10,6 +10,13 @@ export interface ProviderPreset {
   visionModel?: string;
   /** 平台服务端执行的联网搜索内置工具名(2026-08-17 实测:Kimi coding 端点 $web_search 两段协议可用) */
   builtinSearchTool?: string;
+  /** 多轮回填时 assistant 消息是否携带 reasoning_content（thinking 模式供应商的强制要求,
+   *  不回填则 400:The `reasoning_content` in the thinking mode must be passed back to the API。
+   *  2026-08-18 实测 deepseek-v4-pro(长链工具回合)与 kimi-for-coding 均要求回填）
+   */
+  passReasoningBack?: boolean;
+  /** 阶段路由下拉的建议模型清单(P3-T3 设置页选项来源,仅建议——用户可手输自定义值) */
+  modelSuggestions?: string[];
 }
 
 export const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
@@ -17,6 +24,10 @@ export const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
     protocol: "openai",
     baseUrl: "https://api.deepseek.com/v1",
     visionModel: undefined,  // 公开 API 无视觉（2026-08-16 实证）；用 glm-4v
+    // 2026-08-18 实测:deepseek-v4-pro 长链工具回合强制要求回填 reasoning_content
+    // (400: The `reasoning_content` in the thinking mode must be passed back)，短链不触发
+    passReasoningBack: true,
+    modelSuggestions: ["deepseek-v4-flash", "deepseek-v4-pro"],
   },
   kimi: {
     protocol: "openai",
@@ -24,10 +35,13 @@ export const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
     baseUrl: "https://api.kimi.com/coding/v1",
     visionModel: "kimi-for-coding",
     builtinSearchTool: "$web_search",
+    passReasoningBack: true,
+    modelSuggestions: ["kimi-for-coding"],
   },
   glm: {
     protocol: "openai",
     baseUrl: "https://open.bigmodel.cn/api/paas/v4",
     visionModel: "glm-4v",
+    modelSuggestions: ["glm-4v", "glm-4.6"],
   },
 };

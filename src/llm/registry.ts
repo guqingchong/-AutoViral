@@ -38,7 +38,11 @@ export function getProvider(config: Config, key?: string): LlmProvider {
   if (protocol !== "openai") {
     throw new Error(`provider "${providerKey}" 的 protocol=${protocol} 尚未实现（一期仅 openai 兼容）`);
   }
-  const provider = new OpenAICompatProvider(providerKey, { baseUrl, apiKey });
+  const provider = new OpenAICompatProvider(providerKey, {
+    baseUrl,
+    apiKey,
+    passReasoningBack: override?.passReasoningBack ?? preset?.passReasoningBack ?? false,
+  });
   providerCache.set(providerKey, provider);
   return provider;
 }

@@ -23,7 +23,7 @@ import type {
   ToolUseBlock,
 } from "./types.js";
 import { noRetry, withRetry } from "./retry.js";
-import { extractJsonFromText } from "../services/llm-json.js";
+import { extractJsonFromText, JSON_OUTPUT_DISCIPLINE } from "./json-extract.js";
 import { QuotaExhaustedError, isQuotaErrorText, reportQuotaSuccess } from "../services/quota-guard.js";
 
 interface OpenAiToolCallDelta {
@@ -37,7 +37,7 @@ interface OpenAiToolCallDelta {
  *  历史里的 builtin tool_call 仅当本会话仍挂载该内置工具时才按 builtin_function 序列化,
  *  否则降级为普通 function(跨 provider 恢复会话时对方方言不认识 builtin_function,
  *  2026-08-17 实测 deepseek 400:unknown variant) */
-function toOpenAiMessages(system: string, messages: AgentMessage[], builtinTools: Set<string> = new Set(), allowImages = true): Record<string, unknown>[] {
+function toOpenAiMessages(system: string, messages: AgentMessage[], builtinTools: Set<string> = new Set(), allowImages = true, passReasoningBack = false): Record<string, unknown>[] {
   const out: Record<string, unknown>[] = [{ role: "system", content: system }];
   for (const m of messages) {
     if (m.role === "assistant") {
@@ -55,6 +55,15 @@ function toOpenAiMessages(system: string, messages: AgentMessage[], builtinTools
         }));
       const msg: Record<string, unknown> = { role: "assistant", content: text || null };
       if (toolCalls.length) msg.tool_calls = toolCalls;
+      // thinking 模式供应商(Kimi/DeepSeek-v4)：多轮回填必须带 reasoning_content，否则 400
+      // （2026-08-18 验收片评审 deepseek-v4-pro 长链工具回合实测踩中）；由 provider 级开关控制
+      if (passReasoningBack) {
+        const reasoning = m.content
+          .filter((b): b is ThinkingBlock => b.type === "thinking")
+          .map((b) => b.thinking)
+          .join("");
+        if (reasoning) msg.reasoning_content = reasoning;
+      }
       out.push(msg);
     } else {
       // user 消息：可能含 tool_result / text / image 混合
@@ -133,7 +142,7 @@ export class OpenAICompatProvider implements LlmProvider {
   readonly protocol = "openai" as const;
   constructor(
     readonly name: string,
-    private opts: { baseUrl: string; apiKey: string },
+    private opts: { baseUrl: string; apiKey: string; passReasoningBack?: boolean },
   ) {}
 
   async chatStream(
@@ -168,7 +177,7 @@ export class OpenAICompatProvider implements LlmProvider {
       },
       body: JSON.stringify({
         model: req.model,
-        messages: toOpenAiMessages(req.system, req.messages, new Set(req.tools.filter((t) => t.builtin).map((t) => t.name)), req.allowImages !== false),
+        messages: toOpenAiMessages(req.system, req.messages, new Set(req.tools.filter((t) => t.builtin).map((t) => t.name)), req.allowImages !== false, this.opts.passReasoningBack === true),
         tools: req.tools.length ? toOpenAiTools(req.tools) : undefined,
         max_tokens: req.maxTokens,
         stream: true,
@@ -178,6 +187,27 @@ export class OpenAICompatProvider implements LlmProvider {
     });
     if (!res.ok) {
       const body = await res.text().catch(() => "");
+      // 诊断留证(2026-08-18 kimi reasoning_content 400 排查):400 时落盘请求体供复盘
+      if (res.status === 400) {
+        try {
+          const { writeFileSync, mkdirSync, existsSync } = await import("node:fs");
+          const { join } = await import("node:path");
+          const { homedir } = await import("node:os");
+          const dir = join(homedir(), ".autoviral", "logs");
+          if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+          const msgs = toOpenAiMessages(req.system, req.messages, new Set(req.tools.filter((t) => t.builtin).map((t) => t.name)), req.allowImages !== false, this.opts.passReasoningBack === true);
+          writeFileSync(join(dir, "last-400-request.json"), JSON.stringify({
+            provider: this.name, model: req.model, at: new Date().toISOString(),
+            error: body.slice(0, 500),
+            messageSummary: msgs.map((m: any) => ({
+              role: m.role,
+              hasReasoning: typeof m.reasoning_content === "string" && m.reasoning_content.length > 0,
+              contentLen: typeof m.content === "string" ? m.content.length : JSON.stringify(m.content ?? "").length,
+              toolCalls: (m.tool_calls ?? []).length,
+            })),
+          }, null, 2));
+        } catch { /* 诊断失败不阻断主流程 */ }
+      }
       // 配额类错误单列:不可重试 + 可被 loop/work-queue 识别冒泡(A3 配额防护)
       if (isQuotaErrorText(body)) {
         throw noRetry(new QuotaExhaustedError(`LLM API ${res.status} 配额耗尽: ${body.slice(0, 200)}`));
@@ -316,7 +346,7 @@ export class OpenAICompatProvider implements LlmProvider {
           },
           body: JSON.stringify({
             model: opts.model,
-            messages: [{ role: "user", content: prompt }],
+            messages: [{ role: "user", content: prompt + JSON_OUTPUT_DISCIPLINE }],
             stream: false,
           }),
           signal: controller.signal,
