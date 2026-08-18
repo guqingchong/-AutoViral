@@ -141,4 +141,52 @@ describe("OpenAICompatProvider.chatStream", () => {
     expect(captured.messages[2]).toEqual({ role: "tool", tool_call_id: "c1", content: "文件内容" });
     expect(captured.messages[3].content[1]).toEqual({ type: "image_url", image_url: { url: "data:image/png;base64,QUJD" } });
   });
+
+  it("passReasoningBack=true 时 assistant thinking 回填为 reasoning_content（Kimi thinking 模式）", async () => {
+    let captured: any;
+    const spy = vi.fn().mockImplementation((_url: string, init: any) => {
+      captured = JSON.parse(init.body);
+      return Promise.resolve(new Response(sseStream([JSON.stringify({ choices: [{ delta: { content: "x" }, finish_reason: "stop" }] })]), { status: 200 }));
+    });
+    vi.stubGlobal("fetch", spy);
+    const p = new OpenAICompatProvider("kimi", { baseUrl: "https://x/v1", apiKey: "k", passReasoningBack: true });
+    await p.chatStream({
+      model: "m",
+      system: "sys",
+      messages: [
+        { role: "assistant", content: [
+          { type: "thinking", thinking: "先分析合规风险" },
+          { type: "text", text: "结论" },
+        ] },
+        { role: "user", content: [{ type: "text", text: "继续" }] },
+      ],
+      tools: [],
+      maxTokens: 10,
+    }, () => {});
+    expect(captured.messages[1].reasoning_content).toBe("先分析合规风险");
+    expect(captured.messages[1].content).toBe("结论");
+  });
+
+  it("passReasoningBack 缺省/false 时丢弃 thinking（不回填路径）", async () => {
+    let captured: any;
+    const spy = vi.fn().mockImplementation((_url: string, init: any) => {
+      captured = JSON.parse(init.body);
+      return Promise.resolve(new Response(sseStream([JSON.stringify({ choices: [{ delta: { content: "x" }, finish_reason: "stop" }] })]), { status: 200 }));
+    });
+    vi.stubGlobal("fetch", spy);
+    const p = new OpenAICompatProvider("deepseek", { baseUrl: "https://x/v1", apiKey: "k" });
+    await p.chatStream({
+      model: "m",
+      system: "sys",
+      messages: [
+        { role: "assistant", content: [
+          { type: "thinking", thinking: "不应回填" },
+          { type: "text", text: "结论" },
+        ] },
+      ],
+      tools: [],
+      maxTokens: 10,
+    }, () => {});
+    expect("reasoning_content" in captured.messages[1]).toBe(false);
+  });
 });
