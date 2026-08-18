@@ -9,6 +9,9 @@ import yaml from "js-yaml";
 import { loadConfig, saveConfig, dataDir, getConfigDir, HEYGEM_TUNNEL_DEFAULTS, H3_TUNNEL_DEFAULTS, type AnalyticsSource, type HeygemTunnelConfig, type H3TunnelConfig, type LlmConfig, type LlmProviderConfig } from "../config.js";
 import { PROVIDER_PRESETS } from "../llm/provider-keys.js";
 import { runJsonPrompt } from "../services/llm-json.js";
+import { PURPOSE_PRESETS, CONTENT_FORMS, getPurpose, purposeEvalFocusBlock } from "../services/purpose-presets.js";
+import { purposeSkillsBlock, countPurposeSkills, listPurposeSkills } from "../db/purpose-skills-repo.js";
+import { researchPurposeSkills } from "../services/purpose-skills.js";
 import { getDb } from "../db/connection.js";
 import { exportBackup, importBackup } from "../db/backup.js";
 import { migrateLegacyWorks } from "../db/migrate-legacy.js";
@@ -2778,6 +2781,7 @@ function buildEvalPrompt(work: Work, step: string, attempt: number, historyText:
 - 当前阶段: ${stepName}
 - 评审轮次: 第${attempt}轮
 - **作品目录: ${workDir}**
+${work.purpose ? purposeEvalFocusBlock(work.purpose) : ""}
 
 ## 评审标准
 请阅读评审标准文件(绝对路径): ${join(homedir(), ".claude", "skills", "content-evaluator", "criteria", `${step}.md`)}。如果文件不存在，请使用通用的内容质量标准进行评审，不要花时间寻找该文件。
@@ -2827,6 +2831,37 @@ ${prevResultsText ? `## 历史评审记录\n${prevResultsText}\n\n请特别关�
 - 任何维度 < 6/10 → 必须 fail
 - 所有维度 ≥ 7/10 且无 critical 问题 → pass`;
 }
+
+// ── 用途预设(04 方案,2026-08-18)──────────────────────────────────────────
+// GET /api/purposes — 六用途定义+内容形式全集+各用途技能包条数(前端批量弹窗渲染源)
+apiRoutes.get("/api/purposes", async (c) => {
+  return c.json({
+    purposes: PURPOSE_PRESETS.map((p) => ({
+      key: p.key, label: p.label, icon: p.icon, goal: p.goal, strategy: p.strategy,
+      forms: p.forms, defaults: p.defaults, evalFocus: p.evalFocus,
+      requiredTools: p.requiredTools ?? [],
+      skillCount: countPurposeSkills(p.key),
+    })),
+    contentForms: CONTENT_FORMS,
+  });
+});
+
+// GET /api/purposes/:key/skills — 某用途的技能包明细
+apiRoutes.get("/api/purposes/:key/skills", async (c) => {
+  const key = c.req.param("key");
+  if (!getPurpose(key)) return c.json({ error: "未知用途" }, 404);
+  return c.json({ skills: listPurposeSkills(key, 50) });
+});
+
+// POST /api/purposes/:key/research — 联网调研更新技能包(后台跑,立即返回)
+apiRoutes.post("/api/purposes/:key/research", async (c) => {
+  const key = c.req.param("key");
+  if (!getPurpose(key)) return c.json({ error: "未知用途" }, 404);
+  researchPurposeSkills(key)
+    .then((r) => log("info", "api", "purpose_research_done", key, { added: r.added, reused: r.reused, total: r.total }))
+    .catch((err) => log("error", "api", "purpose_research_failed", key, { error: (err as Error).message }));
+  return c.json({ ok: true, started: true, message: "技能包调研已启动(约 2-5 分钟),稍后刷新查看条数" });
+});
 
 // POST /api/works/:id/pipeline/advance — agent calls this to advance pipeline
 apiRoutes.post("/api/works/:id/pipeline/advance", async (c) => {
@@ -3418,14 +3453,14 @@ interface BatchConvertOptions {
   assetBudget?: string;
   /** 质量评审闸门：默认开（true），显式传 false 关闭 */
   evaluationMode?: boolean;
+  /** 用途（04 方案）：六用途之一；决定默认参数/技能包注入/评审关注点 */
+  purpose?: string;
 }
 
-const CONTENT_FORM_LABELS: Record<string, string> = {
-  hot_comment: "热点评述",
-  knowledge: "知识科普",
-  industry: "行业洞察",
-  insight: "观点输出",
-};
+// 2026-08-18 04 方案：标签全集改由 purpose-presets.CONTENT_FORMS 提供(13 种)
+const CONTENT_FORM_LABELS: Record<string, string> = Object.fromEntries(
+  Object.entries(CONTENT_FORMS).map(([k, v]) => [k, v.label]),
+);
 
 /** 素材三维合法值（非法值静默丢弃，不阻断批量任务） */
 const ASSET_FORMS = new Set(["video-mix", "image-carousel", "slides", "auto"]);
@@ -3560,10 +3595,12 @@ async function runBatchConvert(
   // video+image-text：作品仍建 short-video（先走短视频流水线），dual_output=1 标记双产物
   const dualOutput = type === "video+image-text";
   const workType: "short-video" | "image-text" = dualOutput ? "short-video" : type;
-  const duration = body.duration && body.duration > 0 ? body.duration : 180;
-  const assetForm = workType === "short-video" ? sanitizeAssetForm(body.assetForm) : undefined;
-  const assetSource = workType === "short-video" ? sanitizeAssetSource(body.assetSource) : undefined;
-  const assetBudget = workType === "short-video" ? sanitizeAssetBudget(body.assetBudget) : undefined;
+  // 用途预设(04 方案)：显式传参优先,缺省回落到用途默认值,最后才是全局兜底
+  const purposePreset = getPurpose(body.purpose);
+  const duration = body.duration && body.duration > 0 ? body.duration : (purposePreset?.defaults.duration ?? 180);
+  const assetForm = workType === "short-video" ? sanitizeAssetForm(body.assetForm ?? purposePreset?.defaults.assetForm) : undefined;
+  const assetSource = workType === "short-video" ? sanitizeAssetSource(body.assetSource ?? purposePreset?.defaults.assetSource) : undefined;
+  const assetBudget = workType === "short-video" ? sanitizeAssetBudget(body.assetBudget ?? purposePreset?.defaults.assetBudget) : undefined;
 
   // 串行队列：一次只处理一个选题。
   // 2026-07-21 Bug3 根因：并发 2 条链同时 spawn `claude -p`，LLM 订阅并发
@@ -3574,6 +3611,13 @@ async function runBatchConvert(
 
   // 视频制作控制条件 → 注入 topicHint，随 startWorkSession 的 prompt 直达 agent
   const controlLines: string[] = [];
+  if (purposePreset) {
+    controlLines.push(`用途: ${purposePreset.icon} ${purposePreset.label}（目标:${purposePreset.goal}）`);
+    controlLines.push(purposePreset.promptBlock);
+    const skillsBlock = purposeSkillsBlock(purposePreset.key);
+    if (skillsBlock) controlLines.push(skillsBlock);
+    else controlLines.push(`(该用途技能包为空——可在批量弹窗点「更新技能包」联网调研沉淀)`);
+  }
   if (workType === "short-video") {
     controlLines.push(`视频时长: 约${duration}秒`);
     if (body.contentForm) controlLines.push(`视频风格: ${CONTENT_FORM_LABELS[body.contentForm] ?? body.contentForm}`);
@@ -3618,6 +3662,7 @@ async function runBatchConvert(
           evaluationMode: body.evaluationMode ?? true,
           // 批量按钮 = 全自动模式唯一开关(2026-08-16 用户决策)
           autoMode: true,
+          purpose: purposePreset?.key,
         });
         item.workId = work.id;
 

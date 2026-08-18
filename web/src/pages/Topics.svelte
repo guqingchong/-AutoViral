@@ -38,6 +38,64 @@
   let batchVoiceMode = $state<"cloned" | "ai">("ai");
   // 质量评审闸门：默认开（每阶段完成后由独立评审会话把关,不合格打回重做）
   let batchEvaluation = $state<boolean>(true);
+  // ── 用途驱动(04 方案):预设从 /api/purposes 拉取,一处定义前后端共用 ──
+  interface PurposeOption { key: string; label: string; icon: string; goal: string; strategy: string; forms: string[]; defaults: { duration: number; assetForm: string; assetSource: string; assetBudget: string }; skillCount: number; }
+  let purposeOptions = $state<PurposeOption[]>([]);
+  let contentFormMap = $state<Record<string, { label: string; desc: string }>>({});
+  let batchPurpose = $state<string>("");
+  let skillResearching = $state(false);
+  let showAdvanced = $state(false);
+
+  async function loadPurposes() {
+    try {
+      const res = await fetch("/api/purposes");
+      if (res.ok) {
+        const data = await res.json();
+        purposeOptions = data.purposes ?? [];
+        contentFormMap = data.contentForms ?? {};
+      }
+    } catch { /* 静默:用途拉取失败时退化为旧平铺 */ }
+  }
+
+  /** 选用途 → 联动默认参数(用户仍可在高级区改) */
+  function selectPurpose(key: string) {
+    batchPurpose = batchPurpose === key ? "" : key;
+    const p = purposeOptions.find((x) => x.key === batchPurpose);
+    if (!p) return;
+    batchDuration = p.defaults.duration;
+    batchAssetForm = p.defaults.assetForm;
+    batchAssetSource = p.defaults.assetSource;
+    batchAssetBudget = p.defaults.assetBudget;
+    if (p.forms.length) batchContentForm = p.forms[0];
+  }
+
+  /** 用途过滤后的内容形式选项(未选用途时展示全部) */
+  function visibleContentForms(): { value: string; label: string; desc: string }[] {
+    const entries = Object.entries(contentFormMap);
+    const filtered = batchPurpose
+      ? entries.filter(([k]) => purposeOptions.find((x) => x.key === batchPurpose)?.forms.includes(k))
+      : entries;
+    return filtered.map(([value, v]) => ({ value, label: v.label, desc: v.desc }));
+  }
+
+  async function updateSkillPack() {
+    if (!batchPurpose || skillResearching) return;
+    skillResearching = true;
+    try {
+      await fetch(`/api/purposes/${batchPurpose}/research`, { method: "POST" });
+      // 后台调研(2-5 分钟),轮询条数变化
+      const before = purposeOptions.find((x) => x.key === batchPurpose)?.skillCount ?? 0;
+      const started = Date.now();
+      const timer = setInterval(async () => {
+        await loadPurposes();
+        const now = purposeOptions.find((x) => x.key === batchPurpose)?.skillCount ?? 0;
+        if (now !== before || Date.now() - started > 6 * 60_000) {
+          clearInterval(timer);
+          skillResearching = false;
+        }
+      }, 15_000);
+    } catch { skillResearching = false; }
+  }
 
   // 模式/列表变化时同步选中的音色，避免提交了另一模式下的 voice_id
   $effect(() => {
@@ -73,16 +131,6 @@
     { value: 420, label: "约 7 分钟" },
     { value: 600, label: "约 10 分钟" },
     { value: 900, label: "约 15 分钟" },
-  ];
-  const CONTENT_FORM_OPTIONS = [
-    { value: "knowledge", label: "知识科普", desc: "白板推演·边讲边画" },
-    { value: "hot_comment", label: "热点评述", desc: "新闻演播室·严肃快讯" },
-    { value: "industry", label: "行业洞察", desc: "数据图表·动态流动" },
-    { value: "insight", label: "观点输出", desc: "大字金句·视觉冲击" },
-    { value: "story", label: "故事叙述", desc: "电影分镜·场景演绎" },
-    { value: "tutorial", label: "教程实操", desc: "步骤演示·操作特写" },
-    { value: "mystery", label: "悬念揭秘", desc: "暗黑纪录·抽丝剥茧" },
-    { value: "emotion", label: "情感共鸣", desc: "生活胶片·真实温度" },
   ];
   const ASSET_FORM_OPTIONS = [
     { value: "video-mix", label: "视频混剪" },
@@ -301,6 +349,7 @@
   async function openBatchModal() {
     showBatchModal = true;
     batchResult = "";
+    loadPurposes(); // 用途预设(04 方案)——异步,不阻塞弹窗
     // Load templates and avatars for selection
     try {
       const tplRes = await fetch("/api/templates?status=approved");
@@ -352,6 +401,7 @@
           assetForm: isVideo ? batchAssetForm : undefined,
           assetSource: isVideo ? batchAssetSource : undefined,
           assetBudget: isVideo ? batchAssetBudget : undefined,
+          purpose: batchPurpose || undefined,
           voiceStyle: isVideo ? batchVoiceStyle : undefined,
           voiceMode: isVideo ? batchVoiceMode : undefined,
           evaluationMode: batchEvaluation,
@@ -768,18 +818,70 @@
             {/if}
           {/if}
         {:else}
+          <!-- 第 1 层:用途(04 方案)——决定内容策略/形式推荐/参数默认/技能包注入 -->
           <div class="batch-field">
-            <label>内容类型</label>
-            <select bind:value={batchType}>
-              <option value="short-video">短视频</option>
-              <option value="video+image-text">短视频+图文</option>
-              <option value="image-text">图文</option>
-            </select>
+            <label>用途（先选这个——决定内容策略与默认参数）</label>
+            {#if purposeOptions.length}
+              <div class="purpose-grid">
+                {#each purposeOptions as p}
+                  <button
+                    class="purpose-card"
+                    class:selected={batchPurpose === p.key}
+                    onclick={() => selectPurpose(p.key)}
+                    title={p.strategy}
+                  >
+                    <span class="purpose-icon">{p.icon}</span>
+                    <span class="purpose-label">{p.label}</span>
+                    <span class="purpose-goal">{p.goal}</span>
+                    <span class="purpose-skills" class:empty={p.skillCount === 0}>
+                      {p.skillCount > 0 ? `技能包 ${p.skillCount} 条` : "技能包空"}
+                    </span>
+                  </button>
+                {/each}
+              </div>
+              {#if batchPurpose}
+                {@const sel = purposeOptions.find((x) => x.key === batchPurpose)}
+                {#if sel}
+                  <p class="batch-hint">{sel.strategy}</p>
+                  {#if sel.skillCount === 0}
+                    <p class="batch-hint warn">该用途技能包为空，建议先更新——AI 将按调研沉淀的爆款方法论执行。</p>
+                  {/if}
+                {/if}
+                <button class="btn-skill-research" disabled={skillResearching} onclick={updateSkillPack}>
+                  {skillResearching ? "调研中(约2-5分钟,可继续其他操作)..." : "🔄 更新该用途技能包（联网调研最新爆款方法论）"}
+                </button>
+              {/if}
+            {:else}
+              <p class="batch-hint">用途预设加载中…（加载失败时可直接用下方高级选项）</p>
+            {/if}
           </div>
+
+          <!-- 第 2 层:内容类型 + 内容形式(按用途过滤推荐) -->
+          <div class="batch-field-row">
+            <div class="batch-field">
+              <label>内容类型</label>
+              <select bind:value={batchType}>
+                <option value="short-video">短视频</option>
+                <option value="video+image-text">短视频+图文</option>
+                <option value="image-text">图文</option>
+              </select>
+            </div>
+            {#if batchType !== "image-text"}
+              <div class="batch-field">
+                <label>内容形式{batchPurpose ? "（按用途推荐）" : ""}</label>
+                <select bind:value={batchContentForm}>
+                  {#each visibleContentForms() as o}
+                    <option value={o.value}>{o.label}（{o.desc}）</option>
+                  {/each}
+                </select>
+              </div>
+            {/if}
+          </div>
+
           <div class="batch-field">
-            <label>使用模板（可选，选择后将自动执行流水线）</label>
+            <label>使用模板（可选）</label>
             <select bind:value={batchTemplateId}>
-              <option value="">不使用模板（手动确认每个环节）</option>
+              <option value="">不使用模板（AI 自主设计视觉）</option>
               {#each filteredTemplates as tpl}
                 <option value={tpl.id}>{(tpl.score ?? 0) >= 90 ? "★精品 " : ""}{tpl.name}{tpl.score != null ? `（${tpl.score}分）` : ""}</option>
               {/each}
@@ -801,82 +903,83 @@
                 <p class="batch-hint">暂无数字人，可前往数字人页面创建</p>
               {/if}
             </div>
-            <div class="batch-field-group">
-              <p class="batch-group-title">视频制作控制</p>
-              <div class="batch-field-row">
-                <div class="batch-field">
-                  <label>视频时长</label>
-                  <select bind:value={batchDuration}>
-                    {#each DURATION_OPTIONS as o}
-                      <option value={o.value}>{o.label}</option>
-                    {/each}
-                  </select>
-                </div>
-                <div class="batch-field">
-                  <label>视频风格</label>
-                  <select bind:value={batchContentForm}>
-                    {#each CONTENT_FORM_OPTIONS as o}
-                      <option value={o.value}>{o.label}（{o.desc}）</option>
-                    {/each}
-                  </select>
-                </div>
-              </div>
-              <div class="batch-field-row">
-                <div class="batch-field">
-                  <label>素材形态</label>
-                  <select bind:value={batchAssetForm}>
-                    {#each ASSET_FORM_OPTIONS as o}
-                      <option value={o.value}>{o.label}</option>
-                    {/each}
-                  </select>
-                </div>
-                <div class="batch-field">
-                  <label>获取策略</label>
-                  <select bind:value={batchAssetSource}>
-                    {#each ASSET_SOURCE_OPTIONS as o}
-                      <option value={o.value}>{o.label}</option>
-                    {/each}
-                  </select>
-                </div>
-                <div class="batch-field">
-                  <label>成本档</label>
-                  <select bind:value={batchAssetBudget}>
-                    {#each ASSET_BUDGET_OPTIONS as o}
-                      <option value={o.value}>{o.label}</option>
-                    {/each}
-                  </select>
-                </div>
-              </div>
-              <div class="batch-field-row">
-                <div class="batch-field">
-                  <label>配音模式</label>
-                  <select bind:value={batchVoiceMode}>
-                    <option value="ai">AI 合成音色</option>
-                    <option value="cloned">我的克隆声音</option>
-                  </select>
-                </div>
-                <div class="batch-field">
-                  <label>配音音色</label>
-                  <select bind:value={batchVoiceStyle}>
-                    {#if batchVoiceMode === "cloned"}
-                      {#each myVoices as v}
-                        <option value={v.voice_id}>{v.name}</option>
-                      {/each}
-                      {#if myVoices.length === 0}
-                        <option value="" disabled>暂无克隆声音，请先到素材库克隆</option>
-                      {/if}
-                    {:else}
-                      {#each favVoices as v}
-                        <option value={v.voice_id}>{v.name}</option>
-                      {/each}
-                      {#if favVoices.length === 0}
-                        <option value="" disabled>请先到素材库收藏音色</option>
-                      {/if}
-                    {/if}
-                  </select>
-                </div>
-              </div>
+
+            <!-- 第 3 层:高级参数(用途已给默认值,一般不用动) -->
+            <div class="batch-field">
+              <button class="advanced-toggle" onclick={() => showAdvanced = !showAdvanced}>
+                {showAdvanced ? "▾ 收起高级选项" : "▸ 高级选项（时长/素材/成本/配音——用途已给默认值）"}
+              </button>
             </div>
+            {#if showAdvanced}
+              <div class="batch-field-group">
+                <p class="batch-group-title">视频制作控制</p>
+                <div class="batch-field-row">
+                  <div class="batch-field">
+                    <label>视频时长</label>
+                    <select bind:value={batchDuration}>
+                      {#each DURATION_OPTIONS as o}
+                        <option value={o.value}>{o.label}</option>
+                      {/each}
+                    </select>
+                  </div>
+                  <div class="batch-field">
+                    <label>素材形态</label>
+                    <select bind:value={batchAssetForm}>
+                      {#each ASSET_FORM_OPTIONS as o}
+                        <option value={o.value}>{o.label}</option>
+                      {/each}
+                    </select>
+                  </div>
+                </div>
+                <div class="batch-field-row">
+                  <div class="batch-field">
+                    <label>获取策略</label>
+                    <select bind:value={batchAssetSource}>
+                      {#each ASSET_SOURCE_OPTIONS as o}
+                        <option value={o.value}>{o.label}</option>
+                      {/each}
+                    </select>
+                  </div>
+                  <div class="batch-field">
+                    <label>成本档</label>
+                    <select bind:value={batchAssetBudget}>
+                      {#each ASSET_BUDGET_OPTIONS as o}
+                        <option value={o.value}>{o.label}</option>
+                      {/each}
+                    </select>
+                  </div>
+                </div>
+                <div class="batch-field-row">
+                  <div class="batch-field">
+                    <label>配音模式</label>
+                    <select bind:value={batchVoiceMode}>
+                      <option value="ai">AI 合成音色</option>
+                      <option value="cloned">我的克隆声音</option>
+                    </select>
+                  </div>
+                  <div class="batch-field">
+                    <label>配音音色</label>
+                    <select bind:value={batchVoiceStyle}>
+                      {#if batchVoiceMode === "cloned"}
+                        {#each myVoices as v}
+                          <option value={v.voice_id}>{v.name}</option>
+                        {/each}
+                        {#if myVoices.length === 0}
+                          <option value="" disabled>暂无克隆声音，请先到素材库克隆</option>
+                        {/if}
+                      {:else}
+                        {#each favVoices as v}
+                          <option value={v.voice_id}>{v.name}</option>
+                        {/each}
+                        {#if favVoices.length === 0}
+                          <option value="" disabled>请先到素材库收藏音色</option>
+                        {/if}
+                      {/if}
+                    </select>
+                  </div>
+                </div>
+              </div>
+            {/if}
           {/if}
           <div class="batch-info">
             <p>将选中的 <strong>{selectedTopicIds.size}</strong> 个选题批量转为作品。</p>
@@ -1556,6 +1659,61 @@
     padding: 0.75rem 1.25rem 1.25rem;
   }
   .batch-field { display: flex; flex-direction: column; gap: 0.35rem; }
+
+  /* 用途卡片选择器(04 方案) */
+  .purpose-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.5rem;
+  }
+  .purpose-card {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.15rem;
+    padding: 0.55rem 0.6rem;
+    border-radius: 10px;
+    border: 1px solid var(--border, rgba(128,128,128,0.25));
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    text-align: left;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .purpose-card:hover { border-color: var(--spark-red, #FE2C55); }
+  .purpose-card.selected {
+    border-color: var(--spark-red, #FE2C55);
+    background: rgba(254, 44, 85, 0.06);
+  }
+  .purpose-icon { font-size: 1.1rem; }
+  .purpose-label { font-size: 0.8rem; font-weight: 600; }
+  .purpose-goal { font-size: 0.65rem; opacity: 0.55; }
+  .purpose-skills { font-size: 0.62rem; opacity: 0.65; margin-top: 0.15rem; }
+  .purpose-skills.empty { color: #f59e0b; opacity: 1; }
+  .btn-skill-research {
+    margin-top: 0.3rem;
+    padding: 0.35rem 0.6rem;
+    border-radius: 7px;
+    border: 1px dashed rgba(128,128,128,0.4);
+    background: transparent;
+    color: inherit;
+    font-size: 0.72rem;
+    cursor: pointer;
+  }
+  .btn-skill-research:hover { border-color: var(--spark-red, #FE2C55); }
+  .btn-skill-research:disabled { opacity: 0.6; cursor: default; }
+  .batch-hint.warn { color: #f59e0b; }
+  .advanced-toggle {
+    padding: 0.4rem 0.6rem;
+    border-radius: 7px;
+    border: 1px solid var(--border, rgba(128,128,128,0.25));
+    background: transparent;
+    color: inherit;
+    font-size: 0.75rem;
+    cursor: pointer;
+    text-align: left;
+  }
+  .advanced-toggle:hover { border-color: var(--spark-red, #FE2C55); }
   .batch-field label { font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); }
   .batch-field select {
     background: var(--bg-inset);

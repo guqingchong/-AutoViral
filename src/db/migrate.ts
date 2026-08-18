@@ -733,6 +733,29 @@ CREATE INDEX IF NOT EXISTS idx_topic_scores_cat ON topic_scores(category, emotio
 CREATE INDEX IF NOT EXISTS idx_topic_scores_work ON topic_scores(work_id);
 `,
   },
+  {
+    version: 26,
+    name: "purpose_skills_and_works_purpose",
+    sql: `
+-- 用途驱动批量制作(2026-08-18 04 方案):用途技能包 + 作品用途标记
+-- purpose_skills:按用途沉淀的调研蒸馏技能(钩子公式/结构模板/话术),
+-- 随实战三率回流调权,持续进化
+CREATE TABLE IF NOT EXISTS purpose_skills (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  purpose TEXT NOT NULL,
+  skill TEXT NOT NULL,
+  source TEXT,
+  weight REAL NOT NULL DEFAULT 1.0,
+  use_count INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(purpose, skill)
+);
+CREATE INDEX IF NOT EXISTS idx_purpose_skills_purpose ON purpose_skills(purpose);
+
+ALTER TABLE works ADD COLUMN purpose TEXT;
+`,
+  },
 ];
 
 export function migrate(): void {
