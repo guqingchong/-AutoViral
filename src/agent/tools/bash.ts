@@ -73,16 +73,29 @@ export function bashExecutor(blocklist?: string[]): ToolExecutor {
       const [cmd, args] = bash ? [bash, ["-lc", command]] : ["cmd", ["/c", command]];
       return new Promise((resolvePromise) => {
         const p = spawn(cmd, args, { cwd: ctx.workDir, windowsHide: true });
-        let out = "";
-        const killTimer = setTimeout(() => {
+        // 有界缓冲(2026-08-18 崩溃根因):out += d 无上限,agent 误读二进制视频/大日志时
+        // 字符串拼接撞 V8 最大串长(RangeError: Invalid string length)把整服务炸死。
+        // 头 512KB 保底命令上下文 + 尾 512KB 滚动保留(错误信息通常在末尾)
+        const HALF = 512 * 1024;
+        let head = "";
+        let tail = "";
+        const pushOut = (d: Buffer | string) => {
+          const s = typeof d === "string" ? d : d.toString("utf8");
+          if (head.length < HALF) head += s.slice(0, HALF - head.length);
+          tail = tail.length + s.length <= HALF ? tail + s : (tail + s).slice(-HALF);
+        };        const killTimer = setTimeout(() => {
           p.kill("SIGTERM");
           setTimeout(() => p.kill("SIGKILL"), 3000);
         }, timeout);
-        p.stdout.on("data", (d) => (out += d));
-        p.stderr.on("data", (d) => (out += d));
+        p.stdout.on("data", pushOut);
+        p.stderr.on("data", pushOut);
         ctx.signal?.addEventListener("abort", () => p.kill("SIGTERM"), { once: true });
         p.on("close", (code) => {
           clearTimeout(killTimer);
+          const truncated = head.length >= HALF || tail.length >= HALF;
+          const out = truncated
+            ? `${head}\n…[输出过大,中段截断(头尾各保留 512KB)]…\n${tail}`
+            : head;
           const result = truncateMiddle(out.trim());
           resolvePromise(code === 0 ? result || "（无输出）" : `Exit code ${code}\n${result}`);
         });

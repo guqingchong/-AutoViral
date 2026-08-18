@@ -139,4 +139,26 @@ describe("reconcile 会话感知回归(A4)", () => {
     const { getWork } = await import("../../src/work-store.js");
     expect((await getWork(id))?.status).toBe("reviewing");
   });
+
+  it("最近 assembly 评审 fail + final.mp4 存在 → 不转正(2026-08-18 事故回归)", async () => {
+    const id = await makeAssemblingWorkWithFinal();
+    // 写入 fail 评审结论(评审流未翻案)
+    await writeFile(join(dir, "works", id, "eval-assembly-1.json"), JSON.stringify({ verdict: "fail", issues: [] }));
+    const rec = await import("../../src/services/reconcile.js");
+    rec.initReconcile(() => false);
+    await rec.reconcileWorkStates("periodic");
+    const { getWork } = await import("../../src/work-store.js");
+    expect((await getWork(id))?.status).toBe("assembling");
+  });
+
+  it("最近 assembly 评审 pass 后 → 正常转正", async () => {
+    const id = await makeAssemblingWorkWithFinal();
+    await writeFile(join(dir, "works", id, "eval-assembly-1.json"), JSON.stringify({ verdict: "fail", issues: [] }));
+    await writeFile(join(dir, "works", id, "eval-assembly-2.json"), JSON.stringify({ verdict: "pass", issues: [] }));
+    const rec = await import("../../src/services/reconcile.js");
+    rec.initReconcile(() => false);
+    await rec.reconcileWorkStates("periodic");
+    const { getWork } = await import("../../src/work-store.js");
+    expect((await getWork(id))?.status).toBe("reviewing");
+  });
 });
