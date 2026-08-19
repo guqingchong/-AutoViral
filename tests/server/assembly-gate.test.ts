@@ -65,7 +65,7 @@ describe("assertAssemblyDeliverables", () => {
   it("缺 publish-text / report 指向不符 / 字幕违规 → 全部列出", async () => {
     const out = join(dir, "output");
     await mkdir(out, { recursive: true });
-    await writeFile(join(out, "w_final.mp4"), "fake");
+    await writeFile(join(out, "final.mp4"), "fake");
     await writeFile(join(out, "quality-report.json"), JSON.stringify({ videoPath: "/x/old.mp4" }));
     await writeFile(join(out, "subs.ass"), ASS_BAD);
     const keys = assertAssemblyDeliverables(dir).map((i) => i.key);
@@ -77,13 +77,36 @@ describe("assertAssemblyDeliverables", () => {
   it("交付物齐全且报告不早于成片 → 通过", async () => {
     const out = join(dir, "output");
     await mkdir(out, { recursive: true });
-    await writeFile(join(out, "w_final.mp4"), "fake");
+    await writeFile(join(out, "final.mp4"), "fake");
     await writeFile(join(out, "publish-text.md"), "# 标题\n正文");
     await writeFile(join(out, "subs.ass"), ASS_OK);
     // report 必须不早于 final:先建 final(旧时间)再建 report
     const old = new Date(Date.now() - 60_000);
-    await utimes(join(out, "w_final.mp4"), old, old);
-    await writeFile(join(out, "quality-report.json"), JSON.stringify({ videoPath: join(out, "w_final.mp4") }));
+    await utimes(join(out, "final.mp4"), old, old);
+    await writeFile(join(out, "quality-report.json"), JSON.stringify({ videoPath: join(out, "final.mp4") }));
+    expect(assertAssemblyDeliverables(dir)).toEqual([]);
+  });
+
+  it("job_*_final.mp4 分段不算成片(2026-08-19 P0:宽松 /final/i 漏修复发)", async () => {
+    const out = join(dir, "output");
+    await mkdir(out, { recursive: true });
+    await writeFile(join(out, "job_01_final.mp4"), "fake-segment");
+    await writeFile(join(out, "publish-text.md"), "# t");
+    await writeFile(join(out, "subs.ass"), ASS_OK);
+    await writeFile(join(out, "quality-report.json"), JSON.stringify({ videoPath: join(out, "job_01_final.mp4") }));
+    const keys = assertAssemblyDeliverables(dir).map((i) => i.key);
+    expect(keys).toContain("final_video"); // 分段不能冒充成片
+  });
+
+  it("final_douyin.mp4 双平台变体算成片", async () => {
+    const out = join(dir, "output");
+    await mkdir(out, { recursive: true });
+    await writeFile(join(out, "final_douyin.mp4"), "fake");
+    await writeFile(join(out, "publish-text.md"), "# t");
+    await writeFile(join(out, "subs.ass"), ASS_OK);
+    const old = new Date(Date.now() - 60_000);
+    await utimes(join(out, "final_douyin.mp4"), old, old);
+    await writeFile(join(out, "quality-report.json"), JSON.stringify({ videoPath: join(out, "final_douyin.mp4") }));
     expect(assertAssemblyDeliverables(dir)).toEqual([]);
   });
 });
@@ -138,12 +161,12 @@ describe("advance assembly 机器门禁", () => {
     const id = await makeWorkAtAssembly();
     const out = join(dir, "works", id, "output");
     await mkdir(out, { recursive: true });
-    await writeFile(join(out, "w_final.mp4"), "fake");
+    await writeFile(join(out, "final.mp4"), "fake");
     await writeFile(join(out, "publish-text.md"), "# t");
     await writeFile(join(out, "subs.ass"), ASS_OK);
     const old = new Date(Date.now() - 60_000);
-    await utimes(join(out, "w_final.mp4"), old, old);
-    await writeFile(join(out, "quality-report.json"), JSON.stringify({ videoPath: join(out, "w_final.mp4") }));
+    await utimes(join(out, "final.mp4"), old, old);
+    await writeFile(join(out, "quality-report.json"), JSON.stringify({ videoPath: join(out, "final.mp4") }));
     const res = await apiRoutes.request(`/api/works/${id}/pipeline/advance`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ completedStep: "assembly" }),

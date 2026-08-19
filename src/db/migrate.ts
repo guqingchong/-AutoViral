@@ -756,6 +756,16 @@ CREATE INDEX IF NOT EXISTS idx_purpose_skills_purpose ON purpose_skills(purpose)
 ALTER TABLE works ADD COLUMN purpose TEXT;
 `,
   },
+  {
+    version: 27,
+    name: "work_queue_paused_reason",
+    sql: `
+-- 2026-08-19 P0 修复:paused 加原因字段(quota/budget/user)。
+-- 此前 paused 有入口无出口:配额/熔断恢复后 paused 项永不回 queued,
+-- 而配额试探又不分原因误恢复用户手动暂停项——三态互踩,批量队列静默停摆。
+ALTER TABLE work_queue ADD COLUMN paused_reason TEXT;
+`,
+  },
 ];
 
 export function migrate(): void {

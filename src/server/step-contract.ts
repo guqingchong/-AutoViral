@@ -51,7 +51,8 @@ export function buildAssetConstraintSection(assetForm?: string, assetSource?: st
       `政策/网页原文快照 POST /api/assets/snapshot-card;图标 GET /api/assets/icons。主题配色须与作品模板一致,数据来源必须署名。` +
       `快照卡必须传 highlights 红框标注关键条款/段落(禁止整页裸截,截正文区避开广告与侧栏);` +
       `图表数值与旁白口径必须一致——旁白说"超六成",图表须标">60%"或"超60%",禁止写成精确值 60%;` +
-      `结构/流程/逻辑镜头调用 POST /api/assets/code-scene 生成程序化动画(十模板:structure-growth/flow-steps/logic-chain/big-number/compare-split/timeline/pyramid/quote-card/checklist/bar-compare,先 GET /api/assets/code-scene/templates 查参数);`,
+      `结构/流程/逻辑镜头调用 POST /api/assets/code-scene 生成程序化动画(十模板:structure-growth/flow-steps/logic-chain/big-number/compare-split/timeline/pyramid/quote-card/checklist/bar-compare,先 GET /api/assets/code-scene/templates 查参数);` +
+      `凡 POST body 含中文(code-scene/chart/snapshot-card 的参数都含),必须先把 JSON 写成 UTF-8 文件再 --data-binary @file,禁止 curl -d 内联(Windows 下必乱码);`,
   );
   // smart 精品混合:按镜头内容路由到最优来源,是"出品即精品"的默认策略
   if (assetSource === "smart") {
@@ -125,7 +126,9 @@ export function buildMaterialSearchInstruction(work: { id: string; title: string
     `   \`yt-dlp -f "bestvideo[height<=720]+bestaudio/best[height<=720]" --merge-output-format mp4 -o "clips/option-NN.mp4" "URL"\``,
     `2. **合规素材库(Pexels 优先,英文关键词命中最好)**:`,
     `   搜索: \`curl -s "http://localhost:3271/api/stock-assets/search?q=英文关键词&type=video&perPage=10"\`(要图片则 type=image)`,
-    `   下载: \`curl -X POST http://localhost:3271/api/stock-assets/download -H "Content-Type: application/json" -d '{"url":"ITEM_URL","provider":"pexels","mediaType":"video","category":"scenes","name":"shot-NN.mp4","description":"...","author":"...","license":"...","duration":12}'\``,
+    `   下载: body 含中文,必须先写 JSON 文件再提交(Windows Git Bash 内联 -d 必坏中文):`,
+    `   \`curl -X POST http://localhost:3271/api/stock-assets/download -H "Content-Type: application/json" --data-binary @download.json\``,
+    `   (download.json 内容: {"url":"ITEM_URL","provider":"pexels","mediaType":"video","category":"scenes","name":"shot-NN.mp4","description":"...","author":"...","license":"...","duration":12})`,
     `   禁止直连 api.pexels.com / api.pixabay.com——你本地没有 key,直连必然 401,走上面两个服务端端点即可。`,
     ``,
     `## 执行要求(与验收标准一一对应)`,

@@ -61,4 +61,40 @@ describe("work-queue-repo", () => {
     repo.enqueue("w1", { afterRunning: true });
     expect(repo.listQueue().map((i) => i.workId)).toEqual(["w2", "w1"]);
   });
+
+  // 2026-08-19 P0:paused_reason 状态机——此前 paused 有入口无出口且原因不分,三态互踩
+  describe("paused_reason(暂停原因分离)", () => {
+    it("setStatus paused 默认记 user 原因;离开 paused 清空", () => {
+      repo.enqueue("w1");
+      repo.setStatus("w1", "paused");
+      expect(repo.getItem("w1")?.pausedReason).toBe("user");
+      repo.setStatus("w1", "running");
+      expect(repo.getItem("w1")?.pausedReason).toBeNull();
+    });
+
+    it("resumePausedByReason 只回捞指定原因,用户手动暂停不受影响", () => {
+      repo.enqueue("w_quota"); repo.enqueue("w_budget"); repo.enqueue("w_user");
+      repo.setStatus("w_quota", "paused", { pausedReason: "quota" });
+      repo.setStatus("w_budget", "paused", { pausedReason: "budget" });
+      repo.setStatus("w_user", "paused"); // 默认 user
+      expect(repo.resumePausedByReason(["quota"])).toBe(1);
+      expect(repo.getItem("w_quota")?.status).toBe("queued");
+      expect(repo.getItem("w_budget")?.status).toBe("paused");
+      expect(repo.getItem("w_user")?.status).toBe("paused");
+      expect(repo.resumePausedByReason(["budget", "quota"])).toBe(1);
+      expect(repo.getItem("w_user")?.status).toBe("paused"); // user 永不自动恢复
+    });
+
+    it("enqueue/prioritize 重排时清空 paused_reason", () => {
+      repo.enqueue("w1");
+      repo.setStatus("w1", "paused", { pausedReason: "quota" });
+      repo.prioritize("w1");
+      expect(repo.getItem("w1")?.pausedReason).toBeNull();
+      repo.setStatus("w1", "paused", { pausedReason: "budget" });
+      repo.setStatus("w1", "failed");
+      repo.enqueue("w1");
+      expect(repo.getItem("w1")?.pausedReason).toBeNull();
+      expect(repo.getItem("w1")?.status).toBe("queued");
+    });
+  });
 });
