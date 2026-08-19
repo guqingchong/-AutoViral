@@ -89,7 +89,39 @@ export function collectFeedback(): { processed: number; skipped: number } {
     );
     processed++;
   }
+  // 三率反哺(2026-08-19 补全 m9):有新数据时按用途聚合,调整用途技能包权重——
+  // 表现高于全局的用途,其技能包权重上浮(排序前移);低于全局的下浮。
+  // 乘法微调有界[0.5,2.0],保留调研命中(+0.1)带来的个技能差异
+  if (processed > 0) refreshPurposePerformance();
   return { processed, skipped };
+}
+
+/** 按用途聚合作品三率 → 调整 purpose_skills.weight 并留痕 purpose_performance */
+export function refreshPurposePerformance(): number {
+  const db = getDb();
+  const globalRow = db.prepare(`SELECT AVG(interaction_rate) AS g FROM topic_scores`).get() as { g: number | null };
+  const g = globalRow.g && globalRow.g > 0 ? globalRow.g : 1;
+  const rows = db.prepare(`
+    SELECT w.purpose AS purpose, AVG(ts.interaction_rate) AS ai, COUNT(*) AS n
+    FROM topic_scores ts JOIN works w ON w.id = ts.work_id
+    WHERE w.purpose IS NOT NULL
+    GROUP BY w.purpose
+  `).all() as Array<{ purpose: string; ai: number | null; n: number }>;
+  for (const r of rows) {
+    const ai = r.ai ?? 0;
+    const factor = Math.min(1.5, Math.max(0.5, ai / g));
+    db.prepare(`
+      INSERT INTO purpose_performance (purpose, factor, samples, avg_interaction, updated_at)
+      VALUES (?, ?, ?, ?, datetime('now'))
+      ON CONFLICT(purpose) DO UPDATE SET factor=excluded.factor, samples=excluded.samples,
+        avg_interaction=excluded.avg_interaction, updated_at=datetime('now')
+    `).run(r.purpose, factor, r.n, ai);
+    // factor 1.5→×1.25 / 1.0→×1.0 / 0.5→×0.75 的温和乘法调整
+    const multiplier = 0.5 + factor / 2;
+    db.prepare(`UPDATE purpose_skills SET weight = MAX(0.5, MIN(2.0, weight * ?)), updated_at = datetime('now') WHERE purpose = ?`)
+      .run(multiplier, r.purpose);
+  }
+  return rows.length;
 }
 
 /** 品类×情绪 聚合权重。样本 <2 的组合不给权重(返回里 samples 供判断) */

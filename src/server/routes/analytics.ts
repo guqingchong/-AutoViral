@@ -13,7 +13,8 @@ import {
   type WorkAnalysisInput,
 } from "../../services/hit-failure-analysis.js";
 import { triggerManualCollection } from "../../services/analytics-scheduler.js";
-import { getConfig } from "../../config.js";
+import { getConfig, loadConfig } from "../../config.js";
+import { getDb } from "../../db/connection.js";
 
 const analyticsRoutes = new Hono();
 
@@ -114,6 +115,83 @@ analyticsRoutes.post("/recompute-baselines", (c) => {
 analyticsRoutes.post("/collect", async (c) => {
   const result = await triggerManualCollection(getConfig().analytics);
   return c.json(result);
+});
+
+// GET /api/analytics/creator — 数据页 dashboard 数据源(2026-08-19 补全)。
+// 此前端点不存在:前端 fetch 拿到 SPA 404 页面 → 永远停在"连接账号"。
+// 返回:configured(有无账号源)+ 账号最新指标 + 已发布作品的最新三率 + 汇总 + 粉丝增量。
+analyticsRoutes.get("/creator", async (c) => {
+  const config = await loadConfig();
+  const sources = config.analytics?.sources ?? [];
+  const platform = c.req.query("platform") ?? sources[0]?.platform ?? "douyin";
+  const source = sources.find((s) => s.platform === platform) ?? sources[0];
+  if (!source?.accountUrl) return c.json({ configured: false });
+
+  const db = getDb();
+  // 账号指标:最新一条给当前值,次新算增量
+  const accRows = db.prepare(
+    `SELECT followers, raw_data, collected_at FROM platform_metrics
+     WHERE platform = ? AND metric_type = 'account' ORDER BY collected_at DESC LIMIT 2`,
+  ).all(platform) as Array<{ followers: number | null; raw_data: string; collected_at: string }>;
+  const latest = accRows[0];
+  const prev = accRows[1];
+
+  // 作品指标:已发布记录 JOIN 最新作品级指标(每条记录取最新一次采集)
+  const workRows = db.prepare(
+    `SELECT pr.id AS record_id, pr.published_at, w.title,
+            pm.views, pm.likes, pm.comments, pm.shares, pm.collects, pm.completion_rate, pm.collected_at
+     FROM publish_records pr
+     JOIN works w ON w.id = pr.work_id
+     JOIN platform_metrics pm ON pm.publish_record_id = pr.id AND pm.metric_type = 'work'
+     WHERE pr.platform = ? AND pr.status = 'published'
+     GROUP BY pr.id
+     HAVING MAX(pm.collected_at)
+     ORDER BY pr.published_at DESC
+     LIMIT 50`,
+  ).all(platform) as Array<Record<string, unknown>>;
+
+  const works = workRows.map((r) => ({
+    desc: r.title,
+    create_time: r.published_at,
+    play_count: r.views ?? 0,
+    digg_count: r.likes ?? 0,
+    comment_count: r.comments ?? 0,
+    share_count: r.shares ?? 0,
+    collect_count: r.collects ?? 0,
+  }));
+  const n = works.length;
+  const sum = (k: "play_count" | "digg_count" | "comment_count" | "share_count" | "collect_count") =>
+    works.reduce((s, w) => s + (Number(w[k]) || 0), 0);
+  const totalViews = sum("play_count");
+  const totalInteractions = sum("digg_count") + sum("comment_count") + sum("share_count") + sum("collect_count");
+
+  return c.json({
+    configured: true,
+    data: {
+      platform,
+      collected_at: latest?.collected_at ?? null,
+      account: {
+        nickname: "",
+        follower_count: latest?.followers ?? 0,
+        following_count: 0,
+        total_favorited: 0,
+        aweme_count: n,
+      },
+      works,
+      summary: {
+        total_works_collected: n,
+        avg_play: n ? Math.round(totalViews / n) : 0,
+        avg_digg: n ? Math.round(sum("digg_count") / n) : 0,
+        avg_comment: n ? Math.round(sum("comment_count") / n) : 0,
+        avg_share: n ? Math.round(sum("share_count") / n) : 0,
+        avg_collect: n ? Math.round(sum("collect_count") / n) : 0,
+        engagement_rate: totalViews > 0 ? totalInteractions / totalViews : 0,
+      },
+    },
+    delta: {
+      followers: latest && prev ? (latest.followers ?? 0) - (prev.followers ?? 0) : undefined,
+    },
+  });
 });
 
 export { analyticsRoutes };
