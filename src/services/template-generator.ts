@@ -140,7 +140,10 @@ async function generateTemplatesBatch(input: GenerateTemplatesInput = {}): Promi
     '输出: {"templates":[{name,content_form,canvas,variables,layers,audio,transitions}]}',
   ].filter(Boolean).join("\n");
 
-  const result = await runJsonPrompt<LlmTemplateResponse>(prompt, { timeoutMs: 300_000 });
+  // 2026-08-19 根因修复:deepseek-v4-flash 生成 3 模板实测 270~320s,300s 超时压在
+  // 耗时分布中间导致高峰期 3 次重试全部超时(用户见 "This operation was aborted")。
+  // 600s ≈ 实测值 2 倍余量;maxAttempts 2 封顶,最坏静默等待 ~20 分钟而非 30+。
+  const result = await runJsonPrompt<LlmTemplateResponse>(prompt, { timeoutMs: 600_000, maxAttempts: 2 });
   if (skills.length > 0) for (const s of skills) touchSkill(s.id);
   const list = result.templates ?? [];
 
