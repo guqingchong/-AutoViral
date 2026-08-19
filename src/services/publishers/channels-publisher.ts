@@ -1,48 +1,22 @@
-import { Publisher, type PublishInput, type PublishOutput } from "./types.js";
-import { YingdaoRPAPublisher } from "./yingdao-publisher.js";
+import type { Publisher, PublishInput, PublishOutput } from "./types.js";
 import { ChannelsWebPublisher } from "./channels-web-publisher.js";
 
-/** 影刀机器人发布路径（保留为可选兜底，需配置 yingdao_bot_path） */
-class ChannelsYingdaoPublisher extends YingdaoRPAPublisher {
-  readonly platform = "channels";
-  readonly name = "微信视频号";
-  readonly botFileName = "channels_publish.bot";
-
-  protected override buildBotArgs(input: PublishInput): string[] {
-    return [
-      "--video", input.videoPath,
-      "--title", input.title,
-      "--description", (input.options?.description as string) ?? "",
-      "--tags", (input.options?.tags as string[] ?? []).join(","),
-      "--cover", input.coverPath ?? "",
-    ];
-  }
-}
-
 /**
- * 视频号发布器：默认走 Playwright 网页自动化（视频号助手），
- * 若配置了影刀机器人路径（yingdao_bot_path）则优先使用影刀。
+ * 视频号发布器:Playwright 网页自动化(视频号助手)。
+ * 2026-08-19:影刀 RPA 兜底分支删除——影刀从未跑通、无人配置(2026-08-05 已定论),
+ * 死代码清理经用户确认。保留 ChannelsPublisher 类名以兼容 factory/publishing 装配点。
  */
 export class ChannelsPublisher implements Publisher {
   readonly platform = "channels";
   readonly name = "微信视频号";
 
-  constructor(
-    private web: Publisher = new ChannelsWebPublisher(),
-    private yingdao: Publisher = new ChannelsYingdaoPublisher()
-  ) {}
+  constructor(private web: Publisher = new ChannelsWebPublisher()) {}
 
   async isConfigured(): Promise<boolean> {
-    return this.yingdao.isConfigured() || (await this.web.isConfigured());
+    return this.web.isConfigured();
   }
 
-  async publish(input: PublishInput): Promise<PublishOutput> {
-    if (this.yingdao.isConfigured()) {
-      const result = await this.yingdao.publish(input);
-      if (result.success) return result;
-      const webResult = await this.web.publish(input);
-      return { ...webResult, error: webResult.error ?? result.error };
-    }
+  publish(input: PublishInput): Promise<PublishOutput> {
     return this.web.publish(input);
   }
 

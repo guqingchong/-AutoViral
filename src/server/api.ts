@@ -2202,7 +2202,7 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
             `   返回 { jobId };模板若声明了 host_video/voice_audio 变量,必须额外传 digitalHumanVideo/voiceAudio 字段`,
             `4. 轮询 \`curl -s http://localhost:3271/api/render-jobs/{jobId}\` 直至 status=completed;failed 时读 error 修正变量后重试`,
             `5. 产物在 output/ 目录;不要对产物再做二次合成`,
-            `6. 渲染完成后必须写 output/copytext.md 发布文案:首句 2 秒内抓人(好奇缺口/大胆断言/痛点),正文 2-3 句,结尾自然 CTA(关注/收藏/评论),附 5-10 个话题标签(2-3 热门 + 2-3 垂类 + 1-2 品牌),语言匹配目标平台(抖音/小红书用中文)`,
+            `6. 渲染完成后必须写 output/publish-text.md 发布文案(首个非空行=发布标题钩子;中段正文;最后一行 # 开头的话题标签 5-10 个,2-3 热门 + 2-3 垂类 + 1-2 品牌):首句 2 秒内抓人(好奇缺口/大胆断言/痛点),正文 2-3 句,结尾自然 CTA(关注/收藏/评论),语言匹配目标平台(抖音/小红书用中文)`,
           );
         } else {
         promptParts.push(
@@ -2245,7 +2245,12 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
           ``,
           `## REQUIRED: Generate Publishing Copytext & Tags`,
           `After producing the final video, you MUST also generate a publishing copytext file.`,
-          `Write it to \`output/copytext.md\` in the work directory.`,
+          `Write it to \`output/publish-text.md\` in the work directory.`,
+          ``,
+          `File structure (machine-consumed by the publish pipeline — follow exactly):`,
+          `- First non-empty line = the publish title (the hook)`,
+          `- Middle lines = body text`,
+          `- Last line = hashtags, starting with #`,
           ``,
           `The copytext MUST follow viral/爆款 principles:`,
           `- **Hook line (first sentence)**: Must grab attention in under 2 seconds of reading. Use curiosity gaps, bold claims, or relatable pain points.`,
@@ -2257,7 +2262,7 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
           `  - 1-2 branded or unique tags`,
           `  - Format: #tag1 #tag2 #tag3 (each prefixed with #)`,
           ``,
-          `Example format of copytext.md:`,
+          `Example format of publish-text.md:`,
           `\`\`\``,
           `这个方法我后悔没早点知道...`,
           ``,
@@ -3506,7 +3511,7 @@ export function buildTemplateSection(templateId?: string): string {
     }
     lines.push(`- 执行规则:`);
     lines.push(`  1. 模板覆盖"文字信息卡"类镜头(标题卡/章节卡/要点卡/总结卡)：这些镜头的版式/配色/动效严格按模板,禁止自由发挥`);
-    lines.push(`  2. 模板管不了也不该管的镜头,按素材路由走专门管线并独立渲染：数据→/api/assets/chart|data-card；结构/流程/逻辑→/api/assets/code-scene(程序化动画,优先于静态卡)；原文证据→snapshot-card；实拍/氛围→Pexels或AI生成。这些分段与模板分段按分镜顺序 ffmpeg concat 混排——混排是标准做法,不算"自由合成"`);
+    lines.push(`  2. 模板管不了也不该管的镜头,按素材路由走专门管线并独立渲染：数据→/api/assets/chart|data-card；结构/流程/逻辑→/api/assets/code-scene(程序化动画,优先于静态卡)；原文证据→snapshot-card；实拍/氛围→Pexels或AI生成。这些分段与模板分段按分镜顺序 ffmpeg concat 混排——混排是标准做法,不算"自由合成"。含中文的 POST body 一律写 JSON 文件 + --data-binary @file,禁止 curl -d 内联(Windows 必乱码)`);
     lines.push(`  3. 模板分段必须调用模板渲染引擎 POST /api/works/{workId}/render 产出,把素材映射进变量槽位；混排成片的视觉统一靠全片统一调色(见合成阶段调色规范),而不是全片只用模板`);
     lines.push(`  4. 完整模板 JSON: curl -s http://localhost:3271/api/templates/${t.id}`);
   }
@@ -3566,7 +3571,9 @@ async function runBatchConvert(
       if (!topic) { item.stage = "error"; item.error = "选题不存在"; return; }
       item.title = topic.title;
 
-      // 幂等续跑：重排的 item 已持有 workId 时，跳过创建/文案阶段，直接重试启动
+      // 幂等续跑(2026-08-19 P0 修复):粒度从"workId 存在"细化到"产物齐备"——
+      // 此前 item.workId 在文案/脚本生成之前赋值,LLM 抖动后重试整段跳过,
+      // 产出无文章/无脚本/无报告的空心作品直接入队(审计 critical #5)
       if (!item.workId) {
         item.stage = "creating";
         const work = await createWork({
@@ -3593,7 +3600,12 @@ async function runBatchConvert(
           purpose: purposePreset?.key,
         });
         item.workId = work.id;
+      }
+      const workId = item.workId!;
 
+      // 产物不齐(文案/脚本未落库)才重新生成;已齐则跳过生成段
+      const hasArtifacts = listArticlesByWork(workId).length > 0 && listScriptsByWork(workId).length > 0;
+      if (!hasArtifacts) {
         item.stage = "generating";
         const platform = platforms[0] ?? "douyin";
         const scriptCfg = await loadConfig();
@@ -3602,9 +3614,9 @@ async function runBatchConvert(
         const script = await generateScriptFromArticle(article, duration, { model: scriptModel });
 
         try {
-          createArticle({ work_id: work.id, topic_id: topic.id, title: article.title, content: article.content, platform, status: "ready" });
-          createScript({ work_id: work.id, content: script as unknown as Record<string, unknown>, duration: script.duration, status: "ready" });
-          updateTopic(topic.id, { status: "converted", work_id: work.id });
+          createArticle({ work_id: workId, topic_id: topic.id, title: article.title, content: article.content, platform, status: "ready" });
+          createScript({ work_id: workId, content: script as unknown as Record<string, unknown>, duration: script.duration, status: "ready" });
+          updateTopic(topic.id, { status: "converted", work_id: workId });
         } catch (err) {
           console.error(`[batch-convert] DB write failed for topic ${item.topicId}:`, err);
         }
@@ -3613,7 +3625,7 @@ async function runBatchConvert(
         // 下游分镜/评审无据可依。把选题数据+文案+脚本写入 research/report.md
         try {
           const { mkdir: mkResearchDir, writeFile: writeResearchFile } = await import("node:fs/promises");
-          const researchDir = join(dataDir, "works", work.id, "research");
+          const researchDir = join(dataDir, "works", workId, "research");
           await mkResearchDir(researchDir, { recursive: true });
           const topicAny = topic as unknown as Record<string, unknown>;
           const report = [
@@ -3638,28 +3650,27 @@ async function runBatchConvert(
           ].filter((l) => l !== "").join("\n");
           await writeResearchFile(join(researchDir, "report.md"), report, "utf-8");
         } catch (err) {
-          console.warn(`[batch-convert] research report write failed for ${work.id}:`, err);
+          console.warn(`[batch-convert] research report write failed for ${workId}:`, err);
         }
+      }
 
-        // Mark research as done, plan as active
-        try {
-          const workObj = await getWork(work.id);
-          if (workObj) {
-            const pipeline = workObj.pipeline;
-            if (pipeline["research"]) {
-              pipeline["research"].status = "done";
-              pipeline["research"].completedAt = new Date().toISOString();
-              pipeline["research"].note = "Auto-generated from batch conversion";
-            }
-            if (pipeline["plan"]) {
-              pipeline["plan"].status = "active";
-              pipeline["plan"].startedAt = new Date().toISOString();
-            }
-            await storeUpdateWork(work.id, { status: "planning", pipeline });
+      // pipeline 标记幂等(独立于产物生成段):research 未标 done 就补标——
+      // 覆盖"产物已落库但标记失败"和"重试续跑"两种中间态
+      try {
+        const workObj = await getWork(workId);
+        if (workObj && workObj.pipeline["research"] && workObj.pipeline["research"].status !== "done") {
+          const pipeline = workObj.pipeline;
+          pipeline["research"].status = "done";
+          pipeline["research"].completedAt = new Date().toISOString();
+          pipeline["research"].note = "Auto-generated from batch conversion";
+          if (pipeline["plan"] && pipeline["plan"].status === "pending") {
+            pipeline["plan"].status = "active";
+            pipeline["plan"].startedAt = new Date().toISOString();
           }
-        } catch (err) {
-          console.error(`[batch-convert] Failed to auto-start pipeline for topic ${item.topicId}:`, err);
+          await storeUpdateWork(workId, { status: "planning", pipeline });
         }
+      } catch (err) {
+        console.error(`[batch-convert] Failed to auto-start pipeline for topic ${item.topicId}:`, err);
       }
 
       // 全自动模式：入队等待串行 runner 启动 agent 会话（不再直接 startWorkSession ——

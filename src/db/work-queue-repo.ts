@@ -1,14 +1,18 @@
 import { getDb } from "./connection.js";
 
 export type QueueStatus = "queued" | "running" | "paused" | "done" | "failed";
+/** 暂停原因:quota=LLM 配额冷却, budget=日预算熔断, user=用户手动暂停(2026-08-19 v27) */
+export type PausedReason = "quota" | "budget" | "user";
 export interface QueueItem {
   workId: string; position: number; status: QueueStatus;
   enqueuedAt: string; startedAt: string | null; finishedAt: string | null; resumeAttempts: number;
+  pausedReason: string | null;
 }
 
 function rowToItem(r: any): QueueItem {
   return { workId: r.work_id, position: r.position, status: r.status,
-    enqueuedAt: r.enqueued_at, startedAt: r.started_at, finishedAt: r.finished_at, resumeAttempts: r.resume_attempts };
+    enqueuedAt: r.enqueued_at, startedAt: r.started_at, finishedAt: r.finished_at, resumeAttempts: r.resume_attempts,
+    pausedReason: r.paused_reason ?? null };
 }
 
 /** 队尾 position */
@@ -35,7 +39,7 @@ export function enqueue(workId: string, opts: { afterRunning?: boolean } = {}): 
     // →人工打回）必走此分支，打回重做应排在 running 之后第一位而非队尾。
     if (["done", "failed"].includes(existing.status)) {
       const position = opts.afterRunning ? afterRunningPosition(db) : tailPosition(db);
-      db.prepare("UPDATE work_queue SET status='queued', position=?, started_at=NULL, finished_at=NULL, resume_attempts=0 WHERE work_id=?").run(position, workId);
+      db.prepare("UPDATE work_queue SET status='queued', paused_reason=NULL, position=?, started_at=NULL, finished_at=NULL, resume_attempts=0 WHERE work_id=?").run(position, workId);
     }
     return rowToItem(db.prepare("SELECT * FROM work_queue WHERE work_id = ?").get(workId));
   }
@@ -59,10 +63,21 @@ export function getItem(workId: string): QueueItem | undefined {
   return r ? rowToItem(r) : undefined;
 }
 
-export function setStatus(workId: string, status: QueueStatus): void {
+export function setStatus(workId: string, status: QueueStatus, opts: { pausedReason?: PausedReason } = {}): void {
   const db = getDb();
   const extra = status === "running" ? ", started_at=datetime('now')" : ["done","failed"].includes(status) ? ", finished_at=datetime('now')" : "";
-  db.prepare(`UPDATE work_queue SET status=?${extra} WHERE work_id=?`).run(status, workId);
+  // paused 记录原因(默认 user,兼容旧调用);离开 paused 时清空——配额/熔断恢复
+  // 只回捞对应原因的项,用户手动暂停的绝不被系统误恢复(2026-08-19 P0)
+  const reason = status === "paused" ? (opts.pausedReason ?? "user") : null;
+  db.prepare(`UPDATE work_queue SET status=?, paused_reason=?${extra} WHERE work_id=?`).run(status, reason, workId);
+}
+
+/** 批量恢复:把指定原因的 paused 项改回 queued(配额解除/预算日切时调用),返回恢复条数 */
+export function resumePausedByReason(reasons: PausedReason[]): number {
+  if (!reasons.length) return 0;
+  const ph = reasons.map(() => "?").join(",");
+  const r = getDb().prepare(`UPDATE work_queue SET status='queued', paused_reason=NULL WHERE status='paused' AND paused_reason IN (${ph})`).run(...reasons);
+  return r.changes;
 }
 
 export function prioritize(workId: string): void {
@@ -73,7 +88,7 @@ export function prioritize(workId: string): void {
   if (running?.p != null && firstQueued?.p != null) newPos = (running.p + firstQueued.p) / 2;
   else if (firstQueued?.p != null) newPos = firstQueued.p - 1;
   else newPos = (db.prepare("SELECT COALESCE(MAX(position),0)+1 as p FROM work_queue").get() as any).p;
-  db.prepare("UPDATE work_queue SET position=?, status='queued' WHERE work_id=?").run(newPos, workId);
+  db.prepare("UPDATE work_queue SET position=?, status='queued', paused_reason=NULL WHERE work_id=?").run(newPos, workId);
 }
 
 export function incrementResumeAttempts(workId: string): number {

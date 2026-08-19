@@ -207,8 +207,11 @@ export function assertAssemblyDeliverables(workDir: string): DeliverableIssue[] 
   const files = readdirSync(outDir);
 
   // ① 成片
-  const finalVideo = files.find((f) => /final/i.test(f) && /\.(mp4|mov|webm)$/i.test(f));
-  if (!finalVideo) issues.push({ key: "final_video", detail: "output/ 下无文件名含 final 的成片视频" });
+  // 2026-08-19 P0 修复:宽松 /final/i 会命中 job_*_final.mp4 分段(2026-08-16 同类
+  // bug 在 reconcile/work-queue 修过,此处漏修)。^final 锚定:final.mp4 /
+  // final_douyin.mp4 双平台变体均可,job_ 前缀分段永远排除。
+  const finalVideo = files.find((f) => /^final[^/]*\.(mp4|mov|webm)$/i.test(f));
+  if (!finalVideo) issues.push({ key: "final_video", detail: "output/ 下无文件名含 final 的成片视频(final.mp4 或 final_平台.mp4)" });
 
   // ② 发布文案
   if (!files.includes("publish-text.md")) {

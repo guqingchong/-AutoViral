@@ -229,6 +229,18 @@ export async function buildPublishInput(work: DbWork, platform: string): Promise
 
   const coverPath = join(outputDir, "cover.jpg");
   const options: Record<string, unknown> = {};
+  let title = work.title;
+
+  // 发布文案消费(2026-08-19 P0):publish-text.md 是 A1 门禁强制产出物,但此前
+  // 没有任何消费者——一键发布发出去的是作品标题+文章截断,爆款文案白写。
+  // 现在:标题/正文/标签优先取自该文件;平台特化配文(如小红书 caption.txt)优先于正文。
+  try {
+    const md = await readFile(join(outputDir, "publish-text.md"), "utf-8");
+    const pt = parsePublishText(md);
+    if (pt.title) title = pt.title;
+    if (pt.body) options.description = pt.body;
+    if (pt.tags?.length) options.tags = pt.tags;
+  } catch { /* 无文案文件,回落作品标题 */ }
 
   // 文章注入按「作品类型 × 平台」分块(2026-08-07 视频/图文分块约定):
   // - 公众号:图文-only 平台,任何作品类型都发文章;
@@ -272,7 +284,25 @@ export async function buildPublishInput(work: DbWork, platform: string): Promise
     workId: work.id,
     videoPath,
     coverPath,
-    title: work.title,
+    title,
     options,
+  };
+}
+
+/**
+ * 解析 output/publish-text.md(2026-08-19 统一发布文案文件名,取代 copytext.md)。
+ * 约定结构(assembly 阶段提示词同步):首个非空行=发布标题(钩子),
+ * 中段=正文,最后一个 # 开头的行=话题标签。
+ */
+export function parsePublishText(md: string): { title?: string; body?: string; tags?: string[] } {
+  const lines = md.split("\n").map((l) => l.trim()).filter(Boolean);
+  if (!lines.length) return {};
+  const tagLine = [...lines].reverse().find((l) => l.startsWith("#"));
+  const tags = tagLine ? (tagLine.match(/#([^\s#]+)/g) ?? []).map((t) => t.slice(1)) : undefined;
+  const bodyLines = lines.filter((l) => l !== tagLine);
+  return {
+    title: bodyLines[0],
+    body: bodyLines.length > 1 ? bodyLines.slice(1).join("\n") : undefined,
+    tags: tags?.length ? tags : undefined,
   };
 }

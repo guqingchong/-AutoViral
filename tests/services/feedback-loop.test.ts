@@ -22,8 +22,10 @@ function seedWorkWithMetrics(opts: {
     .run(opts.workId, opts.workId, opts.publishedAt, opts.publishedAt, opts.category, opts.emotion);
   const pr = db.prepare(`INSERT INTO publish_records (work_id, platform, status, published_at) VALUES (?, 'douyin', 'published', ?)`)
     .run(opts.workId, opts.publishedAt);
+  // 2026-08-19:种子数据改用生产写入方的 metric_type='work'(analytics-scheduler 写实);
+  // 此前测试写 'post' 与被测 SQL 同错,测试绿但生产链路是死的——测试必须模拟写入方而非被测方
   db.prepare(`INSERT INTO platform_metrics (publish_record_id, platform, metric_type, collected_at, views, likes, comments, shares, collects, completion_rate, raw_data)
-              VALUES (?, 'douyin', 'post', ?, ?, ?, ?, ?, ?, ?, '{}')`)
+              VALUES (?, 'douyin', 'work', ?, ?, ?, ?, ?, ?, ?, '{}')`)
     .run(pr.lastInsertRowid, opts.publishedAt, opts.views, opts.likes, opts.comments ?? 0, opts.shares ?? 0, opts.collects ?? 0, opts.completion ?? null);
 }
 

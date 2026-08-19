@@ -394,6 +394,7 @@ export class WsBridge {
 - 素材库检索（Pexels/Pixabay，key 由服务端持有——直接调用即可，禁止自行读取 config 找 key、禁止直连 api.pexels.com）：
   搜索：curl "http://localhost:${port}/api/stock-assets/search?q=英文关键词&type=video|image&perPage=10"（英文关键词命中最好，竖版 height>width 优先）
   下载：curl -X POST http://localhost:${port}/api/stock-assets/download -H "Content-Type: application/json" -d '{"url":"ITEM_URL","provider":"pexels","mediaType":"video","category":"scenes","name":"shot-NN.mp4","description":"...","author":"...","license":"...","duration":12}'
+- **Windows 中文编码铁律（2026-08-19，违反必出乱码）**：任何含中文的 POST body 禁止 curl -d 内联 JSON——Git Bash 会损坏中文编码（code-scene 中文乱码成片事故真凶）。必须先用 Write 工具把 JSON 写成 UTF-8 文件，再 curl --data-binary @文件名.json。纯 ASCII 的 body 才可内联。
 - 流水线管理：调用 curl -X POST http://localhost:${port}/api/works/${work.id}/pipeline/advance 更新流水线状态
 
 ## 前置检测（必做）

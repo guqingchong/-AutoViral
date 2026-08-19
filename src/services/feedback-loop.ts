@@ -51,7 +51,9 @@ export function computeRates(m: {
 /** 主入口:发布满 48h 的 publish_records → 最新 post 指标 → topic_scores(幂等:同作品同日先删后插) */
 export function collectFeedback(): { processed: number; skipped: number } {
   const db = getDb();
-  // 发布满 48h 且有 post 级指标的记录;每记录取最新一条 post 指标
+  // 发布满 48h 且有作品级指标的记录;每记录取最新一条作品级指标
+  // 2026-08-19 修复:写入方(analytics-scheduler)用 metric_type='work',
+  // 此处曾误写 'post'(类型系统里不存在该值)导致回流死链、topic_scores 永空
   const rows = db.prepare(`
     SELECT pr.work_id, pr.published_at, w.topic_id, w.topic_category, w.emotion_type,
            pm.views, pm.likes, pm.comments, pm.shares, pm.collects, pm.completion_rate
@@ -61,7 +63,7 @@ export function collectFeedback(): { processed: number; skipped: number } {
     WHERE pr.status = 'published'
       AND pr.published_at IS NOT NULL
       AND datetime(pr.published_at) <= datetime('now', '-48 hours')
-      AND pm.metric_type = 'post'
+      AND pm.metric_type = 'work'
     GROUP BY pr.id
     HAVING MAX(pm.collected_at)
   `).all() as Array<Record<string, unknown>>;

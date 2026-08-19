@@ -8,6 +8,8 @@ import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { dataDir } from "../config.js";
 import { quotaState, quotaAllowsStart } from "./quota-guard.js";
+import { loadConfig } from "../config.js";
+import { getDailyCostYuan } from "./llm-usage.js";
 
 /** 会话恢复上限：超过后标记 failed，不再自动恢复 */
 const MAX_RESUME_ATTEMPTS = 5;
@@ -96,16 +98,33 @@ async function tickOnce(d: RunnerDeps): Promise<void> {
   if (quotaState().exhausted) {
     const running = repo.listQueue().filter((i) => i.status === "running");
     if (!quotaAllowsStart()) {
-      for (const item of running) repo.setStatus(item.workId, "paused");
+      for (const item of running) repo.setStatus(item.workId, "paused", { pausedReason: "quota" });
       if (running.length) console.log(`[work-queue] 配额冷却:${running.length} 个 running 项置 paused`);
       return;
     }
-    const probe = running[0] ?? repo.listQueue().find((i) => i.status === "paused");
+    // 试探只挑配额暂停的项——用户手动暂停(user)/预算熔断(budget)的绝不被误拉起(2026-08-19 P0)
+    const probe = running[0] ?? repo.listQueue().find((i) => i.status === "paused" && i.pausedReason === "quota");
     if (!probe) return; // 无在途项可试探;queued 项待试探成功后再启动
     console.log(`[work-queue] 配额试探窗口:恢复 ${probe.workId} 单次试探`);
     repo.setStatus(probe.workId, "running");
     await d.startWork(probe.workId).catch(() => {});
     return;
+  }
+
+  // 0.5 paused 出口(2026-08-19 P0:此前配额/熔断恢复后 paused 项永久滞留):
+  // 配额已解除(上方分支未进入)→ 批量回捞 quota 暂停项;日预算已回落 → 回捞 budget 项。
+  // 用户手动暂停(user)不在此列,只能手动恢复。
+  {
+    const quotaResumed = repo.resumePausedByReason(["quota"]);
+    if (quotaResumed) console.log(`[work-queue] 配额已恢复:${quotaResumed} 个 paused 项回 queued`);
+    try {
+      const cfg = await loadConfig();
+      const limit = cfg.budget?.dailyLimitYuan;
+      if (limit && getDailyCostYuan() < limit) {
+        const budgetResumed = repo.resumePausedByReason(["budget"]);
+        if (budgetResumed) console.log(`[work-queue] 预算已回落:${budgetResumed} 个 paused 项回 queued`);
+      }
+    } catch { /* 配置/记账读取失败不阻断调度 */ }
   }
 
   // 1. running 任务健康检查：会话死了且作品仍在中间状态 → 恢复

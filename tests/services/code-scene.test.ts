@@ -50,8 +50,9 @@ describe.skipIf(!workerReady)("renderCodeScene 集成", () => {
     });
     expect(r.success).toBe(true);
     expect(r.path && existsSync(r.path)).toBe(true);
-    // 2026-08-19 根因修复回归:duration 必须生效——场景自然时长 ~2.07s,
-    // 目标 4s 时产物须 ≥3.9s(末帧定格补齐),此前 >2 的断言太松放过了 bug
+    // 2026-08-19 根因修复回归:duration 必须生效——场景自然时长由模板内容决定
+    // (flow-steps 3 步实测 3.8s),目标 4s 时产物须 ≥3.9s(末帧定格补齐),
+    // 此前 >2 的断言太松放过了 bug
     expect(r.duration).toBeGreaterThanOrEqual(3.9);
   });
 });

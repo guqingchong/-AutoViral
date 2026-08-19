@@ -132,7 +132,9 @@ export class AgentLoop {
         enforceDailyBudget(config, () => {
           let n = 0;
           for (const item of listQueue()) {
-            if (item.status === "running" || item.status === "queued") { setStatus(item.workId, "paused"); n++; }
+            // 2026-08-19 P0:熔断暂停带 budget 原因——日切后 runner 据此批量恢复,
+            // 且与用户手动暂停/配额暂停区分,互不误恢复
+            if (item.status === "running" || item.status === "queued") { setStatus(item.workId, "paused", { pausedReason: "budget" }); n++; }
           }
           return n;
         });

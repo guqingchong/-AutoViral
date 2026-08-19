@@ -9,7 +9,7 @@ import type { DbAccount } from "../../db/types.js";
 
 export const accountsRoutes = new Hono();
 
-/** RPA 平台（Playwright/影刀）：session_cookie 直接驱动浏览器登录态 */
+/** RPA 平台（Playwright 网页自动化）：session_cookie 直接驱动浏览器登录态 */
 const RPA_PLATFORMS = new Set(["douyin", "xiaohongshu", "channels", "zhihu"]);
 
 /**
@@ -18,7 +18,7 @@ const RPA_PLATFORMS = new Set(["douyin", "xiaohongshu", "channels", "zhihu"]);
  *
  * 字段约定（UI 引导用户按此填写）：
  * - RPA 平台：cookie 字段粘贴浏览器导出的 cookie（JSON 数组或 cookie 字符串均可，
- *   Playwright 发布器期望 JSON 数组；字符串形式也原样保存以备影刀使用）
+ *   Playwright 发布器期望 JSON 数组）
  * - 公众号(wechat_mp)：username=AppID，cookie 字段=AppSecret
  * - 快手：username=app_id，cookie 字段=app_secret
  * - 知乎：已改为 RPA（官方开放平台关闭个人申请），cookie 字段同抖音/小红书；
@@ -83,7 +83,7 @@ accountsRoutes.get("/credential-status", (c) => {
     const keys = getCredentialsByPlatform(p).map((k) => k.key_type);
     let configured = false;
     if (p === "douyin" || p === "xiaohongshu") configured = keys.includes("session_cookie");
-    else if (p === "channels") configured = keys.includes("session_cookie") || keys.includes("yingdao_bot_path");
+    else if (p === "channels") configured = keys.includes("session_cookie");
     else if (p === "kuaishou" || p === "wechat") configured = keys.includes("app_id") && keys.includes("app_secret");
     else if (p === "zhihu") configured = keys.includes("session_cookie") || keys.includes("access_token");
     else if (p === "bilibili") configured = keys.includes("access_token") && keys.includes("csrf");
