@@ -273,7 +273,7 @@ export interface DbBannedWord {
 
 // ── Phase 5: Data Recycling & Self-Evolution ──────────────────────────────
 
-export type DbPublishRecordStatus = "pending" | "publishing" | "published" | "failed" | "scheduled" | "fallback";
+export type DbPublishRecordStatus = "pending" | "publishing" | "reviewing" | "published" | "failed" | "scheduled" | "fallback";
 
 export interface DbPublishRecord {
   id: number;

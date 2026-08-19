@@ -66,6 +66,31 @@ export function startScheduler(
   // Post metrics: every 6 hours
   metricsJob = cron.schedule(metricsCron, async () => {
     console.log("[analytics-scheduler] collecting post metrics...");
+
+    // 2026-08-19 P2 审核对账:reviewing 记录(平台审核中)用 post_id 探测转正/转拒。
+    // 此前"审核中一律当已发布",拒审作品永远显示已发布,48h 窗口还从提交时刻起算
+    const reviewing = listPublishRecords({ status: "reviewing" });
+    for (const record of reviewing) {
+      if (!record.platform_post_id) continue; // 无 id 无法探测,等发布侧解析补录
+      const adapter = getAdapter(record.platform);
+      if (!adapter) continue;
+      try {
+        const m = await adapter.collectPostMetrics(record.platform_post_id);
+        // 能采到指标 = 已过审上线 → 转正,published_at 从过审时刻起算
+        const { updatePublishRecord } = await import("../db/publish-records-repo.js");
+        updatePublishRecord(record.id, { status: "published", published_at: new Date().toISOString() });
+        console.log(`[analytics-scheduler] 审核对账:${record.platform}#${record.id} 已过审(${m.views ?? 0} 播放),转 published`);
+      } catch {
+        // 采不到 = 仍在审核或被拒;超过 72h 未过审标记 failed(平台审核不会这么久)
+        const submittedAt = record.updated_at ? new Date(record.updated_at).getTime() : 0;
+        if (Date.now() - submittedAt > 72 * 3600_000) {
+          const { updatePublishRecord } = await import("../db/publish-records-repo.js");
+          updatePublishRecord(record.id, { status: "failed", error_message: "审核 72h 未通过(被拒或平台异常)" });
+          console.warn(`[analytics-scheduler] 审核对账:${record.platform}#${record.id} 72h 未过审,标 failed`);
+        }
+      }
+    }
+
     const published = listPublishRecords({ status: "published" });
     const now = new Date();
     const cutoff72h = new Date(now.getTime() - 72 * 3600_000);

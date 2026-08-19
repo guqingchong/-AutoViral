@@ -120,7 +120,16 @@ export class XiaohongshuPublisher extends PlaywrightPublisher {
     ]).catch(() => "timeout" as const);
 
     if (outcome === "success") {
-      return { success: true, postUrl: page.url() };
+      // 2026-08-19 P2:best-effort 解析笔记 ID(成功页/管理页链接含 /item/ 或 note id)
+      let platformPostId: string | undefined;
+      try {
+        platformPostId = await page.evaluate(() => {
+          const a = document.querySelector('a[href*="/discovery/item/"], a[href*="/explore/"]');
+          return a?.getAttribute("href")?.match(/\/(?:discovery\/item|explore)\/([0-9a-z]+)/)?.[1];
+        });
+      } catch { /* 解析失败不阻断 */ }
+      const reviewing = await page.locator("text=/审核中|笔记审核/").first().isVisible().catch(() => false);
+      return { success: true, postUrl: page.url(), platformPostId, reviewing };
     }
     if (outcome === "failed") {
       const errText = await page.locator(FAILURE_TEXT).first().textContent().catch(() => null);

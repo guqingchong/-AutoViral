@@ -20,6 +20,9 @@ export interface PublishOutput {
   postUrl?: string;
   /** Platform-assigned post / item ID (when success). */
   platformPostId?: string;
+  /** 2026-08-19 P2:平台审核中(提交成功但未过审)——记录落 reviewing 态,
+   *  由对账任务确认后转正 published/拒绝落 failed,不再一律当"已发布" */
+  reviewing?: boolean;
   /** Human-readable error message (when !success). */
   error?: string;
 }

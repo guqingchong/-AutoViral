@@ -107,6 +107,9 @@ export async function startServer(port: number): Promise<{ server: Server }> {
 
   // 0.5. Recover publish jobs that were stuck "publishing" from a prior crash
   recoverStuckJobs();
+  // 0.5b. publish_records(4b 栈)同款卡死恢复(2026-08-19 P2)
+  const { recoverStuckPublishRecords } = await import("../services/publishing.js");
+  recoverStuckPublishRecords();
 
   // 0.6. Recover render jobs that were stuck "running" or "pending" from a prior crash
   recoverStuckRenderJobs();
