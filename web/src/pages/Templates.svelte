@@ -449,10 +449,22 @@
           genJobId = null;
           generating = false;
           genMessage = "";
-          alert(statusData.error ?? "生成失败");
+          alert(friendlyGenError(statusData.error));
         }
       } catch {}
     }, 5000);
+  }
+
+  /** 服务端原始报错转人话(2026-08-19:超时黑话 "This operation was aborted" 用户看不懂) */
+  function friendlyGenError(raw: string | null | undefined): string {
+    if (!raw) return "生成失败,请重试";
+    if (/aborted|timed? ?out|ETIMEDOUT/i.test(raw)) {
+      return "生成超时:大模型本次响应过慢(高峰期常见)。请稍后重试,或减少一次生成的数量。";
+    }
+    if (/LLM API 4\d\d/.test(raw)) return "大模型接口拒绝了请求,请到设置页检查 API Key 与模型配置。";
+    if (/LLM API 5\d\d|ECONN|network|fetch failed/i.test(raw)) return "大模型服务暂时不可用,请稍后重试。";
+    if (/无法从响应提取 JSON/.test(raw)) return "大模型返回的内容格式异常,请重试一次。";
+    return `生成失败:${raw}`;
   }
 </script>
 
