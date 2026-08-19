@@ -223,9 +223,9 @@
     saveMsg = "";
     try {
       const res = await fetch("/api/config", {
-        method: "POST",
+        method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ douyinUrl: douyinUrlInput.trim() }),
+        body: JSON.stringify(analyticsPlatform === "douyin" ? { douyinUrl: douyinUrlInput.trim() } : { xiaohongshuUrl: douyinUrlInput.trim() }),
       });
       if (!res.ok) throw new Error();
       saveMsg = "已保存，正在采集数据…";

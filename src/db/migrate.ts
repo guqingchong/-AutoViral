@@ -766,6 +766,29 @@ ALTER TABLE works ADD COLUMN purpose TEXT;
 ALTER TABLE work_queue ADD COLUMN paused_reason TEXT;
 `,
   },
+  {
+    version: 28,
+    name: "evolution_marks_and_purpose_performance",
+    sql: `
+-- 2026-08-19 数据闭环补全:
+-- evolution_marks:自进化去重(同一发布记录的同一判定只进化一次,
+--   此前每 6h 对同一爆款重复生成规则,一周 ~28 条重复且静默烧 LLM 费)
+-- purpose_performance:用途×三率聚合因子(三率回流反哺用途技能包权重的落地载体)
+CREATE TABLE IF NOT EXISTS evolution_marks (
+  record_id INTEGER NOT NULL,
+  verdict TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(record_id, verdict)
+);
+CREATE TABLE IF NOT EXISTS purpose_performance (
+  purpose TEXT PRIMARY KEY,
+  factor REAL NOT NULL DEFAULT 1.0,
+  samples INTEGER NOT NULL DEFAULT 0,
+  avg_interaction REAL,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+`,
+  },
 ];
 
 export function migrate(): void {

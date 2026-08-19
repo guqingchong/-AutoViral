@@ -16,8 +16,18 @@ import { createBaseline as createBaselineRecord } from "../db/baselines-repo.js"
 import { getWork } from "../work-store.js";
 import { collectAll } from "../analytics-collector.js";
 import { collectFeedback } from "./feedback-loop.js";
+import { getTopic } from "../db/topics-repo.js";
+import { getDb } from "../db/connection.js";
 import cron from "node-cron";
 import type { Config } from "../config.js";
+
+/** 自进化去重(2026-08-19):同一发布记录的同一判定只进化一次 */
+function hasEvolved(recordId: number, verdict: string): boolean {
+  return !!getDb().prepare("SELECT 1 FROM evolution_marks WHERE record_id = ? AND verdict = ?").get(recordId, verdict);
+}
+function markEvolved(recordId: number, verdict: string): void {
+  getDb().prepare("INSERT OR IGNORE INTO evolution_marks (record_id, verdict) VALUES (?, ?)").run(recordId, verdict);
+}
 
 let accountJob: cron.ScheduledTask | null = null;
 let metricsJob: cron.ScheduledTask | null = null;
@@ -34,6 +44,8 @@ export function startScheduler(
   metricsCron = "0 */6 * * *",
   baselineCron = "0 4 * * 1"
 ): void {
+  // 幂等防护(2026-08-19):重复启动会叠加 cron 任务导致指标双倍写入
+  if (accountJob || metricsJob || baselineJob) stopScheduler();
   console.log("[analytics-scheduler] starting...");
 
   // Account metrics: daily
@@ -130,14 +142,20 @@ export function startScheduler(
 
         // Run hit/failure analysis
         const analysis = analyzeWork(record.id);
-        if (analysis && analysis.verdict !== "normal") {
+        // 2026-08-19 修复:①去重——同一记录同一判定只进化一次(此前每 6h 重复生成,
+        // 同一爆款每周 ~28 条重复规则且未记账白烧 LLM);②tags 此前误传平台列表
+        // (work.platforms),应为选题内容标签
+        if (analysis && analysis.verdict !== "normal" && !hasEvolved(record.id, analysis.verdict)) {
           const work = await getWork(record.work_id);
           if (work) {
+            const topic = work.topicId != null ? getTopic(work.topicId) : undefined;
             await evolveFromPerformance({
               analysis,
               workTitle: work.title,
-              tags: work.platforms ?? [],
+              tags: topic?.tags ?? [],
+              emotionType: work.contentCategory,
             });
+            markEvolved(record.id, analysis.verdict);
           }
         }
       } catch (e) {

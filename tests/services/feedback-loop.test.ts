@@ -10,7 +10,7 @@ process.env.AUTOVIRAL_DATA_DIR = mkdtempSync(join(tmpdir(), "feedback-loop-test-
 
 import { migrate } from "../../src/db/migrate.js";
 import { getDb } from "../../src/db/connection.js";
-import { computeRates, collectFeedback, getTopicWeights, getTopicWeight } from "../../src/services/feedback-loop.js";
+import { computeRates, collectFeedback, getTopicWeights, getTopicWeight, refreshPurposePerformance } from "../../src/services/feedback-loop.js";
 
 function seedWorkWithMetrics(opts: {
   workId: string; publishedAt: string; category: string; emotion: string;
@@ -61,5 +61,24 @@ describe("feedback-loop", () => {
     expect(yule!.weight).toBeLessThan(1);
     expect(getTopicWeight("城投", "信息价值")).toBe(cheng!.weight);
     expect(getTopicWeight("不存在品类")).toBe(1);
+  });
+
+  // 2026-08-19 m9:三率按用途聚合反哺 purpose_skills 权重
+  it("refreshPurposePerformance:高表现用途技能权重上浮,低表现下浮,留痕 purpose_performance", () => {
+    const db = getDb();
+    // 给已入库的 topic_scores 作品标用途:w_a/w_b(高互动)→ authority;w_c(低互动)→ short_drama
+    db.prepare("UPDATE works SET purpose = 'authority' WHERE id IN ('w_a','w_b')").run();
+    db.prepare("UPDATE works SET purpose = 'short_drama' WHERE id = 'w_c'").run();
+    db.prepare("INSERT INTO purpose_skills (purpose, skill, weight) VALUES ('authority','钩子公式A',1.0),('short_drama','反转公式B',1.0)").run();
+
+    const n = refreshPurposePerformance();
+    expect(n).toBe(2);
+    const authW = db.prepare("SELECT weight FROM purpose_skills WHERE purpose='authority'").get() as { weight: number };
+    const dramaW = db.prepare("SELECT weight FROM purpose_skills WHERE purpose='short_drama'").get() as { weight: number };
+    expect(authW.weight).toBeGreaterThan(1.0);   // 城投互动率高于全局 → 上浮
+    expect(dramaW.weight).toBeLessThan(1.0);     // 娱乐低于全局 → 下浮
+    const perf = db.prepare("SELECT purpose, factor, samples FROM purpose_performance ORDER BY purpose").all() as any[];
+    expect(perf).toHaveLength(2);
+    expect(perf.find((p) => p.purpose === "authority")?.factor).toBeGreaterThan(1);
   });
 });

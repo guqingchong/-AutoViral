@@ -203,18 +203,20 @@ function flattenAnalytics(cfg: import("../config.js").Config) {
   };
 }
 
-function parseAnalytics(body: Record<string, unknown>): import("../config.js").Config["analytics"] {
+function parseAnalytics(body: Record<string, unknown>, prev: import("../config.js").Config["analytics"]): import("../config.js").Config["analytics"] {
+  // 2026-08-19 修复:字段缺省时保留原值——此前每次保存配置(如存个 API key)
+  // 都把 analytics 重置为 enabled:false + sources:[],数据采集成"永远开不起来"
   const sources = (() => {
     try {
       const raw = body.analyticsSourcesJson;
-      return raw ? (JSON.parse(String(raw)) as AnalyticsSource[]) : [];
+      return raw ? (JSON.parse(String(raw)) as AnalyticsSource[]) : prev.sources;
     } catch {
-      return [];
+      return prev.sources;
     }
   })();
   return {
-    enabled: Boolean(body.analyticsEnabled),
-    collectInterval: Math.max(5, Number(body.analyticsInterval) || 60),
+    enabled: body.analyticsEnabled !== undefined ? Boolean(body.analyticsEnabled) : prev.enabled,
+    collectInterval: Math.max(5, Number(body.analyticsInterval) || prev.collectInterval || 60),
     sources,
   };
 }
@@ -408,6 +410,19 @@ apiRoutes.put("/api/config", async (c) => {  const body = await c.req.json<Recor
     // 关注领域：选题中心 updateConfig 走本接口，此前未映射导致保存被静默丢弃
     config.interests = Array.isArray(body.interests) ? body.interests.map(String) : [];
   }
+  // 数据页「连接账号」(2026-08-19 补全):账号主页链接 → analytics.sources + 开启采集。
+  // 此前前端 POST 一个无人处理的 douyinUrl 字段,且 POST 方法本身也不存在——连接流程全断
+  if (body.douyinUrl !== undefined || body.xiaohongshuUrl !== undefined) {
+    if (!config.analytics) config.analytics = { enabled: false, collectInterval: 60, sources: [] } as never;
+    const upsert = (platform: string, url: string) => {
+      const existing = config.analytics.sources.find((s) => s.platform === platform);
+      if (existing) existing.accountUrl = url;
+      else config.analytics.sources.push({ platform, accountUrl: url } as AnalyticsSource);
+    };
+    if (typeof body.douyinUrl === "string" && body.douyinUrl.trim()) upsert("douyin", body.douyinUrl.trim());
+    if (typeof body.xiaohongshuUrl === "string" && body.xiaohongshuUrl.trim()) upsert("xiaohongshu", body.xiaohongshuUrl.trim());
+    config.analytics.enabled = true;
+  }
   if (body.researchEnabled !== undefined) {
     if (!config.research) config.research = { enabled: false, schedule: "0 9 * * *", platforms: ["douyin", "xiaohongshu"] };
     config.research.enabled = body.researchEnabled as boolean;
@@ -485,7 +500,7 @@ apiRoutes.put("/api/config", async (c) => {  const body = await c.req.json<Recor
   if (llmChanged) {
     config.llm = mergeLlm(config.llm, (body.llm ?? {}) as Partial<LlmConfig>);
   }
-  config.analytics = parseAnalytics(body);
+  config.analytics = parseAnalytics(body, config.analytics);
 
   await saveConfig(config);
   if (llmChanged) {
@@ -497,6 +512,12 @@ apiRoutes.put("/api/config", async (c) => {  const body = await c.req.json<Recor
   if (body.researchEnabled !== undefined || body.researchCron !== undefined) {
     const { startTrendScheduler } = await import("../services/scheduler.js");
     startTrendScheduler().catch((err) => console.error("[scheduler] restart failed:", err));
+  }
+  // 连接账号(数据源变更)后立即重排指标采集调度(2026-08-19)
+  if (body.douyinUrl !== undefined || body.xiaohongshuUrl !== undefined) {
+    const { stopScheduler, startMetricsScheduler } = await import("../services/analytics-scheduler.js");
+    stopScheduler();
+    startMetricsScheduler(config.analytics);
   }
   // 字段级保存日志（脱敏，只记长度）——诊断"用户以为已保存但 key 为空"类问题
   log("info", "api", "config_saved", "-", {
