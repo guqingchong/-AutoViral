@@ -125,7 +125,18 @@ export class DouyinWebPublisher extends PlaywrightPublisher {
     ]).catch(() => "timeout" as const);
 
     if (outcome === "success") {
-      return { success: true, postUrl: page.url() };
+      // 2026-08-19 P2:best-effort 解析 platformPostId(内容管理页最新作品链接含 /video/<id>),
+      // 用于发布后指标回流;页面结构变动时返回 undefined,不影响发布本身
+      let platformPostId: string | undefined;
+      try {
+        platformPostId = await page.evaluate(() => {
+          const a = document.querySelector('a[href*="/video/"]');
+          return a?.getAttribute("href")?.match(/\/video\/(\d+)/)?.[1];
+        });
+      } catch { /* 解析失败不阻断 */ }
+      // 审核中信号判定:成功提示含"审核"字样 → reviewing(由对账任务转正/转拒)
+      const reviewing = await page.locator("text=/审核中|已提交审核/").first().isVisible().catch(() => false);
+      return { success: true, postUrl: page.url(), platformPostId, reviewing };
     }
     if (outcome === "failed") {
       const errText = await page.locator(FAILURE_TEXT).first().textContent().catch(() => null);

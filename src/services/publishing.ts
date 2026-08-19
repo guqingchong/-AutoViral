@@ -9,6 +9,7 @@ import { ZhihuPublisher } from "./publishers/zhihu-publisher.js";
 import { ZhihuVideoPublisher } from "./publishers/zhihu-video-publisher.js";
 import { generateFallbackPackage } from "./publishers/fallback-export.js";
 import * as recordsRepo from "../db/publish-records-repo.js";
+import { getDb } from "../db/connection.js";
 import { updateWork, getWork } from "../db/works-repo.js";
 import { listArticlesByWork } from "../db/articles-repo.js";
 import type { Publisher, PublishInput, PublishOutput } from "./publishers/types.js";
@@ -116,7 +117,12 @@ export async function publishToPlatform(workId: string, platform: string, input:
   const publisher = resolvePublisherForWork(platform, work?.type);
   let result: PublishOutput;
   try {
-    result = await publisher.publish(input);
+    // 发布外层超时护栏(2026-08-19 P2):Playwright 流程正常 5-8 分钟,给 10 分钟;
+    // 无护栏时挂死的请求会让发布路由永不返回(前端按钮永远"发布中")
+    result = await Promise.race([
+      publisher.publish(input),
+      new Promise<PublishOutput>((_, rej) => setTimeout(() => rej(new Error("发布超时(10min)")), 10 * 60_000)),
+    ]);
   } catch (err) {
     result = {
       success: false,
@@ -125,15 +131,18 @@ export async function publishToPlatform(workId: string, platform: string, input:
   }
 
   if (result.success) {
+    // 2026-08-19 P2:审核中不再当"已发布"——reviewing 态等对账任务确认,
+    // published_at 从过审时刻起算(此前从提交时刻起算,审核耗时吃掉 48h 回流窗口)
+    const reviewing = result.reviewing === true;
     recordsRepo.updatePublishRecord(recordId, {
-      status: "published",
+      status: reviewing ? "reviewing" : "published",
       platform_post_id: result.platformPostId ?? undefined,
       // 清掉上次失败的错误文本,避免"published 但带错误信息"的困惑(2026-08-07 实测)
       error_message: null as unknown as undefined,
       metadata: JSON.stringify({ postUrl: result.postUrl }),
-      published_at: new Date().toISOString(),
+      published_at: reviewing ? undefined : new Date().toISOString(),
     });
-    await updateWork(workId, { status: "published" });
+    if (!reviewing) await updateWork(workId, { status: "published" });
   } else if (FALLBACK_PLATFORMS.includes(platform)) {
     const packagePath = await generateFallbackPackage(platform, input, join(dataDir, "fallback-packages"));
     recordsRepo.updatePublishRecord(recordId, {
@@ -208,6 +217,21 @@ export async function triggerLogin(platform: string): Promise<boolean> {
   const publisher = resolvePublisher(platform);
   if (publisher.login) return publisher.login();
   throw new Error(`平台 ${platform} 不支持浏览器登录`);
+}
+
+/**
+ * publish_records 卡死恢复(2026-08-19 P2,收敛评估第 1 条):
+ * 服务崩溃/断电会让记录永久停在 publishing(看板永远"发布中"),且重试会复用
+ * 卡死记录(existing.status!=="failed" 语义混乱)。启动时把 10 分钟前的
+ * publishing 一律置 failed——10 分钟门槛避免误杀刚入队的正常任务。
+ */
+export function recoverStuckPublishRecords(stuckMs = 10 * 60_000): number {
+  const cutoff = new Date(Date.now() - stuckMs).toISOString();
+  const r = getDb()
+    .prepare(`UPDATE publish_records SET status='failed', error_message='服务重启时发布中断(卡死恢复)', updated_at=datetime('now') WHERE status='publishing' AND updated_at < ?`)
+    .run(cutoff);
+  if (r.changes > 0) console.log(`[publishing] 卡死恢复:${r.changes} 条 publishing → failed`);
+  return r.changes;
 }
 
 export async function buildPublishInput(work: DbWork, platform: string): Promise<PublishInput> {
