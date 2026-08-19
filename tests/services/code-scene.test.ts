@@ -50,6 +50,52 @@ describe.skipIf(!workerReady)("renderCodeScene 集成", () => {
     });
     expect(r.success).toBe(true);
     expect(r.path && existsSync(r.path)).toBe(true);
-    expect(r.duration).toBeGreaterThan(2);
+    // 2026-08-19 根因修复回归:duration 必须生效——场景自然时长 ~2.07s,
+    // 目标 4s 时产物须 ≥3.9s(末帧定格补齐),此前 >2 的断言太松放过了 bug
+    expect(r.duration).toBeGreaterThanOrEqual(3.9);
+  });
+});
+
+// 末帧定格补时(decidePadSeconds)纯逻辑
+import { decidePadSeconds, padWithLastFrame } from "../../src/services/code-scene.js";
+import { probeMedia, getFFmpegPath } from "../../src/video/ffmpeg.js";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+describe("decidePadSeconds(末帧定格补时)", () => {
+  it("自然时长不足 → 补差值", () => {
+    expect(decidePadSeconds(2.07, 6)).toBeCloseTo(3.93, 2);
+  });
+  it("差距在容差内 → 不补(避免无谓重编码)", () => {
+    expect(decidePadSeconds(5.9, 6)).toBe(0);
+  });
+  it("超出目标 → 不裁短(保住动画完整性)", () => {
+    expect(decidePadSeconds(6.5, 6)).toBe(0);
+  });
+  it("无探测时长 → 不补", () => {
+    expect(decidePadSeconds(undefined, 6)).toBe(0);
+  });
+});
+
+// padWithLastFrame 真实 ffmpeg 集成(不依赖 Revideo/Edge,快速确定性)
+describe("padWithLastFrame 集成", () => {
+  it("2s 合成片段补 2s → 探测时长 ≈4s", { timeout: 60_000 }, async () => {
+    const dir = await mkdtemp(join(tmpdir(), "av-pad-"));
+    const clip = join(dir, "clip.mp4");
+    const ffmpeg = await getFFmpegPath();
+    await promisify(execFile)(ffmpeg, [
+      "-f", "lavfi", "-i", "color=c=blue:s=320x240:d=2:r=30",
+      "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-an", "-y", clip,
+    ]);
+    const before = await probeMedia(clip);
+    expect(before.duration).toBeGreaterThan(1.8);
+    expect(before.duration).toBeLessThan(2.3);
+
+    await padWithLastFrame(clip, 2.0);
+    const after = await probeMedia(clip);
+    expect(after.duration).toBeGreaterThanOrEqual(3.9);
+    await rm(dir, { recursive: true, force: true });
   });
 });

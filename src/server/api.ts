@@ -1164,7 +1164,7 @@ apiRoutes.get("/api/assets/code-scene/templates", (c) => {
       { name: "bar-compare", label: "条形数据对比", params: "title, bars[2-5]{label,value}, unit?, highlightIndex?, source?", bestFor: "轻量数据排行/量级对比(复杂图表仍走 /api/assets/chart)" },
     ],
     themes: ["finance_dark", "warm_gold", "ink_green", "minimal_light"],
-    duration: "1-30s,建议 4-8s",
+    duration: "1-30s,建议 4-8s;为目标时长——场景入场动画约 2s 保持干脆,不足目标时长时末帧定格补齐,超出不裁短",
     note: "精确数据镜头仍走 /api/assets/chart|data-card;本端点服务结构/流程/逻辑镜头;模板按 1080x1920 竖版设计,非默认尺寸可能导致布局错位",
   });
 });
