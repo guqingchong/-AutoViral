@@ -10,6 +10,7 @@ import { loadConfig, saveConfig, dataDir, getConfigDir, HEYGEM_TUNNEL_DEFAULTS, 
 import { PROVIDER_PRESETS } from "../llm/provider-keys.js";
 import { runJsonPrompt } from "../services/llm-json.js";
 import { PURPOSE_PRESETS, CONTENT_FORMS, getPurpose, purposeEvalFocusBlock } from "../services/purpose-presets.js";
+import { buildAssetConstraintSection, buildStepContractSection, buildMaterialSearchInstruction } from "./step-contract.js";
 import { purposeSkillsBlock, countPurposeSkills, listPurposeSkills } from "../db/purpose-skills-repo.js";
 import { researchPurposeSkills } from "../services/purpose-skills.js";
 import { getDb } from "../db/connection.js";
@@ -1844,6 +1845,10 @@ export async function startWorkSession(id: string, extraInstruction?: string): P
     extraInstruction ?? "",
     ``,
     `当前步骤: "${stepName}"（key: ${currentStepKey}）。流水线阶段顺序: ${stepKeys.join(" → ")}。`,
+    // 首阶段详细指令与验收标准(2026-08-19):自动流水线不经过 /step 端点,
+    // 详细指令必须随会话启动下发,否则 agent 只有步骤名可猜(w_20260819_1634_cd5 教训)
+    currentStepKey === "material-search" ? buildMaterialSearchInstruction(work, isUnattended) : "",
+    buildStepContractSection(currentStepKey, work, { includeAssets: false }),
     isUnattended
       ? [
           // 如实声明用户预设了哪些(此前无论是否选数字人都声称"已设定好模板和数字人",
@@ -1948,42 +1953,8 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
     ];
 
     if (step === "material-search" && work.videoSearchQuery) {
-      promptParts.push(
-        `Execute the "视频搜索" step.`,
-        `The user wants to find existing videos from the web. Search query: "${work.videoSearchQuery}"`,
-        ``,
-        `## CRITICAL: Five-Dimension Constraint Analysis`,
-        `Before searching, you MUST parse the search query into 5 dimensions and treat them as hard constraints:`,
-        `1. **Absolute Subject & Physical Motion** — Who/what must appear, doing what? Subject must be visible EVERY SECOND.`,
-        `2. **Environment & Emotional Lighting** — What scene/setting? What light mood?`,
-        `3. **Optics & Camera** — What shot type, angle, movement?`,
-        `4. **Timeline & State Evolution** — Duration required? Speed (normal/slow/fast)? How does the subject change over time?`,
-        `5. **Aesthetic Medium & Rendering** — Live action / animation / 3D? Color tone? Resolution?`,
-        ``,
-        `Parse the query "${work.videoSearchQuery}" into these 5 dimensions first. State which are hard constraints (explicitly mentioned) vs soft constraints (inferred). Then search accordingly.`,
-        `ALL returned videos must satisfy ALL hard constraints. If a video violates any (e.g. subject disappears mid-way), discard it.`,
-        ``,
-        `## Instructions`,
-        `1. Search the web for 3 matching videos using WebSearch.`,
-        `2. For each video found, download it WITH AUDIO using yt-dlp and save to the work assets directory.`,
-        `   - First check if yt-dlp is available: \`which yt-dlp || pip3 install yt-dlp\``,
-        `   - Download command (MUST use this to get audio+video merged):`,
-        `     \`yt-dlp -f "bestvideo[height<=720]+bestaudio/best[height<=720]" --merge-output-format mp4 -o "/path/to/option-01.mp4" "VIDEO_URL"\``,
-        `   - Save videos to the work assets directory. Find the path with:`,
-        `     \`curl -s http://localhost:3271/api/works/${work.id} | python3 -c "import sys,json; w=json.load(sys.stdin); print(w.get('path',''))" || echo "$HOME/.autoviral/works/${work.id}/assets/clips"\``,
-        `   - Save as: option-01.mp4, option-02.mp4, option-03.mp4`,
-        `   - NEVER use plain curl to download videos — it will only get the video stream without audio.`,
-        `3. Present the 3 options to the user using markdown video links so they display as inline players:`,
-        `   - Use this format: \`[Video Title](/api/works/${work.id}/assets/clips/option-01.mp4)\``,
-        `   - The .mp4 link format will render as an inline video player in the chat.`,
-        `4. Ask the user to choose one of the 3 videos.`,
-        `5. After the user selects, rename/copy the chosen video as the primary clip and mark this step as done:`,
-        `   \`curl -X POST http://localhost:3271/api/works/${work.id}/pipeline/advance -H "Content-Type: application/json" -d '{"completedStep":"material-search","nextStep":"research"}'\``,
-        ``,
-        `IMPORTANT:`,
-        `- Video files MUST have audio. Always use yt-dlp with audio merging, never plain curl/wget.`,
-        `- Files must be actually downloaded and saved as assets so the inline player can play them.`,
-      );
+      // 2026-08-19:指令抽取为共享函数并与评审标准对齐(旧 yt-dlp 找片基+用户三选一已废)
+      promptParts.push(buildMaterialSearchInstruction(work, isAutoMode));
     } else if (step === "research") {
       // Load user interests and competitors for topic relevance
       const config = await loadConfig();
@@ -2466,6 +2437,8 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
       }
     }
 
+    // 阶段契约段(2026-08-19):素材三维约束 + 本阶段验收标准自检清单(与评审同源)
+    promptParts.push(buildStepContractSection(step, work));
     const prompt = promptParts.filter(Boolean).join("\n");
 
     const config = await loadConfig();
@@ -2978,9 +2951,16 @@ apiRoutes.post("/api/works/:id/pipeline/advance", async (c) => {
           const session = wsBridge.getSession(id);
           // 仅在会话仍可恢复时续命（无会话说明用户未开启过 agent，跳过）
           if (session && (session.cliSessionId || session.messageHistory.length > 0)) {
+            // 2026-08-19:续命消息从一句话升级为带契约的完整指令——
+            // 此前自动流水线后续步骤只收到"请继续执行",素材约束/验收标准/详细指令
+            // 全部丢失,agent 只能凭步骤名即兴发挥(驳回反复的结构性根因之一)
             await wsBridge.sendMessage(
               id,
-              `Pipeline 已推进到「${stepNameForPrompt}」阶段。请继续执行该阶段的工作，完成后再次调用 pipeline/advance 推进到下一阶段。`,
+              [
+                `Pipeline 已推进到「${stepNameForPrompt}」阶段。请继续执行该阶段的工作，完成后再次调用 pipeline/advance 推进到下一阶段。`,
+                nextStep === "material-search" ? buildMaterialSearchInstruction(work, !!work.autoMode) : "",
+                buildStepContractSection(nextStep, work),
+              ].filter(Boolean).join("\n\n"),
             );
           }
         })().catch((err) => log("error", "api", "pipeline_continue_failed", id, { error: (err as Error).message }));
@@ -3474,23 +3454,6 @@ const ASSET_FORMS = new Set(["video-mix", "image-carousel", "slides", "auto"]);
 const ASSET_SOURCES = new Set(["stock", "ai", "user", "auto", "smart"]);
 const ASSET_BUDGETS = new Set(["eco", "premium"]);
 
-const ASSET_FORM_LABELS: Record<string, string> = {
-  "video-mix": "以真实视频混剪为主",
-  "image-carousel": "图片轮播配讲解",
-  slides: "AI 生成讲解幻灯片",
-  auto: "不限制",
-};
-const ASSET_SOURCE_LABELS: Record<string, string> = {
-  stock: "仅用素材库真实素材",
-  ai: "仅 AI 生成",
-  user: "仅用用户指定素材",
-  auto: "不限制",
-  smart: "精品混合(按镜头内容自动路由:数据→程序化素材、氛围→AI、真实画面→素材库)",
-};
-const ASSET_BUDGET_LABELS: Record<string, string> = {
-  eco: "仅使用本地 H3 生成视频（provider=local-h3），禁用一切云端视频生成（即梦/Seedance/Dreamina 均不可用）。若 local-h3 不可用（AutoDL 实例离线），不得改用云端视频，应阻塞并显著提醒用户开机 AutoDL 实例",
-  premium: "不限制",
-};
 
 function sanitizeAssetForm(v?: string): string | undefined { return v && ASSET_FORMS.has(v) ? v : undefined; }
 function sanitizeAssetSource(v?: string): string | undefined { return v && ASSET_SOURCES.has(v) ? v : undefined; }
@@ -3550,48 +3513,6 @@ export function buildTemplateSection(templateId?: string): string {
   return lines.join("\n");
 }
 
-/** 素材三维 → prompt 约束段（三维全空时返回空串）；hasDigitalHuman=false 时口播路由禁用数字人 */
-function buildAssetConstraintSection(assetForm?: string, assetSource?: string, assetBudget?: string, hasDigitalHuman?: boolean): string {  const lines: string[] = [];
-  if (assetForm) lines.push(`- 素材形态: ${ASSET_FORM_LABELS[assetForm] ?? assetForm}`);
-  if (assetSource) lines.push(`- 素材来源: ${ASSET_SOURCE_LABELS[assetSource] ?? assetSource}`);
-  if (assetBudget) lines.push(`- 成本档: ${ASSET_BUDGET_LABELS[assetBudget] ?? assetBudget}`);
-  // 程序化精确素材铁律(2026-08-14):任何获取策略下都生效。
-  // 程序化素材本地程序化渲染(零生成成本、秒级出图),不属于"外部素材来源",
-  // 因此 stock/user 等受限策略下同样允许且必须使用——它替代的是"AI 生图伪造数据"这条死路。
-  lines.push(
-    `- 程序化素材铁律(无条件生效): 凡涉及精确数据(数值/对比/趋势/占比)、政策文件/新闻原文、结构关系的镜头,禁止 AI 生图(数字必错、文字乱码)。` +
-      `必须调用本地程序化素材 API: 数据图表 POST /api/assets/data-card(简单数据)或 /api/assets/chart(复杂 ECharts);` +
-      `政策/网页原文快照 POST /api/assets/snapshot-card;图标 GET /api/assets/icons。主题配色须与作品模板一致,数据来源必须署名。` +
-      `快照卡必须传 highlights 红框标注关键条款/段落(禁止整页裸截,截正文区避开广告与侧栏);` +
-      `图表数值与旁白口径必须一致——旁白说"超六成",图表须标">60%"或"超60%",禁止写成精确值 60%;` +
-      `结构/流程/逻辑镜头调用 POST /api/assets/code-scene 生成程序化动画(十模板:structure-growth/flow-steps/logic-chain/big-number/compare-split/timeline/pyramid/quote-card/checklist/bar-compare,先 GET /api/assets/code-scene/templates 查参数);`,
-  );
-  // smart 精品混合:按镜头内容路由到最优来源,是"出品即精品"的默认策略
-  if (assetSource === "smart") {
-    lines.push(
-      `- 镜头路由(smart): 数据/对比/趋势→程序化素材(data-card/chart);政策/文件原文→snapshot-card;` +
-        `氛围/场景感画面→AI 生图后 i2v;真实事件/实拍画面→素材库搜索(优先 Pexels 竖版视频),搜不到再 AI 生成;` +
-        (hasDigitalHuman === false
-          ? `口播/讲解内容→配音+字幕卡/图解呈现(本作品未选数字人,禁用数字人镜头)`
-          : `口播/讲解人→数字人或 H3 t2v(dialogue)`),
-    );
-  }
-  // AI 生成来源下的 H3 本地生成路由规则（MiniMax H3,成本约 ¥0.13/条,远低于云端)
-  if (assetSource === "ai" || assetSource === "auto" || assetSource === "smart") {
-    lines.push(
-      `- 视频生成路由: AI 生成的视频镜头优先走本地 H3(provider=local-h3,调 /api/generate/video 时显式传 provider:"local-h3")。` +
-        `broll 氛围/空镜、narration 解说配图、dialogue 对白播报等常规镜头一律用 H3;` +
-        (assetBudget === "eco"
-          ? `eco 档下 hero 精品镜头也用 H3;H3 离线时不得改用云端,阻塞并提醒用户开机 AutoDL 实例`
-          : `仅 hero 精品镜头(海报级画面)可用云端 Seedance/即梦;H3 离线时常规镜头可降级: broll 用素材库搜索补位,其余用云端 provider`),
-    );
-  }
-  // 口播类长视频的质量底线:纯图片轮播观感廉价,video-mix/auto 下必须以真实视频混剪为主
-  if (assetForm === "video-mix" || assetForm === "auto" || !assetForm) {
-    lines.push(`- 质量底线: 超过 60 秒的口播类视频必须以真实视频混剪为主(优先 Pexels 竖版视频,type=video 搜索),禁止全片纯图片轮播+Ken Burns;图片仅作为信息补充(数据卡/示意图),占比不超过 30%`);
-  }
-  return lines.length ? `素材约束:\n${lines.join("\n")}` : "";
-}
 
 async function runBatchConvert(
   job: BatchConvertJob,

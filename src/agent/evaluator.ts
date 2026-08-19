@@ -26,6 +26,8 @@ export function parseEvalResultText(resultText: string, fallbackStep: string): E
     const jsonMatch = resultText.match(/```json\s*([\s\S]*?)\s*```/);
     return jsonMatch ? JSON.parse(jsonMatch[1]) : JSON.parse(resultText);
   } catch {
+    // 2026-08-19 堵假 pass 洞:解析失败兜底 pass 曾让质量门随机放水(w_20260819_1634_cd5
+    // material-search 第 3 轮空 scores "pass")。打 __parseFailed 标记,由调用方先重试。
     return {
       step: fallbackStep,
       attempt: 1,
@@ -34,7 +36,8 @@ export function parseEvalResultText(resultText: string, fallbackStep: string): E
       issues: [],
       suggestions: [],
       timestamp: new Date().toISOString(),
-    };
+      __parseFailed: true,
+    } as EvalResult & { __parseFailed?: boolean };
   }
 }
 
@@ -101,7 +104,22 @@ export async function runApiEvaluator(opts: ApiEvaluatorOpts): Promise<EvalResul
 
   try {
     const { resultText } = await loop.runTurn(opts.evalPrompt);
-    return parseEvalResultText(resultText, step);
+    let result = parseEvalResultText(resultText, step) as EvalResult & { __parseFailed?: boolean };
+    if (result.__parseFailed) {
+      // 解析失败不再是静默 pass:先让评审重出一轮(大概率是话痨没按格式输出)
+      console.warn(`[evaluator] ${opts.workId}/${step}: 评审输出无法解析为 JSON,要求重出一轮`);
+      const retry = await loop.runTurn(
+        "你的上一条输出无法解析为评审结论 JSON。请只输出一个 ```json 代码块" +
+        "(字段: verdict \"pass\"|\"fail\", scores, issues[{severity,description}], suggestions[])," +
+        "不要输出任何其他文字。",
+      );
+      result = parseEvalResultText(retry.resultText, step) as EvalResult & { __parseFailed?: boolean };
+      if (result.__parseFailed) {
+        // 重出仍失败:兜底 pass 但在结果里留痕(__parseFailed 随 eval JSON 落盘可审计)
+        console.warn(`[evaluator] ${opts.workId}/${step}: 重出仍无法解析,兜底 pass 并留痕 __parseFailed`);
+      }
+    }
+    return result;
   } finally {
     opts.session.evalLoopRunning = false;
   }
