@@ -154,6 +154,9 @@ async function doRender(input: CodeSceneInput): Promise<CodeSceneResult> {
 
   const outputPath = join(outDirAbs, outFile);
   try {
+    // 渲染前清掉同名旧产物:渲染器对已有 outFile 可能跳过重渲染(实测 18:24 旧 3.8s
+    // 产物原地复用),残留旧文件会污染补时判定与"成功但产物陈旧"的假象
+    await rm(outputPath, { force: true });
     await runWorker(specPath);
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : String(err), code: err instanceof WorkerTimeout ? "TIMEOUT" : "RENDER_FAILED" };
@@ -165,7 +168,19 @@ async function doRender(input: CodeSceneInput): Promise<CodeSceneResult> {
     return { success: false, error: "worker 完成但未产出文件", code: "RENDER_FAILED" };
   }
 
-  const info = await probeMedia(outputPath);
+  let info = await probeMedia(outputPath);
+  // duration 参数生效化(2026-08-19 根因修复):Revideo 场景内部时间轴硬编码,
+  // 自然时长 ~2.07s 与 spec.duration 无关——不足目标时长时 tpad 克隆末帧补齐。
+  // 最多两轮:Revideo 导出文件的容器元数据时长与视频流帧数可能不一致(实测
+  // 容器 2.067s/流 56 帧=1.867s),首轮按容器时长补会差零点几秒;重编码后
+  // 元数据准确,第二轮用 0.05s 容差收敛。
+  const targetDuration = Math.min(Math.max(input.duration ?? 6, 1), 30);
+  for (let round = 0; round < 2; round++) {
+    const pad = decidePadSeconds(info.duration, targetDuration, round === 0 ? 0.25 : 0.05);
+    if (pad <= 0) break;
+    await padWithLastFrame(outputPath, pad);
+    info = await probeMedia(outputPath);
+  }
   // 质量门禁:无声中间段语义(2026-08-14 起 expectAudio 区分)
   try {
     const { runQualityGate } = await import("./quality-gate.js");
@@ -198,6 +213,36 @@ async function doRender(input: CodeSceneInput): Promise<CodeSceneResult> {
 }
 
 class WorkerTimeout extends Error { constructor() { super("渲染超时(180s)"); } }
+
+/**
+ * 末帧定格补时判定(2026-08-19 根因修复):Revideo 场景是生成器,内部动画时间轴
+ * 硬编码,自然时长 ~2.07s 与 spec.duration 无关(project range 只是渲染窗口上限,
+ * 不会拉长场景)——agent 曾报告"duration 参数似乎不生效(总是 2.07s)"。
+ * 修复策略:不足目标时长时用 tpad 克隆末帧补齐(入场动画保持干脆,尾部定格正是
+ * 旁白讲解所需的停留);超出目标不裁短(裁切会破坏动画完整性);容差 0.25s。
+ */
+export function decidePadSeconds(actual: number | undefined, target: number, tolerance = 0.25): number {
+  if (!actual || actual <= 0) return 0;
+  const gap = target - actual;
+  return gap > tolerance ? gap : 0;
+}
+
+/** 用 tpad 克隆末帧把无声渲染段延长 pad 秒(原地替换,返回新探测信息) */
+export async function padWithLastFrame(outputPath: string, padSeconds: number): Promise<void> {
+  const { getFFmpegPath } = await import("../video/ffmpeg.js");
+  const ffmpeg = await getFFmpegPath();
+  const tmp = outputPath.replace(/\.mp4$/, ".pad.mp4");
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  await promisify(execFile)(ffmpeg, [
+    "-i", outputPath,
+    "-vf", `tpad=stop_mode=clone:stop_duration=${padSeconds.toFixed(3)}`,
+    "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
+    "-an", "-y", tmp,
+  ]);
+  const { rename } = await import("node:fs/promises");
+  await rename(tmp, outputPath);
+}
 
 function runWorker(specPath: string): Promise<void> {
   return new Promise((resolve, reject) => {
