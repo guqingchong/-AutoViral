@@ -312,7 +312,9 @@ async function analyzeTrendsWithAgent(platform: string, rawData: string, interes
       return topics;
     } catch (err) {
       console.error(`[trends] 趋势调研失败(${platformLabel}):`, err instanceof Error ? err.message : err);
-      return [];
+      // 2026-08-19 P1:不再吞成"成功 0 条"——失败必须抛出让平台任务落 error 态,
+      // 否则模型未配/配额尽/超时全部表现为"调研完成 0 条",用户反复点反复烧钱
+      throw err;
     }
 }
 

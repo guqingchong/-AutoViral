@@ -29,7 +29,7 @@ interface RawLayer {
 interface RawTemplate {
   name?: string;
   canvas?: { width?: number; height?: number; fps?: number; backgroundColor?: string };
-  variables?: Array<{ name?: string }>;
+  variables?: Array<{ name?: string; type?: string }>;
   layers?: RawLayer[];
 }
 
@@ -158,6 +158,27 @@ export function checkTemplateQuality(raw: RawTemplate): QualityIssue[] {
     }
     if (typeof l.duration === "number" && l.duration <= 0) {
       issues.push({ rule: "timing", message: `图层 "${id}" duration=${l.duration} 必须大于 0` });
+    }
+  }
+
+  // ── 7. 视频槽位(2026-08-19 "假窗口"事故):含窗口语义形状却无 video 图层 → 拦截 ──
+  // 背景:tpl_5e5d1f71 的 video-window 只是色块+提示文字,渲染出空框,
+  // 真实视频被迫全屏混排在模板卡片之外,用户看到"完全没按模板来"。
+  const WINDOW_RE = /video[-_]?window|视频窗|画面窗|主画面|视频区|播放窗/i;
+  const windowShapes = layers.filter((l) => l.type === "shape" && WINDOW_RE.test(l.id ?? ""));
+  const videoLayers = layers.filter((l) => l.type === "video");
+  if (windowShapes.length && videoLayers.length === 0) {
+    issues.push({
+      rule: "video-slot",
+      message: `模板含窗口形状(${windowShapes.map((s) => s.id).join("/")})但没有任何 type:"video" 图层——窗口会渲染成空框。请声明 type:"video" 变量(如 main_video)并添加 {type:"video", source:"{{main_video}}", position/size 与窗口一致} 的图层;窗口形状作为边框/衬底保留在视频层之下`,
+    });
+  }
+  // video 变量声明了却没有视频图层引用 → 槽位空转
+  const videoVarNames = new Set((raw.variables ?? []).filter((v) => v.type === "video").map((v) => v.name).filter(Boolean));
+  for (const name of videoVarNames) {
+    const referenced = videoLayers.some((l) => typeof (l as { source?: string }).source === "string" && ((l as { source?: string }).source as string).includes(`{{${name}}}`));
+    if (!referenced) {
+      issues.push({ rule: "video-slot", message: `声明了视频变量 {{${name}}} 但没有任何 video 图层引用它——槽位空转,渲染时不会被填充` });
     }
   }
 

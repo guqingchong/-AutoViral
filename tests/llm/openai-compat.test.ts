@@ -190,3 +190,51 @@ describe("OpenAICompatProvider.chatStream", () => {
     expect("reasoning_content" in captured.messages[1]).toBe(false);
   });
 });
+
+// 2026-08-19 P1:直连记账——chatJson 响应带 usage 时必须落 llm_usage
+// (此前记账只在 agent loop chatStream,调研/模板/克隆等直连路径全漏账)
+describe("OpenAICompatProvider.chatJson 记账", () => {
+  it("usage 落 llm_usage 且带 stage", async () => {
+    const { mkdtemp } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = await mkdtemp(join(tmpdir(), "av-usage-"));
+    process.env.AUTOVIRAL_DATA_DIR = dir;
+    vi.resetModules();
+    const conn = await import("../../src/db/connection.js");
+    conn.resetInMemoryDb();
+    const { migrate } = await import("../../src/db/migrate.js");
+    migrate();
+    const { OpenAICompatProvider: Provider } = await import("../../src/llm/openai-compat.js");
+
+    const body = JSON.stringify({
+      choices: [{ message: { content: "{\"a\":1}" } }],
+      usage: { prompt_tokens: 123, completion_tokens: 45 },
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+      new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(body)); c.close(); } }),
+      { status: 200 },
+    )));
+
+    try {
+      const p = new Provider("deepseek", { baseUrl: "https://x/v1", apiKey: "k" });
+      const r = await p.chatJson("给 JSON", { model: "deepseek-v4-flash", usageStage: "script" });
+      expect(r).toEqual({ a: 1 });
+      // recordUsageAsync 是 fire-and-forget,轮询等落账
+      let row: any;
+      for (let i = 0; i < 50 && !row; i++) {
+        row = conn.getDb().prepare("SELECT * FROM llm_usage").get();
+        if (!row) await new Promise((r2) => setTimeout(r2, 100));
+      }
+      expect(row).toBeTruthy();
+      expect(row.input_tokens).toBe(123);
+      expect(row.output_tokens).toBe(45);
+      expect(row.stage).toBe("script");
+      expect(row.provider).toBe("deepseek");
+    } finally {
+      conn.closeDb();
+      delete process.env.AUTOVIRAL_DATA_DIR;
+      vi.unstubAllGlobals();
+    }
+  });
+});

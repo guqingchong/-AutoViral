@@ -99,5 +99,5 @@ export interface LlmProvider {
     onEvent: (ev: StreamEvent) => void,
   ): Promise<{ stopReason: string; assistant: AgentMessage }>;
   /** 非流式 JSON 生成（替代 llm-json.ts 的 runJsonPrompt 语义） */
-  chatJson<T>(prompt: string, opts: { model: string; timeoutMs?: number; maxAttempts?: number }): Promise<T>;
+  chatJson<T>(prompt: string, opts: { model: string; timeoutMs?: number; maxAttempts?: number; usageStage?: string; usageWorkId?: string }): Promise<T>;
 }

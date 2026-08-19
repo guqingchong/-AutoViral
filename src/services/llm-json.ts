@@ -35,5 +35,6 @@ export async function runJsonPrompt<T>(prompt: string, opts: LlmJsonOptions = {}
     model,
     timeoutMs: opts.timeoutMs,
     maxAttempts: opts.maxAttempts,
+    usageStage: opts.stage ?? "script", // 2026-08-19 P1:直连记账(stage 级;workId 无上下文时为空)
   });
 }

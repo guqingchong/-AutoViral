@@ -268,7 +268,10 @@
           lastCollectedCount = statusData.collected;
           await load();
           researchStatus = "done";
-          researchMessage = tt("topicsCollected").replace("{count}", String(statusData.collected));
+          // 部分平台失败时显式提示(2026-08-19 P1:失败不再静默吞成"0 条")
+          researchMessage = statusData.error
+            ? `收集 ${statusData.collected} 条,但${statusData.error}`
+            : tt("topicsCollected").replace("{count}", String(statusData.collected));
         } else if (statusData.status === "error") {
           if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
           researchStatus = "error";

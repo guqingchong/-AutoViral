@@ -49,6 +49,16 @@ export async function chatVisionJson<T>(
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 480_000);
+  // 直连记账(2026-08-19 P1):视觉调用此前全漏账
+  const acc = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 };
+  const onEvent = (ev: unknown) => {
+    const e = ev as { type?: string; inputTokens?: number; outputTokens?: number; cacheReadTokens?: number };
+    if (e?.type === "usage") {
+      acc.inputTokens += e.inputTokens ?? 0;
+      acc.outputTokens += e.outputTokens ?? 0;
+      acc.cacheReadTokens += e.cacheReadTokens ?? 0;
+    }
+  };
   try {
     const content: ContentBlock[] = [
       { type: "text", text: prompt + JSON_OUTPUT_DISCIPLINE },
@@ -56,7 +66,7 @@ export async function chatVisionJson<T>(
     ];
     const { assistant } = await provider.chatStream(
       { model, system: "", messages: [{ role: "user", content }], tools: [], maxTokens: 8192, allowImages: true, signal: controller.signal },
-      () => {},
+      onEvent,
     );
     const text = assistant.content
       .filter((b): b is TextBlock => b.type === "text")
@@ -69,5 +79,9 @@ export async function chatVisionJson<T>(
     return parsed as T;
   } finally {
     clearTimeout(timer);
+    if (acc.inputTokens > 0 || acc.outputTokens > 0) {
+      const { recordUsageAsync } = await import("../services/llm-usage.js");
+      recordUsageAsync({ stage: "vision", provider: provider.name, model: model!, ...acc });
+    }
   }
 }

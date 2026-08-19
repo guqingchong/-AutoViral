@@ -96,6 +96,13 @@ export function incrementResumeAttempts(workId: string): number {
   return (getItem(workId)?.resumeAttempts ?? 0);
 }
 
+/** 进展即清零(2026-08-19 P1):作品每次 pipeline advance 都是存活进展证据,
+ *  恢复次数只应统计"连续无进展的死亡恢复",此前成功后永不重置,
+ *  长跑作品累计 5 次瞬态失败就被误杀 */
+export function resetResumeAttempts(workId: string): void {
+  getDb().prepare("UPDATE work_queue SET resume_attempts=0 WHERE work_id=?").run(workId);
+}
+
 export function removeItem(workId: string): void {
   getDb().prepare("DELETE FROM work_queue WHERE work_id=?").run(workId);
 }

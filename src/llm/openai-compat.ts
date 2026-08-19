@@ -334,7 +334,7 @@ export class OpenAICompatProvider implements LlmProvider {
     return { stopReason, assistant: { role: "assistant", content: blocks } };
   }
 
-  async chatJson<T>(prompt: string, opts: { model: string; timeoutMs?: number; maxAttempts?: number }): Promise<T> {
+  async chatJson<T>(prompt: string, opts: { model: string; timeoutMs?: number; maxAttempts?: number; usageStage?: string; usageWorkId?: string }): Promise<T> {
     return withRetry(async () => {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 120_000);
@@ -359,6 +359,17 @@ export class OpenAICompatProvider implements LlmProvider {
           throw err;
         }
         const data = (await res.json()) as any;
+        // 直连记账(2026-08-19 P1):非流式 chatJson 此前全漏账,日预算熔断失真
+        const u = data.usage;
+        if (u) {
+          const { recordUsageAsync } = await import("../services/llm-usage.js");
+          recordUsageAsync({
+            stage: opts.usageStage, workId: opts.usageWorkId,
+            provider: this.name, model: opts.model,
+            inputTokens: u.prompt_tokens ?? 0, outputTokens: u.completion_tokens ?? 0,
+            cacheReadTokens: u.prompt_cache_hit_tokens,
+          });
+        }
         const text: string = data.choices?.[0]?.message?.content ?? "";
         const extracted = extractJsonFromText(text);
         if (extracted === undefined || extracted === null) {

@@ -3,14 +3,22 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-// P2-T1 验收:评审 3 轮不过 → eval_blocked。fake WsBridge 的 spawnEvaluator 恒 fail,
-// 经真实 advance 端点 + 真实 runEvaluation 走全流程(CLI 评审路径;API 评审路径共用
-// 同一 runEvaluation 状态机,仅 spawnEvaluator/runApiEvaluator 替换)。
+// P2-T1 验收:评审 3 轮不过 → eval_blocked。2026-08-19 P4-T2 后 CLI 评审路径删除,
+// 改为 mock runApiEvaluator(动态 import 会被 vi.mock 拦截);fake 会话必须带 loop 标记。
+
+vi.mock("../../src/agent/evaluator.js", () => ({
+  runApiEvaluator: vi.fn(async () => ({
+    step: "research", attempt: 1, verdict: "fail" as const,
+    scores: { 相关性: 3 },
+    issues: [{ severity: "critical", description: "测试:内容不达标" }],
+    suggestions: ["重写"],
+    timestamp: new Date().toISOString(),
+  })),
+}));
 
 describe("eval_blocked 三轮卡死复现", () => {
   let dir: string;
   let apiRoutes: any;
-  let spawnEvaluator: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), "av-evalblocked-"));
@@ -23,21 +31,14 @@ describe("eval_blocked 三轮卡死复现", () => {
     const api = await import("../../src/server/api.js");
     apiRoutes = api.apiRoutes;
 
-    spawnEvaluator = vi.fn(async () => ({
-      step: "research", attempt: 1, verdict: "fail" as const,
-      scores: { 相关性: 3 },
-      issues: [{ severity: "critical", description: "测试:内容不达标" }],
-      suggestions: ["重写"],
-      timestamp: new Date().toISOString(),
-    }));
     const fakeSession = {
       workId: "", messageHistory: [], browserSockets: new Set(),
       idle: true, evalStep: undefined as string | undefined,
+      loop: {}, // P4-T2:runEvaluation 要求 API loop 会话(CLI 路径已删)
     };
     api.setWsBridge({
       getSession: () => undefined,
       ensureSession: (workId: string) => ({ ...fakeSession, workId, messageHistory: [] }),
-      spawnEvaluator,
       sendMessage: vi.fn(async () => true),
       broadcastToBrowsers: vi.fn(),
     } as never);
@@ -81,7 +82,8 @@ describe("eval_blocked 三轮卡死复现", () => {
       await waitStepStatus(work.id, "research", attempt < 3 ? "active" : "eval_blocked");
     }
 
-    expect(spawnEvaluator).toHaveBeenCalledTimes(3);
+    const { runApiEvaluator } = await import("../../src/agent/evaluator.js");
+    expect(runApiEvaluator).toHaveBeenCalledTimes(3);
     const w = await getWork(work.id);
     expect(w?.pipeline.research.status).toBe("eval_blocked");
     // 评审进行中重复 advance 被守卫 409 拦截(evaluating 态)——附带回归
