@@ -2522,7 +2522,7 @@ async function waitForCreatorIdle(workId: string, timeoutMs = 120_000): Promise<
   }
 }
 
-async function runEvaluation(workId: string, completedStep: string, nextStep?: string): Promise<void> {
+export async function runEvaluation(workId: string, completedStep: string, nextStep?: string, evalErrorRetries = 0): Promise<void> {
   if (!wsBridge) throw new Error("WsBridge not initialized");
 
   // CRITICAL: Wait for creator agent's CLI process to finish before starting evaluator
@@ -2572,18 +2572,18 @@ async function runEvaluation(workId: string, completedStep: string, nextStep?: s
   // from disk without relying on cached file content from prior eval rounds.
   try {
     // P2-T1:创作者走 API loop 的作品,评审也走 API loop(独立 AgentLoop+视觉路由);
-    // CLI 会话(autoMode 批量,P2-T2 前)维持 CLI 评审
-    const evalResult = session.loop
-      ? await (await import("../agent/evaluator.js")).runApiEvaluator({
-          workId,
-          step: completedStep,
-          evalPrompt,
-          config: await loadConfig(),
-          workDir,
-          session,
-          bridge: wsBridge,
-        })
-      : await wsBridge.spawnEvaluator(session, evalPrompt);
+    // P4-T2(2026-08-19):CLI 评审路径删除,评审恒走 API loop(独立 AgentLoop+视觉路由)。
+    // 无 loop 的会话说明作品未经 API 会话启动——直接报错进 eval_error 重试链,不再 CLI 回落
+    if (!session.loop) throw new Error("评审需要 API loop 会话(CLI 路径已于 P4-T2 下线)");
+    const evalResult = await (await import("../agent/evaluator.js")).runApiEvaluator({
+      workId,
+      step: completedStep,
+      evalPrompt,
+      config: await loadConfig(),
+      workDir,
+      session,
+      bridge: wsBridge,
+    });
     evalResult.step = completedStep;
     evalResult.attempt = attempt;
     evalResult.timestamp = new Date().toISOString();
@@ -2680,7 +2680,9 @@ async function runEvaluation(workId: string, completedStep: string, nextStep?: s
         const freshWork = await getWork(workId);
         if (freshWork) {
           freshWork.pipeline[completedStep].status = "eval_blocked" as any;
-          await storeUpdateWork(workId, { pipeline: freshWork.pipeline });
+          // 2026-08-19 P1:同步置 works.status=failed——此前只改 pipeline,卡片永远
+          // 显示"素材准备中/合成中"中间态,无人工处置入口(状态腐烂)
+          await storeUpdateWork(workId, { pipeline: freshWork.pipeline, status: "failed" });
           broadcastPipelineUpdate(workId, freshWork.pipeline);
         }
         // 队列闭环：评审 3 轮不过即卡死，显式出队标 failed 交人工处置 ——
@@ -2716,14 +2718,20 @@ async function runEvaluation(workId: string, completedStep: string, nextStep?: s
       saveWorkChat(workId, { blocks: session.messageHistory }).catch(() => {});
     }
   } catch (err) {
-    log("error", "api", "eval_error", workId, { error: (err as Error).message });
-    // On evaluator failure, revert to active
+    log("error", "api", "eval_error", workId, { error: (err as Error).message, retry: evalErrorRetries });
+    // 2026-08-19 P1:评审器异常不再"回退 active 后停摆"——有限重试(5s/10s 退避),
+    // 连续失败则显式置 failed 出队交人工,杜绝无人值守场景下作品无声卡死
+    if (evalErrorRetries < 2) {
+      await new Promise((r) => setTimeout(r, 5000 * (evalErrorRetries + 1)));
+      return runEvaluation(workId, completedStep, nextStep, evalErrorRetries + 1);
+    }
     const freshWork = await getWork(workId);
     if (freshWork) {
       freshWork.pipeline[completedStep].status = "active";
-      await storeUpdateWork(workId, { pipeline: freshWork.pipeline });
+      await storeUpdateWork(workId, { pipeline: freshWork.pipeline, status: "failed" });
       broadcastPipelineUpdate(workId, freshWork.pipeline);
     }
+    notifyWorkSettled(workId, "failed");
   }
 }
 
@@ -2882,6 +2890,10 @@ apiRoutes.post("/api/works/:id/pipeline/advance", async (c) => {
       }
     }
 
+    // 进展即清零恢复计数(2026-08-19 P1):每次合法推进都是存活进展证据,
+    // resume_attempts 只应统计"连续无进展的死亡恢复"
+    workQueueRepo.resetResumeAttempts(id);
+
     // ── A1/B2 机器门禁(P2-T3):assembly 推进前强制交付物校验,拦截在评审之前 ──
     if (completedStep === "assembly" && work.type !== "image-text") {
       const { assertAssemblyDeliverables } = await import("../services/quality-gate.js");
@@ -2902,10 +2914,19 @@ apiRoutes.post("/api/works/:id/pipeline/advance", async (c) => {
       await storeUpdateWork(id, { pipeline: work.pipeline, status: deriveStatusFromPipeline(work.pipeline, work.status) });
       broadcastPipelineUpdate(id, work.pipeline);
 
-      // Start evaluation asynchronously (don't await — return immediately)
-      runEvaluation(id, completedStep, nextStep).catch((err) => {
-        log("error", "api", "eval_failed", id, { error: (err as Error).message });
-      });
+      // 2026-08-19 事件驱动评审:agent 是在自己回合中通过 curl 调的本端点,
+      // 回合此刻仍在跑——旧实现 waitForCreatorIdle 每轮白等 120s 超时(7 轮评审
+      // ≈14min 纯等待/部)。改为:回合运行中则挂 pendingEval,回合结束的 finally
+      // 里由 onLoopTurnEnd 立即触发评审;无存活回合(CLI 路径/无会话)才立即启动。
+      const session = wsBridge?.getSession(id);
+      if (session?.loop && session.loopState === "running") {
+        session.pendingEval = { step: completedStep, nextStep };
+        log("info", "api", "eval_deferred_to_turn_end", id, { step: completedStep });
+      } else {
+        runEvaluation(id, completedStep, nextStep).catch((err) => {
+          log("error", "api", "eval_failed", id, { error: (err as Error).message });
+        });
+      }
 
       return c.json({ ok: true, evaluating: true, pipeline: work.pipeline });
     }
@@ -3514,6 +3535,9 @@ export function buildTemplateSection(templateId?: string): string {
     lines.push(`  2. 模板管不了也不该管的镜头,按素材路由走专门管线并独立渲染：数据→/api/assets/chart|data-card；结构/流程/逻辑→/api/assets/code-scene(程序化动画,优先于静态卡)；原文证据→snapshot-card；实拍/氛围→Pexels或AI生成。这些分段与模板分段按分镜顺序 ffmpeg concat 混排——混排是标准做法,不算"自由合成"。含中文的 POST body 一律写 JSON 文件 + --data-binary @file,禁止 curl -d 内联(Windows 必乱码)`);
     lines.push(`  3. 模板分段必须调用模板渲染引擎 POST /api/works/{workId}/render 产出,把素材映射进变量槽位；混排成片的视觉统一靠全片统一调色(见合成阶段调色规范),而不是全片只用模板`);
     lines.push(`  4. 完整模板 JSON: curl -s http://localhost:3271/api/templates/${t.id}`);
+    // 2026-08-19 "假窗口"事故:tpl_5e5d1f71 的窗口色块+提示文字被当成视频窗口,
+    // 成片窗口空框。槽位填充是必须项,评审会抽帧核对(criteria/assembly.md 维度 7)
+    lines.push(`  5. 槽位填充(强制):模板声明的 type:video/image 变量必须填真实素材的本地绝对路径——窗口里必须播放真实画面,禁止空框/色块/提示文字占位;分镜为该窗口规划的素材就是填它的`);
   }
   return lines.join("\n");
 }
@@ -3818,7 +3842,17 @@ apiRoutes.post("/api/trends/collect", async (c) => {
     .then((results) => {
       const total = results.reduce((sum, r) => sum + r.topics.length, 0);
       const job = trendJobs.get(jobId);
-      if (job) { job.status = "done"; job.collected = total; }
+      if (job) {
+        job.status = "done";
+        job.collected = total;
+        // 2026-08-19 P1:平台级失败显式透出——此前模型未配/配额尽/超时全部
+        // 静默吞成"调研完成,收集 0 条",用户无感知反复烧钱
+        const failed = (job.platformsProgress ?? []).filter((p) => p.status === "error");
+        if (failed.length) {
+          job.error = `${failed.length} 个平台调研失败:${failed.map((p) => `${p.platform}(${(p.error ?? "").slice(0, 60)})`).join("; ")}`;
+          if (total === 0) job.status = "error";
+        }
+      }
     })
     .catch((err) => {
       const job = trendJobs.get(jobId);

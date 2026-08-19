@@ -17,6 +17,8 @@ export class QuotaExhaustedError extends Error {
 }
 
 const QUOTA_PATTERN = /usage limit|quota|insufficient.?credits|billing cycle|余额不足/i;
+// 注:429/rate limit 是瞬时限流,withRetry 层已指数退避,不算配额耗尽
+// (2026-08-19 曾把 rate.?limit 加入本模式,导致瞬时限流也触发 30min 全局冷却——回退)
 
 export function isQuotaErrorText(text: string): boolean {
   return QUOTA_PATTERN.test(text);

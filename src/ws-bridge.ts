@@ -68,6 +68,9 @@ export interface WsSession {
   /** 当前 loop 的路由阶段与模型(P2 提速 A):阶段推进时 refreshStageRouting 据此判定重建 */
   routedStage?: string;
   routedModel?: string;
+  /** 待触发评审(2026-08-19):agent 在回合中调 advance 时挂上,回合真正结束时由
+   *  onLoopTurnEnd 触发——取代 waitForCreatorIdle 固定 120s 白等(每轮评审 2min×N 纯损耗) */
+  pendingEval?: { step: string; nextStep?: string };
 }
 
 interface NdjsonMessage {
@@ -81,35 +84,6 @@ interface NdjsonMessage {
     [key: string]: unknown;
   };
   [key: string]: unknown;
-}
-
-// ── Cross-platform CLI resolution ──────────────────────────────────────────
-
-/** Resolve the actual Claude CLI executable path.
- *  On Windows, npm installs a .cmd wrapper that cannot be spawn'd directly
- *  (Node.js v20+ throws EINVAL). We find the real .exe under the global
- *  node_modules tree so arguments are passed verbatim without shell parsing.
- */
-export function resolveClaudeCommand(): string {
-  if (process.platform !== "win32") return "claude";
-
-  try {
-    const npmPrefix = execSync("npm prefix -g", {
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-    const exePath = join(
-      npmPrefix,
-      "node_modules",
-      "@anthropic-ai",
-      "claude-code",
-      "bin",
-      "claude.exe"
-    );
-    if (existsSync(exePath)) return exePath;
-  } catch { /* ignore */ }
-
-  return "claude";
 }
 
 // ── WsBridge ─────────────────────────────────────────────────────────────────
@@ -126,6 +100,9 @@ export class WsBridge {
    *  必须互斥,否则并发触发会产生脱离跟踪的孤儿 CLI 进程(2026-08-06 根因) */
   private spawnChains: Map<string, Promise<void>> = new Map();
   private browserWss: WebSocketServer;
+
+  /** 回合结束钩子(2026-08-19):api 层注入,用于 pendingEval 的事件驱动评审触发 */
+  onLoopTurnEnd?: (workId: string) => void;
 
   /** 串行化同一作品的 spawn 相关操作 */
   private async withSpawnLock<T>(workId: string, fn: () => Promise<T>): Promise<T> {
@@ -461,8 +438,8 @@ ${unattended
   }
 
   /**
-   * Start a new CLI session. Loads work context, builds system prompt,
-   * then spawns `claude -p <prompt> --output-format stream-json --verbose`.
+   * Start a new agent session. Loads work context, builds system prompt,
+   * runs on the API agent loop(P4-T2 起 CLI spawn 路径删除).
    */
   async createSession(workId: string, initialPrompt: string, model?: string): Promise<WsSession> {
     logBridge("session_create", workId, { model, promptLen: initialPrompt.length });
@@ -475,73 +452,15 @@ ${unattended
       try { existing.cliProcess.kill("SIGTERM"); } catch { /* dead */ }
     }
 
-    // LLM 直连：llm.providers 已配置 → API agent loop（P2-T2 起含 autoMode）
+    // LLM 直连：llm.providers 已配置 → API agent loop(P2-T2 起含 autoMode)
     if (await this.useApiDriver(workId)) {
       logBridge("session_create_api", workId, { model });
       return this.createSessionApi(workId, initialPrompt, model);
     }
 
-    const session: WsSession = {
-      workId,
-      idle: false,
-      browserSockets: existing?.browserSockets ?? new Set(),
-      messageHistory: existing?.messageHistory ?? [],
-      model,
-    };
-    this.sessions.set(workId, session);
-
-    // Load persisted chat history (survives server restart)
-    // Try JSONL first (new format), fall back to JSON (legacy)
-    try {
-      const jsonlPath = join(dataDir, "works", session.workId, "chat.jsonl");
-      const raw = await readFile(jsonlPath, "utf-8");
-      const blocks: ChatBlock[] = [];
-      for (const line of raw.split("\n")) {
-        if (!line.trim()) continue;
-        try { blocks.push(JSON.parse(line)); } catch { /* skip malformed */ }
-      }
-      if (blocks.length > 0) session.messageHistory = blocks;
-    } catch {
-      // No JSONL — try legacy JSON
-      try {
-        const existing = await loadWorkChat(session.workId);
-        if ((existing as any)?.blocks && Array.isArray((existing as any).blocks)) {
-          session.messageHistory = (existing as any).blocks;
-          // Migrate: write as JSONL for future reads
-          const jsonlPath = join(dataDir, "works", session.workId, "chat.jsonl");
-          const jsonlContent = (existing as any).blocks.map((b: ChatBlock) => JSON.stringify(b)).join("\n") + "\n";
-          writeFile(jsonlPath, jsonlContent, "utf-8").catch(() => {});
-        }
-      } catch { /* ignore */ }
-    }
-
-    // Load persisted cliSessionId from work.yaml (survives server restart)
-    let savedSessionId: string | undefined;
-    try {
-      const work = await getWork(workId);
-      if (work?.cliSessionId) {
-        savedSessionId = work.cliSessionId;
-        session.cliSessionId = savedSessionId;
-      }
-    } catch { /* ignore */ }
-
-    if (savedSessionId) {
-      // Resume existing conversation — agent keeps full context
-      this.spawnCli(session, initialPrompt, savedSessionId);
-    } else {
-      // First time — build system prompt with full context
-      let systemPrompt = initialPrompt;
-      try {
-        const work = await getWork(workId);
-        if (work) {
-          const contextPrompt = await this.buildSystemPrompt(work);
-          systemPrompt = contextPrompt + "\n\n---\n\n用户消息：" + initialPrompt;
-        }
-      } catch { /* fall back to plain prompt */ }
-      this.spawnCli(session, systemPrompt);
-    }
-
-    return session;
+    // P4-T2(2026-08-19):CLI 路径删除——未配置 provider 时显式报错引导配置,
+    // 不再静默回落 claude CLI(烧订阅配额 + Windows 下问题是主要事故源)
+    throw new Error("未配置大模型直连——请到设置页「大模型直连」配置至少一家 provider 的 API Key 后重试");
   }
 
   // ── LLM 直连（API agent loop）路径，2026-08-17 Phase 1 ─────────────────────
@@ -634,6 +553,7 @@ ${unattended
         session.loopState = "idle";
         session.idle = true;
         persist();
+        this.onLoopTurnEnd?.(workId);
         this.scheduleAutoContinue(session);
       });
 
@@ -775,12 +695,16 @@ ${unattended
 
   /**
    * Create an ephemeral trend research session.
-   * Uses sonnet model, auto-kills after 180s, filters CLI events into simplified research events.
+   * P4-T1(2026-08-19):CLI spawn 平移为 API loop——research 档路由(kimi 联网),
+   * search_query/search_result/analyzing/research_done 事件序列由 loop 事件复刻。
    */
   async createTrendSession(sessionKey: string, prompt: string): Promise<WsSession> {
     const existing = this.sessions.get(sessionKey);
     if (existing?.cliProcess) {
       try { existing.cliProcess.kill("SIGTERM"); } catch { /* dead */ }
+    }
+    if (existing?.loop && existing.loopState === "running") {
+      existing.loop.abortTurn();
     }
 
     const session: WsSession = {
@@ -788,31 +712,84 @@ ${unattended
       idle: false,
       browserSockets: existing?.browserSockets ?? new Set(),
       messageHistory: [],
-      model: "sonnet",
+      model: "api-loop",
     };
     this.sessions.set(sessionKey, session);
 
-    this.spawnCli(session, prompt);
+    const platform = sessionKey.split("_")[1] ?? "unknown";
+    const { AgentLoop } = await import("./agent/loop.js");
+    const { buildCreatorTools } = await import("./agent/tools/index.js");
+    const { PROVIDER_PRESETS } = await import("./llm/provider-keys.js");
+    const { resolveModelFor } = await import("./llm/registry.js");
+    const config = await loadConfig();
+    const { provider, model } = resolveModelFor(config, "research");
 
-    // Auto-kill after 180s
-    setTimeout(() => {
-      if (session.cliProcess) {
-        try { session.cliProcess.kill("SIGTERM"); } catch { /* dead */ }
-        session.cliProcess = undefined;
-        // Still try to read files even on timeout — agent may have written data.json
+    const searchToolName = PROVIDER_PRESETS[provider.name]?.builtinSearchTool;
+    const builtinTools = searchToolName
+      ? [{
+          name: searchToolName,
+          builtin: true,
+          description: "联网搜索(平台服务端执行)。涉及时效性话题、热点、资料查证时调用;调用后平台自动执行并注入结果,无需任何参数处理。",
+          input_schema: { type: "object", properties: {} },
+        }]
+      : [];
+
+    // CLI 事件序列复刻:搜索调用→search_query;搜索结果→search_result;结果后文本→analyzing
+    let lastEventWasToolResult = false;
+    const onLoopEvent = (ev: import("./agent/loop.js").LoopEvent): void => {
+      session.lastActivityAt = Date.now();
+      if (ev.type === "tool_use" && (ev.toolName === "WebSearch" || ev.toolName === searchToolName)) {
+        const q = (ev.toolInput as Record<string, unknown> | undefined)?.query;
+        this.broadcastToBrowsers(sessionKey, { event: "search_query", data: { query: String(q ?? "") } });
+        lastEventWasToolResult = false;
+      } else if (ev.type === "tool_result") {
+        const summary = (ev.toolResult ?? "").toString().slice(0, 80) || "搜索完成";
+        this.broadcastToBrowsers(sessionKey, { event: "search_result", data: { summary } });
+        lastEventWasToolResult = true;
+      } else if (ev.type === "text_delta" && lastEventWasToolResult) {
+        this.broadcastToBrowsers(sessionKey, { event: "analyzing", data: {} });
+        lastEventWasToolResult = false;
+      }
+    };
+
+    const loop = new AgentLoop({
+      provider,
+      model,
+      systemPrompt: [
+        "你是专业的社交媒体趋势研究员。使用可用工具完成调研并把结果写入指定文件。",
+        searchToolName
+          ? `联网搜索工具名为 \`${searchToolName}\`(即 WebSearch),平台自动执行并注入结果;禁止用 curl/wget 抓网页代替搜索。`
+          : "",
+      ].filter(Boolean).join("\n"),
+      tools: buildCreatorTools({ bashBlocklist: config.llm?.guard?.bashBlocklist }),
+      builtinTools,
+      workDir: join(dataDir, "trends", platform),
+      onLoopEvent,
+      usageContext: { workId: sessionKey, stage: "research:trend-session" },
+    });
+    session.loop = loop;
+    session.loopState = "running";
+    session.loopTurnPromise = loop
+      .runTurn(prompt)
+      .catch((err) => {
+        console.error(`[trend-session] ${sessionKey} loop 失败:`, err instanceof Error ? err.message : err);
+        this.broadcastToBrowsers(sessionKey, {
+          event: "research_error",
+          data: { message: err instanceof Error ? err.message : "调研失败" },
+        });
+      })
+      .finally(() => {
+        session.loopState = "idle";
+        session.idle = true;
         this.finalizeTrendData(sessionKey).catch(() => {}).finally(() => {
-          this.broadcastToBrowsers(sessionKey, {
-            event: "research_error",
-            data: { message: "搜索超时，请稍后重试" },
-          });
+          this.broadcastToBrowsers(sessionKey, { event: "research_done", data: { platform } });
           this.cleanupTrendSession(sessionKey);
         });
-      }
-    }, 180000);
+      });
 
     this.broadcastToBrowsers(sessionKey, {
       event: "research_started",
-      data: { platform: sessionKey.split("_")[1] ?? "unknown" },
+      data: { platform },
     });
 
     return session;
@@ -867,6 +844,7 @@ ${unattended
         .finally(() => {
           session.loopState = "idle";
           session.idle = true;
+          this.onLoopTurnEnd?.(workId);
           this.scheduleAutoContinue(session);
         });
       this.broadcastToBrowsers(workId, {
@@ -876,46 +854,10 @@ ${unattended
       return true;
     }
 
-    // If CLI is still running (shouldn't normally be, but just in case)
-    if (session.cliProcess) {
-      try { session.cliProcess.kill("SIGTERM"); } catch { /* dead */ }
-      session.cliProcess = undefined;
-    }
-
-    // Try to resume: check in-memory first, then persisted in work.yaml
-    let resumeId = session.cliSessionId;
-    if (!resumeId) {
-      try {
-        const work = await getWork(workId);
-        if (work?.cliSessionId) {
-          resumeId = work.cliSessionId;
-          session.cliSessionId = resumeId;
-        }
-      } catch { /* ignore */ }
-    }
-
-    if (resumeId) {
-      this.spawnCli(session, text, resumeId);
-    } else {
-      // No session to resume — build full context prompt so agent knows the project
-      let prompt = text;
-      try {
-        const work = await getWork(workId);
-        if (work) {
-          const contextPrompt = await this.buildSystemPrompt(work);
-          prompt = contextPrompt + "\n\n---\n\n用户消息：" + text;
-        }
-      } catch { /* fall back to plain text */ }
-      this.spawnCli(session, prompt);
-    }
-
-    session.idle = false;
-    this.broadcastToBrowsers(workId, {
-      event: "session_state",
-      data: { idle: false },
-    });
-
-    return true;
+    // P4-T2(2026-08-19):CLI resume 路径删除。无 loop 的会话属异常态
+    // (正常会话经 createSessionApi 建立 loop),显式报错而非静默 CLI 回落
+    console.error(`[ws-bridge] sendMessage:${workId} 会话无 API loop(CLI 已于 P4-T2 下线),消息未发送`);
+    return false;
   }
 
   killSession(workId: string): boolean {
@@ -1043,496 +985,6 @@ ${unattended
     setTimeout(() => {
       this.sessions.delete(sessionKey);
     }, 5000);
-  }
-
-  // ── CLI spawn ────────────────────────────────────────────────────────────
-
-  private spawnCli(session: WsSession, prompt: string, resumeSessionId?: string): void {
-    logBridge("spawn_cli", session.workId, { model: session.model, resume: resumeSessionId });
-    const args = [
-      "-p", prompt,
-      "--output-format", "stream-json",
-      "--verbose",
-      "--dangerously-skip-permissions",
-    ];
-
-    if (resumeSessionId) {
-      args.push("--resume", resumeSessionId);
-    }
-
-    // 始终显式指定模型：否则 CLI 会回落到用户 settings.json 的默认 model
-    // （主会话 /model 设置如 "k3[1m]" 对 AutoViral spawn 的独立 CLI 进程无效，
-    //  会导致每个 agent 回合立即报错退出、流水线假死 —— 2026-07-17 根因）
-    args.push("--model", session.model ?? "sonnet");
-
-    const cliCmd = resolveClaudeCommand();
-    const proc = spawn(cliCmd, args, {
-      cwd: process.cwd(),
-      stdio: ["ignore", "pipe", "pipe"],
-      shell: false,
-      windowsHide: true,
-      env: {
-        ...process.env,
-        CLAUDE_CODE_ENTRYPOINT: "cli",
-        AUTOVIRAL_PROJECT_DIR: process.cwd(),
-      },
-    });
-
-    session.cliProcess = proc;
-    session.lastActivityAt = Date.now();
-
-    // Accumulate assistant text chunks for this turn
-    let turnText = "";
-    let lastEventWasToolResult = false;
-    // stderr 尾部累积：resume 失败等 CLI 致命错误的真实原因只出现在 stderr，
-    // 此前只广播给浏览器、不进日志，导致"会话静默死亡"无法诊断（2026-07-21）
-    let stderrTail = "";
-
-    // Parse NDJSON from stdout
-    let buffer = "";
-    proc.stdout?.on("data", (data: Buffer) => {
-      session.lastActivityAt = Date.now();
-      buffer += data.toString();
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const msg: NdjsonMessage = JSON.parse(line);
-
-          // Trend session event filtering
-          if (session.workId.startsWith("trends_")) {
-            if (msg.type === "assistant" && msg.message?.content) {
-              for (const block of msg.message.content as Array<Record<string, unknown>>) {
-                if (block.type === "tool_use" && block.name === "WebSearch") {
-                  const input = block.input as Record<string, unknown> | undefined;
-                  this.broadcastToBrowsers(session.workId, {
-                    event: "search_query",
-                    data: { query: (input?.query as string) ?? "" },
-                  });
-                  lastEventWasToolResult = false;
-                }
-              }
-            }
-            if (msg.type === "user" && (msg as Record<string, unknown>).message) {
-              const userMsg = (msg as Record<string, unknown>).message as Record<string, unknown>;
-              const content = userMsg.content as Array<Record<string, unknown>> | undefined;
-              if (content) {
-                for (const block of content) {
-                  if (block.type === "tool_result") {
-                    const resultText = typeof block.content === "string"
-                      ? block.content
-                      : JSON.stringify(block.content);
-                    const summary = resultText.slice(0, 80) || "搜索完成";
-                    this.broadcastToBrowsers(session.workId, {
-                      event: "search_result",
-                      data: { summary },
-                    });
-                  }
-                }
-                lastEventWasToolResult = true;
-              }
-            }
-          }
-
-          // system.init — capture session ID and persist to work.yaml
-          if (msg.type === "system" && msg.subtype === "init") {
-            if (msg.session_id) {
-              session.cliSessionId = msg.session_id;
-              // Persist so we can --resume after server restart
-              updateWork(session.workId, { cliSessionId: msg.session_id }).catch(() => {});
-            }
-            this.broadcastToBrowsers(session.workId, {
-              event: "session_ready",
-              data: { workId: session.workId, cliSessionId: session.cliSessionId },
-            });
-            continue;
-          }
-
-          // assistant — forward all content blocks to browsers
-          if (msg.type === "assistant" && msg.message?.content) {
-            const blocks = msg.message.content as Array<Record<string, unknown>>;
-            const blockTypes = blocks.map((b: Record<string, unknown>) => b.type).join(",");
-            logBridgeDebug("cli_assistant_message", session.workId, {
-              messageId: msg.message.id,
-              blockTypes,
-              blockCount: blocks.length,
-            });
-            for (const block of blocks) {
-              if (block.type === "text" && block.text) {
-                if (session.workId.startsWith("trends_") && lastEventWasToolResult) {
-                  this.broadcastToBrowsers(session.workId, {
-                    event: "analyzing",
-                    data: {},
-                  });
-                  lastEventWasToolResult = false;
-                }
-                turnText += block.text as string;
-                if (!session.workId.startsWith("trends_")) {
-                  const textBlock: ChatBlock = { type: "text", text: block.text as string, timestamp: new Date().toISOString() };
-                  session.messageHistory.push(textBlock);
-                  this.appendToChatLog(session.workId, textBlock);
-                  this.scheduleIncrementalSave(session.workId);
-                }
-                this.broadcastToBrowsers(session.workId, {
-                  event: "assistant_text",
-                  data: { workId: session.workId, text: block.text },
-                });
-              } else if (block.type === "thinking" && block.thinking) {
-                if (!session.workId.startsWith("trends_")) {
-                  const thinkBlock: ChatBlock = { type: "thinking", text: block.thinking as string, collapsed: true };
-                  session.messageHistory.push(thinkBlock);
-                  this.appendToChatLog(session.workId, thinkBlock);
-                  this.scheduleIncrementalSave(session.workId);
-                }
-                this.broadcastToBrowsers(session.workId, {
-                  event: "assistant_thinking",
-                  data: { workId: session.workId, text: block.thinking },
-                });
-              } else if (block.type === "tool_use") {
-                if (!session.workId.startsWith("trends_")) {
-                  const toolBlock: ChatBlock = { type: "tool_use", text: JSON.stringify(block.input), toolName: block.name as string };
-                  session.messageHistory.push(toolBlock);
-                  this.appendToChatLog(session.workId, toolBlock);
-                  this.scheduleIncrementalSave(session.workId);
-                }
-                this.broadcastToBrowsers(session.workId, {
-                  event: "tool_use",
-                  data: { workId: session.workId, name: block.name, input: block.input },
-                });
-              }
-            }
-            continue;
-          }
-
-          // user (tool results) — forward to browsers
-          if (msg.type === "user" && (msg as Record<string, unknown>).message) {
-            const userMsg = (msg as Record<string, unknown>).message as Record<string, unknown>;
-            const content = userMsg.content as Array<Record<string, unknown>> | undefined;
-            if (content) {
-              for (const block of content) {
-                if (block.type === "tool_result") {
-                  const resultContent = typeof block.content === "string"
-                    ? block.content
-                    : JSON.stringify(block.content);
-                  if (!session.workId.startsWith("trends_")) {
-                    const trBlock: ChatBlock = { type: "tool_result", text: resultContent, collapsed: true };
-                    session.messageHistory.push(trBlock);
-                    this.appendToChatLog(session.workId, trBlock);
-                    this.scheduleIncrementalSave(session.workId);
-                  }
-                  this.broadcastToBrowsers(session.workId, {
-                    event: "tool_result",
-                    data: { workId: session.workId, content: resultContent },
-                  });
-                }
-              }
-            }
-            continue;
-          }
-
-          // result — turn complete
-          if (msg.type === "result") {
-            session.idle = true;
-            const resultText = typeof msg.result === "string" && msg.result
-              ? msg.result
-              : turnText;
-            logBridge("turn_complete", session.workId, {
-              hasResult: !!(typeof msg.result === "string" && msg.result),
-              resultLen: typeof msg.result === "string" ? msg.result.length : 0,
-              turnTextLen: turnText.length,
-              resultPreview: (resultText || "").slice(0, 150),
-            });
-            // Update cliSessionId from result if present
-            if (msg.session_id) {
-              session.cliSessionId = msg.session_id;
-            }
-            this.finalizeTurn(session, resultText);
-            continue;
-          }
-
-          // Forward everything else
-          this.broadcastToBrowsers(session.workId, {
-            event: "cli_event",
-            data: msg,
-          });
-        } catch {
-          // Non-JSON line, ignore
-        }
-      }
-    });
-
-    proc.stderr?.on("data", (data: Buffer) => {
-      const text = data.toString();
-      if (text.trim()) {
-        stderrTail = (stderrTail + text).slice(-800);
-        // A3 配额防护:CLI 报 usage limit/quota → 全局冷却(2026-08-16 撞墙事件)
-        if (isQuotaErrorText(text)) reportQuotaExhausted("cli");
-        this.broadcastToBrowsers(session.workId, {
-          event: "cli_stderr",
-          data: { text },
-        });
-      }
-    });
-
-    proc.on("exit", (code, signal) => {
-      logBridge("cli_exit", session.workId, { code, signal, turnTextLen: turnText.length, stderrTail: stderrTail.slice(-300) });
-
-      // If CLI exits with code 1 and produced no output, the resume session is likely stale
-      // (e.g. computer restarted while session file still marks it as "busy"). Clear it so
-      // next spawn creates a fresh session.
-      if (code === 1 && turnText.length === 0 && session.cliSessionId) {
-        logBridge("cli_stale_session_cleared", session.workId, { cliSessionId: session.cliSessionId });
-        session.cliSessionId = undefined;
-        // 同步清 SQLite（此前只清了 legacy work.yaml，而 createSession 读的是
-        // works.cli_session_id —— stale ID 残留导致每次重建都 resume 失败、死循环）
-        updateWork(session.workId, { cliSessionId: "" }).catch(() => {});
-        // yaml.dump ignores undefined values, so we must delete the field directly from work.yaml
-        const workPath = join(dataDir, "works", session.workId, "work.yaml");
-        readFile(workPath, "utf-8")
-          .then((raw) => {
-            const workData = yaml.load(raw) as Record<string, unknown> | null;
-            if (workData && "cliSessionId" in workData) {
-              delete workData.cliSessionId;
-              return writeFile(workPath, yaml.dump(workData, { lineWidth: -1, sortKeys: false }), "utf-8");
-            }
-          })
-          .catch(() => {});
-
-        // 关键：自动以全新会话重试（不 resume）。此前清理后不重试，打回重做/
-        // 会话重建等场景下 agent 从未真正启动，作品永久卡在当前阶段。
-        // 限 1 次防循环：若 CLI 本身故障（非 stale），新会话退出时无
-        // cliSessionId 可清则不再重试。
-        const retried = (session as WsSession & { staleRetried?: boolean }).staleRetried;
-        if (!retried && !session.workId.startsWith("trends_")) {
-          (session as WsSession & { staleRetried?: boolean }).staleRetried = true;
-          logBridge("cli_stale_retry_fresh", session.workId, {});
-          session.cliProcess = undefined;
-          // 与 queue resume / advance 续命的 spawn 互斥，避免同一作品双 spawn
-          void this.withSpawnLock(session.workId, async () => {
-            if (session.cliProcess) return; // 已被其他路径接管，不再重试
-            try {
-              const work = await getWork(session.workId);
-              const freshPrompt = work
-                ? (await this.buildSystemPrompt(work)) + "\n\n---\n\n用户消息：" + prompt
-                : prompt;
-              this.spawnCli(session, freshPrompt);
-            } catch {
-              this.spawnCli(session, prompt);
-            }
-          });
-          return; // 新进程已接管 session.cliProcess，不走下方退出收尾
-        }
-      }
-
-      session.cliProcess = undefined;
-      session.idle = true;
-      if (session.workId.startsWith("trends_")) {
-        if (code === 0) {
-          // Read agent-written files and broadcast report before done event
-          this.finalizeTrendData(session.workId).catch(() => {}).finally(() => {
-            this.broadcastToBrowsers(session.workId, {
-              event: "research_done",
-              data: { platform: session.workId.split("_")[1] ?? "unknown" },
-            });
-            this.cleanupTrendSession(session.workId);
-          });
-        } else {
-          this.broadcastToBrowsers(session.workId, {
-            event: "research_error",
-            data: { message: `CLI exited with code ${code}` },
-          });
-          this.cleanupTrendSession(session.workId);
-        }
-      } else {
-        this.broadcastToBrowsers(session.workId, {
-          event: "cli_exited",
-          data: { workId: session.workId, code, signal },
-        });
-        // Persist chat to disk on CLI exit
-        saveWorkChat(session.workId, { blocks: session.messageHistory }).catch(() => {});
-      }
-    });
-
-    proc.on("error", (err) => {
-      logBridge("cli_error", session.workId, { error: err.message });
-      this.broadcastToBrowsers(session.workId, {
-        event: "cli_error",
-        data: { workId: session.workId, error: err.message },
-      });
-    });
-  }
-
-  /**
-   * Spawn an evaluator CLI agent for quality review.
-   * Routes messages with source:"evaluator" and parses structured eval results.
-   */
-  spawnEvaluator(
-    session: WsSession,
-    prompt: string,
-    resumeEvalSessionId?: string,
-  ): Promise<EvalResult> {
-    return new Promise((resolve, reject) => {
-      const args = [
-        "-p", prompt,
-        "--output-format", "stream-json",
-        "--verbose",
-        "--dangerously-skip-permissions",
-      ];
-
-      if (resumeEvalSessionId) {
-        args.push("--resume", resumeEvalSessionId);
-      }
-
-      // 始终显式指定模型（同 spawnCli，避免回落到用户默认 model 导致回合即死）
-      args.push("--model", session.model ?? "sonnet");
-
-      const cliCmd = resolveClaudeCommand();
-      const proc = spawn(cliCmd, args, {
-        cwd: homedir(),
-        stdio: ["ignore", "pipe", "pipe"],
-        shell: false,
-        windowsHide: true,
-        env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: "cli", AUTOVIRAL_PROJECT_DIR: process.cwd() },
-      });
-
-      // Store on session so killSession() can kill it
-      session.evalProcess = proc;
-
-      let turnText = "";
-      let buffer = "";
-      let resolved = false;
-
-      proc.stdout?.on("data", (data: Buffer) => {
-        buffer += data.toString();
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          try {
-            const msg: NdjsonMessage = JSON.parse(line);
-
-            // Capture evaluator session ID
-            if (msg.type === "system" && msg.subtype === "init" && msg.session_id) {
-              session.evalSessionId = msg.session_id;
-            }
-
-            // Forward assistant blocks with source: "evaluator"
-            if (msg.type === "assistant" && msg.message?.content) {
-              const blocks = msg.message.content as Array<Record<string, unknown>>;
-              for (const block of blocks) {
-                if (block.type === "text" && block.text) {
-                  turnText += block.text as string;
-                  const eb: ChatBlock = { type: "text", text: block.text as string, source: "evaluator", timestamp: new Date().toISOString() };
-                  session.messageHistory.push(eb);
-                  this.appendToChatLog(session.workId, eb);
-                  this.scheduleIncrementalSave(session.workId);
-                  this.broadcastToBrowsers(session.workId, {
-                    event: "assistant_text",
-                    data: { workId: session.workId, text: block.text, source: "evaluator" },
-                  });
-                } else if (block.type === "thinking" && block.thinking) {
-                  const eb: ChatBlock = { type: "thinking", text: block.thinking as string, source: "evaluator", collapsed: true };
-                  session.messageHistory.push(eb);
-                  this.appendToChatLog(session.workId, eb);
-                  this.broadcastToBrowsers(session.workId, {
-                    event: "assistant_thinking",
-                    data: { workId: session.workId, text: block.thinking, source: "evaluator" },
-                  });
-                } else if (block.type === "tool_use") {
-                  const eb: ChatBlock = { type: "tool_use", text: JSON.stringify(block.input), toolName: block.name as string, source: "evaluator" };
-                  session.messageHistory.push(eb);
-                  this.appendToChatLog(session.workId, eb);
-                  this.scheduleIncrementalSave(session.workId);
-                  this.broadcastToBrowsers(session.workId, {
-                    event: "tool_use",
-                    data: { workId: session.workId, name: block.name, input: block.input, source: "evaluator" },
-                  });
-                }
-              }
-            }
-
-            // Forward tool results with source: "evaluator"
-            if (msg.type === "user" && (msg as any).message?.content) {
-              const content = (msg as any).message.content as Array<Record<string, unknown>>;
-              for (const block of content) {
-                if (block.type === "tool_result") {
-                  const resultContent = typeof block.content === "string"
-                    ? block.content : JSON.stringify(block.content);
-                  const eb: ChatBlock = { type: "tool_result", text: resultContent, source: "evaluator", collapsed: true };
-                  session.messageHistory.push(eb);
-                  this.appendToChatLog(session.workId, eb);
-                  this.scheduleIncrementalSave(session.workId);
-                  this.broadcastToBrowsers(session.workId, {
-                    event: "tool_result",
-                    data: { workId: session.workId, content: resultContent, source: "evaluator" },
-                  });
-                }
-              }
-            }
-
-            // result — eval turn complete, parse JSON result
-            if (msg.type === "result") {
-              if (msg.session_id) {
-                session.evalSessionId = msg.session_id;
-              }
-              const resultText = typeof msg.result === "string" && msg.result ? msg.result : turnText;
-
-              // Parse eval result JSON from response(CLI/API 共用同一解析,P2-T1 抽出)
-              const evalResult: EvalResult = parseEvalResultText(resultText, session.evalStep ?? "unknown");
-
-              // Persist chat
-              saveWorkChat(session.workId, { blocks: session.messageHistory }).catch(() => {});
-
-              if (!resolved) {
-                resolved = true;
-                resolve(evalResult);
-              }
-            }
-          } catch { /* ignore non-JSON lines */ }
-        }
-      });
-
-      proc.stderr?.on("data", (data: Buffer) => {
-        const text = data.toString();
-        if (text.trim()) {
-          this.broadcastToBrowsers(session.workId, {
-            event: "cli_stderr",
-            data: { text, source: "evaluator" },
-          });
-        }
-      });
-
-      proc.on("exit", (code) => {
-        session.evalProcess = undefined;
-        if (!resolved) {
-          resolved = true;
-          if (code !== 0) {
-            reject(new Error(`Evaluator exited with code ${code}`));
-          } else {
-            // If exited cleanly but no result parsed, return default pass
-            resolve({
-              step: session.evalStep ?? "unknown",
-              attempt: 1,
-              verdict: "pass" as const,
-              scores: {},
-              issues: [],
-              suggestions: [],
-              timestamp: new Date().toISOString(),
-            });
-          }
-        }
-      });
-
-      proc.on("error", (err) => {
-        if (!resolved) {
-          resolved = true;
-          reject(err);
-        }
-      });
-    });
   }
 
   // ── Browser WebSocket handler ────────────────────────────────────────────

@@ -11,7 +11,8 @@ import type { Server } from "node:http";
 import { loadConfig, dataDir } from "../config.js";
 import { initProviders } from "../providers/registry.js";
 import { ensureSharedDirs } from "../shared-assets.js";
-import { apiRoutes, setWsBridge, startWorkSession } from "./api.js";
+import { apiRoutes, setWsBridge, startWorkSession, runEvaluation } from "./api.js";
+import { log } from "../logger.js";
 import { initWorkQueue, startRunner, stopRunner } from "../services/work-queue.js";
 import { startWatchdog, stopWatchdog } from "../services/work-watchdog.js";
 import {
@@ -174,6 +175,19 @@ export async function startServer(port: number): Promise<{ server: Server }> {
   const isSessionAlive = (id: string) => wsBridge.isWorkActive(id);
   initWorkQueue({ startWork: (id) => startWorkSession(id), isSessionAlive });
   initReconcile(isSessionAlive);
+
+  // 事件驱动评审(2026-08-19):agent 回合中调 advance 时挂 pendingEval,
+  // 回合结束的 finally 触发——取代 waitForCreatorIdle 的 120s 固定白等
+  wsBridge.onLoopTurnEnd = (workId) => {
+    const session = wsBridge.getSession(workId);
+    const pe = session?.pendingEval;
+    if (!session || !pe) return;
+    session.pendingEval = undefined;
+    log("info", "api", "eval_fire_on_turn_end", workId, { step: pe.step });
+    runEvaluation(workId, pe.step, pe.nextStep).catch((err) => {
+      log("error", "api", "eval_failed", workId, { error: (err as Error).message });
+    });
+  };
   startRunner();
   startWatchdog({ isSessionAlive });
 

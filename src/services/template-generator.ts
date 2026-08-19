@@ -131,6 +131,7 @@ async function generateTemplatesBatch(input: GenerateTemplatesInput = {}): Promi
     "12. 配色纪律:全模板 ≤3 个彩色 + 中性色(白/灰/深色底);强调色只用于关键数字/关键词,不大面积铺",
     "13. 空心边框用 stroke 表达:shape 层 fill:'#RRGGBB' 可选 stroke:{width:2-4,color} 画描边框;不要叠两个矩形模拟边框",
     "14. 每个画面至少一个有入场动效(fadein/slidein)的元素,但同一画面动效 ≤3 个,避免杂乱",
+    "15. 视频/图片槽位(2026-08-19「假窗口」事故后新增):若版式包含主画面区/视频窗口,必须声明 type:\"video\"(或 \"image\")的变量(如 main_video),并添加 {type:\"video\", source:\"{{main_video}}\", position/size 与窗口一致} 的图层;窗口边框/衬底 shape 保留在视频层之下。禁止用色块+提示文字冒充视频窗口——那样渲染出来是空框,真实素材无处安放",
     "",
     "## 变量",
     "把主题相关文字抽象为变量（如 topic, card1_title, card1_body, stat_value, cta_text 等，按版式需要增减）。",

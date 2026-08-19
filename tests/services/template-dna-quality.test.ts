@@ -49,8 +49,7 @@ describe("template-quality", () => {
     expect(issues.some((i) => i.rule === "font-hierarchy")).toBe(true);
   });
 
-  it("flags dangling variable references", () => {
-    const t = structuredClone(cleanTemplate);
+  it("flags dangling variable references", () => {    const t = structuredClone(cleanTemplate);
     t.layers[1]!.content = "{{undefined_var}}";
     const issues = checkTemplateQuality(t);
     expect(issues.some((i) => i.rule === "variable-ref")).toBe(true);
@@ -63,6 +62,33 @@ describe("template-quality", () => {
 
   it("golden example itself passes quality check", () => {
     expect(checkTemplateQuality(GOLDEN_EXAMPLE as never)).toEqual([]);
+  });
+
+  // 2026-08-19 "假窗口"事故(tpl_5e5d1f71):窗口色块+提示文字冒充视频槽位
+  describe("video-slot 槽位校验", () => {
+    it("含视频窗口形状但无 video 图层 → 拦截", () => {
+      const t = structuredClone(cleanTemplate) as any;
+      t.layers.push({ id: "video-window", type: "shape", fill: "#16283F", start: 0, duration: 10, position: { x: 70, y: 690 }, size: { width: 940, height: 460 } });
+      const issues = checkTemplateQuality(t);
+      expect(issues.some((i) => i.rule === "video-slot")).toBe(true);
+    });
+
+    it("窗口形状 + video 图层引用变量 → 通过", () => {
+      const t = structuredClone(cleanTemplate) as any;
+      t.variables.push({ name: "main_video", type: "video", label: "主画面视频" });
+      t.layers.push(
+        { id: "video-window", type: "shape", fill: "#16283F", start: 0, duration: 10, position: { x: 70, y: 690 }, size: { width: 940, height: 460 } },
+        { id: "video-window-media", type: "video", source: "{{main_video}}", start: 0, duration: 10, position: { x: 70, y: 690 }, size: { width: 940, height: 460 } },
+      );
+      expect(checkTemplateQuality(t).filter((i) => i.rule === "video-slot")).toEqual([]);
+    });
+
+    it("声明 video 变量但无图层引用 → 拦截空转槽位", () => {
+      const t = structuredClone(cleanTemplate) as any;
+      t.variables.push({ name: "main_video", type: "video", label: "主画面视频" });
+      const issues = checkTemplateQuality(t);
+      expect(issues.some((i) => i.rule === "video-slot")).toBe(true);
+    });
   });
 });
 

@@ -3,7 +3,7 @@
  * 设计文档:docs/desigen/02 P2-T1
  *
  * 要点:
- * - parseEvalResultText 从 ws-bridge.spawnEvaluator 抽出,CLI/API 两路共用同一解析语义
+ * - parseEvalResultText 从 ws-bridge.spawnEvaluator 抽出(P4-T2 起 CLI 评审删除,仅此 API 路径)
  * - runApiEvaluator:独立 AgentLoop、全新 messages、只读工具子集(buildEvaluatorTools)
  * - 视觉路由:含图片的回合由 loop 切到 visionProvider/visionModel;
  *   优先级 = 评审 provider 自家 visionModel → kimi(2026-08-16 冒烟实证 tools+vision 双支持)

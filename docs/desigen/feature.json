@@ -574,7 +574,7 @@
       "deps": [
         "P3-T1"
       ],
-      "status": "pending"
+      "status": "done(2026-08-19:trend 会话平移 API loop,事件序列复刻)"
     },
     {
       "id": "P4-T2",
@@ -598,7 +598,7 @@
       "deps": [
         "P4-T1"
       ],
-      "status": "pending"
+      "status": "done(代码+全量测试;autoMode 端到端总验收随下一部作品)"
     },
     {
       "id": "P1-T8",

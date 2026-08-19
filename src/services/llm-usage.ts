@@ -52,6 +52,23 @@ export function getDailyCostYuan(): number {
   return row.total;
 }
 
+/**
+ * 直连路径记账入口(2026-08-19 P1):fire-and-forget,内部加载 config,永不抛出。
+ * 背景:记账此前只在 agent loop 的 chatStream usage 事件里,chatJson /
+ * chatVisionJson / chatJsonWithSearch 全部漏账(调研/克隆/评审蒸馏是大头),
+ * 日预算熔断看到的只是部分花费。
+ */
+export function recordUsageAsync(r: UsageRecord): void {
+  void (async () => {
+    try {
+      const { loadConfig } = await import("../config.js");
+      recordUsage(await loadConfig(), r);
+    } catch (err) {
+      console.warn("[llm-usage] 直连记账失败(不阻断):", err instanceof Error ? err.message : err);
+    }
+  })();
+}
+
 /** 超预算判定 + 熔断执行。返回 true 表示已熔断（本函数幂等，可每次记账后调用） */
 export function enforceDailyBudget(
   config: Config,

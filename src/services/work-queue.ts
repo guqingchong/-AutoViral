@@ -155,7 +155,10 @@ async function tickOnce(d: RunnerDeps): Promise<void> {
         repo.setStatus(item.workId, "failed");
         continue;
       }
-      await d.startWork(item.workId).catch(() => {});
+      // 2026-08-19 P1:恢复失败留痕(此前静默吞错,排障只能靠推断)
+      await d.startWork(item.workId).catch((err) => {
+        console.warn(`[work-queue] resume ${item.workId} 启动失败(第 ${attempts} 次):`, err instanceof Error ? err.message : err);
+      });
     }
     return; // 有 running 任务，严格串行：不启动新任务
   }
@@ -163,8 +166,10 @@ async function tickOnce(d: RunnerDeps): Promise<void> {
   const next = repo.dequeueNext();
   if (!next) return;
   repo.setStatus(next.workId, "running");
-  repo.incrementResumeAttempts(next.workId);
-  await d.startWork(next.workId).catch(() => {});
+  // 2026-08-19 P1:首次启动不再预支恢复次数(此前实际恢复余量是 4 次而非 5 次)
+  await d.startWork(next.workId).catch((err) => {
+    console.warn(`[work-queue] 首次启动 ${next.workId} 失败:`, err instanceof Error ? err.message : err);
+  });
 }
 
 /** 检查作品 output/ 下是否已有成片(final 开头的视频文件,与 reconcile 判定一致;
