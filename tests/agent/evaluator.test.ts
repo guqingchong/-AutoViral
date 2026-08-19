@@ -36,6 +36,12 @@ describe("parseEvalResultText", () => {
     expect(r.verdict).toBe("pass");
     expect(r.step).toBe("assembly");
   });
+  it("无法解析 → 打 __parseFailed 标记(2026-08-19 堵假 pass 洞:调用方据此先重试)", () => {
+    const bad = parseEvalResultText("这不是 JSON", "plan") as { __parseFailed?: boolean };
+    expect(bad.__parseFailed).toBe(true);
+    const good = parseEvalResultText("{\"verdict\":\"pass\"}", "plan") as { __parseFailed?: boolean };
+    expect(good.__parseFailed).toBeUndefined();
+  });
 });
 
 describe("resolveVision", () => {
@@ -130,6 +136,59 @@ describe("runApiEvaluator", () => {
     expect(bodies[1]).toContain("image_url");
     expect(bodies[1]).toContain("data:image/png;base64");
     expect(JSON.parse(bodies[1]).model).toBe("kimi-for-coding");
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("评审输出无法解析 → 自动要求重出一轮,采纳重出结果(2026-08-19 堵假 pass 洞)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "av-eval-"));
+    const bodies: string[] = [];
+    const fetchMock = vi.fn().mockImplementation(async (_url: string, init: { body: string }) => {
+      bodies.push(init.body);
+      if (bodies.length === 1) {
+        // 首轮:话痨输出,无 JSON
+        return new Response(sse([
+          JSON.stringify({ choices: [{ delta: { content: "整体来看这个阶段的产出还是不错的,我觉得可以通过……" }, finish_reason: "stop" }] }),
+        ]), { status: 200 });
+      }
+      // 重出轮:合规 JSON(fail)
+      return new Response(sse([
+        JSON.stringify({ choices: [{ delta: { content: "```json\n{\"verdict\":\"fail\",\"issues\":[{\"severity\":\"major\",\"description\":\"缺交付物\"}]}\n```" }, finish_reason: "stop" }] }),
+      ]), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { session, bridge } = fakeBridgeSession("w3");
+    const result = await runApiEvaluator({
+      workId: "w3", step: "plan", evalPrompt: "评审 plan 阶段产出", workDir: dir,
+      config: cfgWith({ deepseek: { protocol: "openai", baseUrl: "https://ds.test/v1", apiKey: "k1" } }),
+      session, bridge,
+    });
+
+    expect(bodies.length).toBe(2); // 首轮 + 重出轮
+    expect(result.verdict).toBe("fail"); // 采纳重出结果,而非兜底 pass
+    expect((result as { __parseFailed?: boolean }).__parseFailed).toBeUndefined();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("重出仍无法解析 → 兜底 pass 但保留 __parseFailed 留痕", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "av-eval-"));
+    const fetchMock = vi.fn().mockImplementation(async () =>
+      new Response(sse([
+        JSON.stringify({ choices: [{ delta: { content: "就是不给 JSON,略略略" }, finish_reason: "stop" }] }),
+      ]), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { session, bridge } = fakeBridgeSession("w4");
+    const result = await runApiEvaluator({
+      workId: "w4", step: "plan", evalPrompt: "评审 plan 阶段产出", workDir: dir,
+      config: cfgWith({ deepseek: { protocol: "openai", baseUrl: "https://ds.test/v1", apiKey: "k1" } }),
+      session, bridge,
+    });
+
+    expect(result.verdict).toBe("pass");
+    expect((result as { __parseFailed?: boolean }).__parseFailed).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     await rm(dir, { recursive: true, force: true });
   });
 });

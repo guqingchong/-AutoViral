@@ -391,6 +391,9 @@ export class WsBridge {
   4. 以上渠道全部不可用时，停下来明确报告"无可用 BGM 渠道"，不得在方案中承诺不存在的资源，也不得即兴合成
 - 资源可达性检查（必做）：规划阶段引用任何外部资源通道（Pixabay Music、Pexels、Unsplash、Lyria、即梦等）前，先验证该通道已配置可用（config 中有 apiKey / 接口实测可通）。**未配置的通道不得写进方案**，直接改用已配置的替代通道
 - 公共素材：通过 curl http://localhost:${port}/api/shared-assets 查看可用素材
+- 素材库检索（Pexels/Pixabay，key 由服务端持有——直接调用即可，禁止自行读取 config 找 key、禁止直连 api.pexels.com）：
+  搜索：curl "http://localhost:${port}/api/stock-assets/search?q=英文关键词&type=video|image&perPage=10"（英文关键词命中最好，竖版 height>width 优先）
+  下载：curl -X POST http://localhost:${port}/api/stock-assets/download -H "Content-Type: application/json" -d '{"url":"ITEM_URL","provider":"pexels","mediaType":"video","category":"scenes","name":"shot-NN.mp4","description":"...","author":"...","license":"...","duration":12}'
 - 流水线管理：调用 curl -X POST http://localhost:${port}/api/works/${work.id}/pipeline/advance 更新流水线状态
 
 ## 前置检测（必做）
