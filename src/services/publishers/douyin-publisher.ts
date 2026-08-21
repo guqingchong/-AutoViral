@@ -11,12 +11,12 @@ export class DouyinPublisher implements Publisher {
     private web: Publisher = new DouyinWebPublisher()
   ) {}
 
-  async isConfigured(): Promise<boolean> {
-    return this.official.isConfigured() || (await this.web.isConfigured());
+  async isConfigured(accountId?: string): Promise<boolean> {
+    return this.official.isConfigured(accountId) || (await this.web.isConfigured(accountId));
   }
 
   async publish(input: PublishInput): Promise<PublishOutput> {
-    if (this.official.isConfigured()) {
+    if (this.official.isConfigured(input.accountId)) {
       const result = await this.official.publish(input);
       if (result.success) return result;
       const webResult = await this.web.publish(input);
@@ -25,9 +25,9 @@ export class DouyinPublisher implements Publisher {
     return this.web.publish(input);
   }
 
-  async login(): Promise<boolean> {
+  async login(accountId?: string): Promise<boolean> {
     if ("login" in this.web && typeof (this.web as DouyinWebPublisher).login === "function") {
-      return (this.web as DouyinWebPublisher).login();
+      return (this.web as DouyinWebPublisher).login(accountId);
     }
     return false;
   }
