@@ -1,6 +1,6 @@
 ﻿import { readFile } from "node:fs/promises";
 import type { Publisher, PublishInput, PublishOutput } from "./types.js";
-import { getCredential } from "../../db/platform-credentials-repo.js";
+import { resolveAccountCredential } from "../credential-resolver.js";
 
 const BASE = "https://open.kuaishou.com";
 
@@ -29,15 +29,21 @@ export class KuaishouOfficialPublisher implements Publisher {
 
   private cachedToken: string | null = null;
   private tokenExpiry = 0;
+  private cachedAccountId: string | undefined;
 
-  isConfigured(): boolean {
-    return !!(getCredential("kuaishou", "app_id") && getCredential("kuaishou", "app_secret"));
+  isConfigured(accountId?: string): boolean {
+    return !!(
+      resolveAccountCredential(this.platform, accountId, "app_id") &&
+      resolveAccountCredential(this.platform, accountId, "app_secret")
+    );
   }
 
-  private async ensureToken(): Promise<string> {
-    if (this.cachedToken && Date.now() < this.tokenExpiry) return this.cachedToken;
-    const appId = getCredential("kuaishou", "app_id");
-    const appSecret = getCredential("kuaishou", "app_secret");
+  private async ensureToken(accountId?: string): Promise<string> {
+    if (this.cachedToken && this.cachedAccountId === accountId && Date.now() < this.tokenExpiry) {
+      return this.cachedToken;
+    }
+    const appId = resolveAccountCredential(this.platform, accountId, "app_id");
+    const appSecret = resolveAccountCredential(this.platform, accountId, "app_secret");
     if (!appId || !appSecret) throw new Error("缺少快手 app_id / app_secret");
     const res = await fetch(`${BASE}/oauth2/access_token`, {
       method: "POST",
@@ -50,12 +56,13 @@ export class KuaishouOfficialPublisher implements Publisher {
     }
     this.cachedToken = data.access_token;
     this.tokenExpiry = Date.now() + ((data.expires_in ?? 7200) - 300) * 1000;
+    this.cachedAccountId = accountId;
     return this.cachedToken;
   }
 
   async publish(input: PublishInput): Promise<PublishOutput> {
     try {
-      const token = await this.ensureToken();
+      const token = await this.ensureToken(input.accountId);
 
       const videoBuffer = await readFile(input.videoPath);
       const form = new FormData();

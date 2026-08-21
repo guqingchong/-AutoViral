@@ -10,6 +10,7 @@
 
 import type { CollectedComment, CollectedMetrics, PlatformAdapter, ReplyResult } from "./types.js";
 import { apiGet, apiPost } from "./fetch-helper.js";
+import { resolveAccountCredential } from "../credential-resolver.js";
 
 const BASE = "https://api.weixin.qq.com";
 
@@ -29,8 +30,11 @@ export class WechatAdapter implements PlatformAdapter {
     if (this.accessToken && Date.now() < this.tokenExpiry) {
       return this.accessToken;
     }
+    // 惰性 resolve:账号维度凭证(默认/活跃账号链 + 旧表兜底)优先,构造参数(env)兜底
+    const appId = resolveAccountCredential(this.platform, undefined, "app_id") ?? this.appId;
+    const appSecret = resolveAccountCredential(this.platform, undefined, "app_secret") ?? this.appSecret;
     const data = (await apiGet(
-      `${BASE}/cgi-bin/token?grant_type=client_credential&appid=${this.appId}&secret=${this.appSecret}`
+      `${BASE}/cgi-bin/token?grant_type=client_credential&appid=${appId}&secret=${appSecret}`
     )) as { access_token: string; expires_in: number };
     this.accessToken = data.access_token;
     this.tokenExpiry = Date.now() + (data.expires_in - 300) * 1000;

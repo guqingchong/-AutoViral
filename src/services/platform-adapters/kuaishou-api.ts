@@ -8,6 +8,7 @@
 
 import type { CollectedComment, CollectedMetrics, PlatformAdapter, ReplyResult } from "./types.js";
 import { apiGet, apiPost } from "./fetch-helper.js";
+import { resolveAccountCredential } from "../credential-resolver.js";
 
 const BASE = "https://open.kuaishou.com";
 
@@ -27,9 +28,12 @@ export class KuaishouAdapter implements PlatformAdapter {
     if (this.accessToken && Date.now() < this.tokenExpiry) {
       return this.accessToken;
     }
+    // 惰性 resolve:账号维度凭证(默认/活跃账号链 + 旧表兜底)优先,构造参数(env)兜底
+    const appId = resolveAccountCredential(this.platform, undefined, "app_id") ?? this.appId;
+    const appSecret = resolveAccountCredential(this.platform, undefined, "app_secret") ?? this.appSecret;
     const data = (await apiPost(`${BASE}/oauth2/access_token`, {
-      app_id: this.appId,
-      app_secret: this.appSecret,
+      app_id: appId,
+      app_secret: appSecret,
       grant_type: "client_credentials",
     })) as { access_token: string; expires_in: number };
     this.accessToken = data.access_token;
