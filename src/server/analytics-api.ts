@@ -22,12 +22,12 @@ import { listTemplates } from "../db/templates-repo.js";
 import { analyzeWork, computeBaseline } from "../services/hit-failure-analysis.js";
 import { createBaseline, listBaselines } from "../db/baselines-repo.js";
 import { collectAllOnce, startScheduler, stopScheduler } from "../services/analytics-scheduler.js";
-import { registerAdapter } from "../services/platform-adapters/registry.js";
+import { registerAdapterFactory } from "../services/platform-adapters/registry.js";
 import { KuaishouAdapter } from "../services/platform-adapters/kuaishou-api.js";
 import { BilibiliAdapter } from "../services/platform-adapters/bilibili-api.js";
 import { ZhihuAdapter } from "../services/platform-adapters/zhihu-api.js";
 import { WechatAdapter } from "../services/platform-adapters/wechat-api.js";
-import { getCredential } from "../db/platform-credentials-repo.js";
+import { resolveAccountCredential } from "../services/credential-resolver.js";
 
 export const analyticsApi = new Hono();
 
@@ -175,32 +175,46 @@ analyticsApi.post("/scheduler/stop", (c) => {
 // ── Adapter Registration (one-shot at startup) ─────────────────────────────
 
 /**
- * Register all available platform adapters.
- * Called once at server startup.
+ * Register all available platform adapter factories (Task 7 工厂化).
+ * Called once at server startup. 凭证在工厂闭包内按 accountId 惰性 resolve,
+ * 回落环境变量;实例由 registry 按 `platform:accountId` 缓存。
  */
 export function registerAllAdapters(): Promise<void> {
-  // Resolve credentials: DB-stored > env vars > empty string
-  const ka = getCredential("kuaishou", "app_id") ?? process.env["KUAISHOU_APP_ID"];
-  const ks = getCredential("kuaishou", "app_secret") ?? process.env["KUAISHOU_APP_SECRET"];
-  const bc = getCredential("bilibili", "client_id") ?? process.env["BILIBILI_CLIENT_ID"];
-  const bs = getCredential("bilibili", "client_secret") ?? process.env["BILIBILI_CLIENT_SECRET"];
-  const zc = getCredential("zhihu", "client_id") ?? process.env["ZHIHU_CLIENT_ID"];
-  const zs = getCredential("zhihu", "client_secret") ?? process.env["ZHIHU_CLIENT_SECRET"];
-  const wa = getCredential("wechat", "app_id") ?? process.env["WECHAT_APP_ID"];
-  const ws = getCredential("wechat", "app_secret") ?? process.env["WECHAT_APP_SECRET"];
-
-  try { registerAdapter(new KuaishouAdapter(ka, ks)); } catch { /* already registered */ }
-  try { registerAdapter(new BilibiliAdapter(bc, bs)); } catch { /* already registered */ }
-  try { registerAdapter(new ZhihuAdapter(zc, zs)); } catch { /* already registered */ }
-  try { registerAdapter(new WechatAdapter(wa, ws)); } catch { /* already registered */ }
+  try {
+    registerAdapterFactory("kuaishou", (accountId) => new KuaishouAdapter(
+      resolveAccountCredential("kuaishou", accountId, "app_id") ?? process.env["KUAISHOU_APP_ID"],
+      resolveAccountCredential("kuaishou", accountId, "app_secret") ?? process.env["KUAISHOU_APP_SECRET"],
+      accountId,
+    ));
+  } catch { /* already registered */ }
+  try {
+    registerAdapterFactory("bilibili", (accountId) => new BilibiliAdapter(
+      resolveAccountCredential("bilibili", accountId, "client_id") ?? process.env["BILIBILI_CLIENT_ID"],
+      resolveAccountCredential("bilibili", accountId, "client_secret") ?? process.env["BILIBILI_CLIENT_SECRET"],
+    ));
+  } catch { /* already registered */ }
+  try {
+    registerAdapterFactory("zhihu", (accountId) => new ZhihuAdapter(
+      resolveAccountCredential("zhihu", accountId, "client_id") ?? process.env["ZHIHU_CLIENT_ID"],
+      resolveAccountCredential("zhihu", accountId, "client_secret") ?? process.env["ZHIHU_CLIENT_SECRET"],
+      accountId,
+    ));
+  } catch { /* already registered */ }
+  try {
+    registerAdapterFactory("wechat", (accountId) => new WechatAdapter(
+      resolveAccountCredential("wechat", accountId, "app_id") ?? process.env["WECHAT_APP_ID"],
+      resolveAccountCredential("wechat", accountId, "app_secret") ?? process.env["WECHAT_APP_SECRET"],
+      accountId,
+    ));
+  } catch { /* already registered */ }
   // Playwright-based scrapers require a browser — register only if Playwright is available.
   // Dynamic import so it doesn't break if playwright isn't installed.
   return Promise.allSettled([
     import("../services/platform-adapters/douyin-scraper.js").then(({ DouyinScraper }) => {
-      try { registerAdapter(new DouyinScraper()); } catch { /* ignore */ }
+      try { registerAdapterFactory("douyin", (accountId) => new DouyinScraper(accountId)); } catch { /* ignore */ }
     }).catch(() => {}),
     import("../services/platform-adapters/xiaohongshu-scraper.js").then(({ XiaohongshuScraper }) => {
-      try { registerAdapter(new XiaohongshuScraper()); } catch { /* ignore */ }
+      try { registerAdapterFactory("xiaohongshu", (accountId) => new XiaohongshuScraper(accountId)); } catch { /* ignore */ }
     }).catch(() => {}),
   ]).then(() => {});
 }

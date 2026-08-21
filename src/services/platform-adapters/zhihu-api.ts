@@ -19,16 +19,22 @@ export class ZhihuAdapter implements PlatformAdapter {
 
   constructor(
     private clientId: string = process.env["ZHIHU_CLIENT_ID"] ?? "",
-    private clientSecret: string = process.env["ZHIHU_CLIENT_SECRET"] ?? ""
+    private clientSecret: string = process.env["ZHIHU_CLIENT_SECRET"] ?? "",
+    private readonly accountId?: string
   ) {}
 
   private async ensureToken(): Promise<string> {
     if (this.accessToken && Date.now() < this.tokenExpiry) {
       return this.accessToken;
     }
-    // 惰性 resolve:账号维度凭证(默认/活跃账号链 + 旧表兜底)优先,构造参数(env)兜底
-    const clientId = resolveAccountCredential(this.platform, undefined, "client_id") ?? this.clientId;
-    const clientSecret = resolveAccountCredential(this.platform, undefined, "client_secret") ?? this.clientSecret;
+    // 惰性 resolve:账号维度凭证(指定账号 > 默认/活跃账号链 + 旧表兜底)优先,构造参数(env)兜底
+    const clientId = resolveAccountCredential(this.platform, this.accountId, "client_id") ?? this.clientId;
+    const clientSecret = resolveAccountCredential(this.platform, this.accountId, "client_secret") ?? this.clientSecret;
+    if (!clientId || !clientSecret) {
+      throw new Error(
+        `zhihu 缺少凭证:未解析到 client_id/client_secret(账号 ${this.accountId ?? "default"};请配置账号凭证或 ZHIHU_CLIENT_ID/ZHIHU_CLIENT_SECRET)`
+      );
+    }
     const data = (await apiPost(`${BASE}/oauth/token`, {
       client_id: clientId,
       client_secret: clientSecret,

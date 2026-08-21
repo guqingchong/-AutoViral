@@ -12,9 +12,15 @@ import { getContext, saveState } from "./playwright-helper.js";
 export class XiaohongshuScraper implements PlatformAdapter {
   readonly platform = "xiaohongshu";
   readonly label = "小红书";
+  /** 浏览器 context 键:`xiaohongshu:<accountId ?? "default">`,画像目录按账号隔离 */
+  readonly contextKey: string;
+
+  constructor(readonly accountId?: string) {
+    this.contextKey = `xiaohongshu:${accountId ?? "default"}`;
+  }
 
   async collectAccountMetrics(): Promise<CollectedMetrics> {
-    const ctx = await getContext("xiaohongshu");
+    const ctx = await getContext(this.contextKey);
     const page = await ctx.newPage();
     try {
       await page.goto("https://creator.xiaohongshu.com/", {
@@ -44,7 +50,7 @@ export class XiaohongshuScraper implements PlatformAdapter {
   }
 
   async collectPostMetrics(externalId: string): Promise<CollectedMetrics> {
-    const ctx = await getContext("xiaohongshu");
+    const ctx = await getContext(this.contextKey);
     const page = await ctx.newPage();
     try {
       await page.goto(
@@ -83,7 +89,7 @@ export class XiaohongshuScraper implements PlatformAdapter {
     externalId: string,
     cursor?: string
   ): Promise<{ comments: CollectedComment[]; nextCursor?: string }> {
-    const ctx = await getContext("xiaohongshu");
+    const ctx = await getContext(this.contextKey);
     const page = await ctx.newPage();
     try {
       const pageNum = cursor ? parseInt(cursor, 10) : 1;
@@ -121,7 +127,7 @@ export class XiaohongshuScraper implements PlatformAdapter {
       };
     } finally {
       await page.close();
-      await saveState("xiaohongshu");
+      await saveState(this.contextKey);
     }
   }
 

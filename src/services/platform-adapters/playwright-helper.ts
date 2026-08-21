@@ -2,7 +2,8 @@
  * Playwright browser helper for scraping-based platform adapters (Douyin, Xiaohongshu).
  *
  * Maintains a persistent browser context so login cookies survive restarts.
- * Each scraper gets its own context keyed by platform name.
+ * Contexts are keyed by contextKey = "<platform>:<accountId ?? "default">";
+ * 画像目录为两级:PROFILE_DIR/<platform>/<accountId>(Task 7,旧目录不迁移)。
  */
 
 import { chromium, type Browser, type BrowserContext } from "playwright";
@@ -10,10 +11,18 @@ import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
-const PROFILE_DIR = join(homedir(), ".autoviral", "browser-profiles");
+export const PROFILE_DIR = join(homedir(), ".autoviral", "browser-profiles");
 
 let browser: Browser | null = null;
 const contexts = new Map<string, BrowserContext>();
+
+/**
+ * contextKey → 画像目录。"douyin:a1" → PROFILE_DIR/douyin/a1(冒号分段 → 两级目录);
+ * 无冒号的旧式键(如 "douyin")→ 单级 PROFILE_DIR/douyin。
+ */
+export function resolveProfileDir(contextKey: string): string {
+  return join(PROFILE_DIR, ...contextKey.split(":"));
+}
 
 async function getBrowser(): Promise<Browser> {
   if (!browser?.isConnected()) {
@@ -24,14 +33,14 @@ async function getBrowser(): Promise<Browser> {
 }
 
 export async function getContext(
-  platform: string,
+  contextKey: string,
   storageStateFile?: string
 ): Promise<BrowserContext> {
-  const existing = contexts.get(platform);
+  const existing = contexts.get(contextKey);
   if (existing) return existing;
 
   const b = await getBrowser();
-  const profileDir = join(PROFILE_DIR, platform);
+  const profileDir = resolveProfileDir(contextKey);
   mkdirSync(profileDir, { recursive: true });
 
   const statePath = storageStateFile ?? join(profileDir, "state.json");
@@ -39,28 +48,28 @@ export async function getContext(
     ? await b.newContext({ storageState: statePath })
     : await b.newContext();
 
-  contexts.set(platform, ctx);
+  contexts.set(contextKey, ctx);
   return ctx;
 }
 
-export async function saveState(platform: string): Promise<void> {
-  const ctx = contexts.get(platform);
+export async function saveState(contextKey: string): Promise<void> {
+  const ctx = contexts.get(contextKey);
   if (!ctx) return;
-  const statePath = join(PROFILE_DIR, platform, "state.json");
+  const statePath = join(resolveProfileDir(contextKey), "state.json");
   await ctx.storageState({ path: statePath });
 }
 
-export async function closeContext(platform: string): Promise<void> {
-  const ctx = contexts.get(platform);
+export async function closeContext(contextKey: string): Promise<void> {
+  const ctx = contexts.get(contextKey);
   if (ctx) {
     await ctx.close();
-    contexts.delete(platform);
+    contexts.delete(contextKey);
   }
 }
 
 export async function closeBrowser(): Promise<void> {
-  for (const platform of contexts.keys()) {
-    await closeContext(platform);
+  for (const contextKey of contexts.keys()) {
+    await closeContext(contextKey);
   }
   if (browser) {
     await browser.close();

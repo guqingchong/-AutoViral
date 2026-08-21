@@ -23,16 +23,22 @@ export class WechatAdapter implements PlatformAdapter {
 
   constructor(
     private appId: string = process.env["WECHAT_APP_ID"] ?? "",
-    private appSecret: string = process.env["WECHAT_APP_SECRET"] ?? ""
+    private appSecret: string = process.env["WECHAT_APP_SECRET"] ?? "",
+    private readonly accountId?: string
   ) {}
 
   private async ensureToken(): Promise<string> {
     if (this.accessToken && Date.now() < this.tokenExpiry) {
       return this.accessToken;
     }
-    // 惰性 resolve:账号维度凭证(默认/活跃账号链 + 旧表兜底)优先,构造参数(env)兜底
-    const appId = resolveAccountCredential(this.platform, undefined, "app_id") ?? this.appId;
-    const appSecret = resolveAccountCredential(this.platform, undefined, "app_secret") ?? this.appSecret;
+    // 惰性 resolve:账号维度凭证(指定账号 > 默认/活跃账号链 + 旧表兜底)优先,构造参数(env)兜底
+    const appId = resolveAccountCredential(this.platform, this.accountId, "app_id") ?? this.appId;
+    const appSecret = resolveAccountCredential(this.platform, this.accountId, "app_secret") ?? this.appSecret;
+    if (!appId || !appSecret) {
+      throw new Error(
+        `wechat 缺少凭证:未解析到 app_id/app_secret(账号 ${this.accountId ?? "default"};请配置账号凭证或 WECHAT_APP_ID/WECHAT_APP_SECRET)`
+      );
+    }
     const data = (await apiGet(
       `${BASE}/cgi-bin/token?grant_type=client_credential&appid=${appId}&secret=${appSecret}`
     )) as { access_token: string; expires_in: number };

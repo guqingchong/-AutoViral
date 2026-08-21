@@ -87,7 +87,7 @@ export function routeCloneUrl(rawInput: string): CloneTarget {
 
 /** 打开笔记页抓内容图 URL 列表(swiper 图集) */
 async function fetchNoteImages(url: string, workDir: string): Promise<string[]> {
-  const ctx = await getContext("xiaohongshu");
+  const ctx = await getContext("xiaohongshu:default");
   const page = await ctx.newPage();
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
@@ -203,7 +203,7 @@ async function cloneFromXiaohongshu(opts: CloneOptions, workDir: string): Promis
  *  抖音网页版走 DASH 音画分离:必须收集多个流,下载后用 ffprobe 选出含视频轨的
  *  (只凭 content-type 会抓到纯音频轨——实测踩坑)。 */
 async function downloadDouyinViaPlaywright(url: string, workDir: string): Promise<string> {
-  const ctx = await getContext("douyin");
+  const ctx = await getContext("douyin:default");
   const page = await ctx.newPage();
   try {
     const mediaUrls: string[] = [];
