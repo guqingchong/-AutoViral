@@ -65,6 +65,20 @@ describe("feedback-loop", () => {
     expect(getTopicWeight("不存在品类")).toBe(1);
   });
 
+  // 2026-08-21 终审顺手项:getTopicWeights 只读 platform='all' 汇总行,
+  // 混入其他平台行(如 platform='douyin')不得影响权重
+  it("getTopicWeights 只读 platform='all' 行:混入 douyin 行权重不变", () => {
+    const db = getDb();
+    const before = getTopicWeights();
+    db.prepare(`INSERT INTO topic_scores (work_id, category, emotion_type, platform, views, like_rate, completion_rate, interaction_rate)
+                VALUES ('w_rogue', '城投', '信息价值', 'douyin', 1, 99, 99, 99)`).run();
+    try {
+      expect(getTopicWeights()).toEqual(before);
+    } finally {
+      db.prepare("DELETE FROM topic_scores WHERE work_id = 'w_rogue'").run();
+    }
+  });
+
   // 2026-08-21 Task 10:跨平台跨账号按作品汇总——单行 platform='all',加权率,同日幂等
   it("collectFeedback:同作品多平台多账号记录汇总为一行 platform='all',三率按合计加权,同日重跑幂等", () => {
     const db = getDb();
