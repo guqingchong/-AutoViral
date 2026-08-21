@@ -865,9 +865,13 @@ export function backfillV29Accounts(): void {
         .run(id, `默认账号-${accountPlatform}`, accountPlatform, now, now);
       account = { id };
     }
-    // 每平台保证恰有一个默认账号(此前无条件)
-    db.prepare("UPDATE accounts SET is_default = 0 WHERE platform = ?").run(accountPlatform);
-    db.prepare("UPDATE accounts SET is_default = 1 WHERE id = ?").run(account.id);
+    // 每平台保证恰有一个默认账号 —— 但仅在用户尚未手设默认时指派(2026-08-21 终审 I1:
+    // 此前无条件"清 0 再置 1",每次 migrate() 都把用户手设的默认账号翻回最早创建者)
+    const hasDefault = db.prepare("SELECT 1 FROM accounts WHERE platform = ? AND is_default = 1 LIMIT 1").get(accountPlatform);
+    if (!hasDefault) {
+      db.prepare("UPDATE accounts SET is_default = 0 WHERE platform = ?").run(accountPlatform);
+      db.prepare("UPDATE accounts SET is_default = 1 WHERE id = ?").run(account.id);
+    }
     // 凭证搬迁:旧表值不覆盖新表已有值(幂等 + 保护已手工配置的新凭证)
     db.prepare(`
       INSERT INTO account_credentials (account_id, key_type, value, updated_at)

@@ -98,4 +98,23 @@ describe("backfillV29Accounts", () => {
     expect(db.prepare("SELECT account_id FROM publish_records WHERE work_id = 'w-null'").pluck().get()).toBe("a1");
     expect(db.prepare("SELECT account_id FROM publish_records WHERE work_id = 'w-manual'").pluck().get()).toBe("manual-acc");
   });
+
+  // 2026-08-21 终审 I1:backfill 此前每次 migrate() 都清 0 再置 1(最早创建者),
+  // 用户手设的默认账号在每次服务重启时被静默翻转。已有 is_default=1 则跳过指派。
+  it("用户手设的默认账号不被重跑回填翻转", () => {
+    const db = getDb();
+    db.prepare("INSERT INTO accounts (id, name, platform, status, created_at, updated_at) VALUES ('a1','早号','douyin','active','2026-01-01','2026-01-01')").run();
+    db.prepare("INSERT INTO accounts (id, name, platform, status, created_at, updated_at) VALUES ('a2','晚号','douyin','active','2026-02-01','2026-02-01')").run();
+    db.prepare("INSERT INTO platform_credentials (platform, key_type, value) VALUES ('douyin','session_cookie','x')").run();
+    // 用户手工把晚号设为默认
+    db.prepare("UPDATE accounts SET is_default = 1 WHERE id = 'a2'").run();
+
+    backfillV29Accounts();
+    backfillV29Accounts();
+
+    expect(db.prepare("SELECT is_default FROM accounts WHERE id = 'a2'").pluck().get()).toBe(1);
+    expect(db.prepare("SELECT is_default FROM accounts WHERE id = 'a1'").pluck().get()).toBe(0);
+    // 凭证搬迁不受影响(仍迁到最早创建账号,ON CONFLICT 不覆盖)
+    expect(db.prepare("SELECT value FROM account_credentials WHERE account_id = 'a1' AND key_type = 'session_cookie'").pluck().get()).toBe("x");
+  });
 });
