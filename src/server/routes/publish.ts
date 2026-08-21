@@ -31,8 +31,16 @@ publishWorkRoutes.post("/:platform", async (c) => {
       }
     : await buildPublishInput(work, platform);
 
-  const record = await publishToPlatform(workId, platform, input);
-  return c.json(record);
+  try {
+    const record = await publishToPlatform(workId, platform, {
+      ...input,
+      accountId: body.accountId as string | undefined,
+    });
+    return c.json(record);
+  } catch (err) {
+    // resolvePublishAccountId 校验失败(账号不存在/不属于平台)→ 400
+    return c.json({ error: err instanceof Error ? err.message : String(err) }, 400);
+  }
 });
 
 // POST /:platform/login — 触发浏览器登录

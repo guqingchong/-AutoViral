@@ -6,6 +6,7 @@ function rowToRecord(row: Record<string, unknown>): DbPublishRecord {
     id: row.id as number,
     work_id: row.work_id as string,
     platform: row.platform as string,
+    account_id: (row.account_id as string) || undefined,
     platform_post_id: (row.platform_post_id as string) || undefined,
     status: row.status as DbPublishRecordStatus,
     scheduled_at: (row.scheduled_at as string) || undefined,
@@ -24,12 +25,13 @@ export function createPublishRecord(
   const now = new Date().toISOString();
   const result = db
     .prepare(
-      `INSERT INTO publish_records (work_id, platform, platform_post_id, status, scheduled_at, published_at, error_message, metadata, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO publish_records (work_id, platform, account_id, platform_post_id, status, scheduled_at, published_at, error_message, metadata, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       record.work_id,
       record.platform,
+      record.account_id ?? null,
       record.platform_post_id ?? null,
       record.status,
       record.scheduled_at ?? null,
@@ -53,6 +55,7 @@ export function getPublishRecord(id: number): DbPublishRecord | undefined {
 export function listPublishRecords(filters?: {
   workId?: string;
   platform?: string;
+  accountId?: string;
   status?: DbPublishRecordStatus;
 }): DbPublishRecord[] {
   const db = getDb();
@@ -65,6 +68,10 @@ export function listPublishRecords(filters?: {
   if (filters?.platform) {
     conditions.push("platform = ?");
     params.push(filters.platform);
+  }
+  if (filters?.accountId) {
+    conditions.push("account_id = ?");
+    params.push(filters.accountId);
   }
   if (filters?.status) {
     conditions.push("status = ?");
@@ -88,12 +95,13 @@ export function updatePublishRecord(
     const record = { ...existing, ...updates, updated_at: new Date().toISOString() };
     db.prepare(
       `UPDATE publish_records SET
-        work_id = ?, platform = ?, platform_post_id = ?, status = ?, scheduled_at = ?, published_at = ?,
+        work_id = ?, platform = ?, account_id = ?, platform_post_id = ?, status = ?, scheduled_at = ?, published_at = ?,
         error_message = ?, metadata = ?, updated_at = ?
        WHERE id = ?`
     ).run(
       record.work_id,
       record.platform,
+      record.account_id ?? null,
       record.platform_post_id ?? null,
       record.status,
       record.scheduled_at ?? null,

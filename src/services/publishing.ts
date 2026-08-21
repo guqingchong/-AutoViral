@@ -9,6 +9,7 @@ import { ZhihuPublisher } from "./publishers/zhihu-publisher.js";
 import { ZhihuVideoPublisher } from "./publishers/zhihu-video-publisher.js";
 import { generateFallbackPackage } from "./publishers/fallback-export.js";
 import * as recordsRepo from "../db/publish-records-repo.js";
+import { getAccount, listAccountsByPlatform } from "../db/accounts-repo.js";
 import { getDb } from "../db/connection.js";
 import { updateWork, getWork } from "../db/works-repo.js";
 import { listArticlesByWork } from "../db/articles-repo.js";
@@ -95,9 +96,23 @@ function resolvePublisherForWork(platform: string, workType?: string): Publisher
   return resolvePublisher(platform);
 }
 
+/** 解析发布目标账号:显式 > 平台默认 > undefined(走旧凭证兜底)。显式值非法直接抛错。 */
+export function resolvePublishAccountId(platform: string, accountId?: string): string | undefined {
+  if (accountId) {
+    const account = getAccount(accountId);
+    if (!account) throw new Error(`账号不存在: ${accountId}`);
+    if (account.platform !== platform) throw new Error(`账号 ${accountId} 不属于平台 ${platform}`);
+    return accountId;
+  }
+  const def = listAccountsByPlatform(platform).find((a) => a.is_default === 1);
+  return def?.id;
+}
+
 export async function publishToPlatform(workId: string, platform: string, input: PublishInput): Promise<PublishRecord> {
+  const accountId = resolvePublishAccountId(platform, input.accountId);
+  // 去重键 (work_id, platform, account_id):account_id 的 null 与 undefined 视为同值
   const existing = recordsRepo.listPublishRecords({ workId }).find(
-    (r) => r.platform === platform && r.status !== "failed"
+    (r) => r.platform === platform && r.status !== "failed" && (r.account_id ?? null) === (accountId ?? null)
   );
   let recordId: number;
   if (existing) {
@@ -107,6 +122,7 @@ export async function publishToPlatform(workId: string, platform: string, input:
     const created = recordsRepo.createPublishRecord({
       work_id: workId,
       platform,
+      account_id: accountId,
       status: "publishing",
       metadata: "",
     });
@@ -120,7 +136,7 @@ export async function publishToPlatform(workId: string, platform: string, input:
     // 发布外层超时护栏(2026-08-19 P2):Playwright 流程正常 5-8 分钟,给 10 分钟;
     // 无护栏时挂死的请求会让发布路由永不返回(前端按钮永远"发布中")
     result = await Promise.race([
-      publisher.publish(input),
+      publisher.publish({ ...input, accountId }),
       new Promise<PublishOutput>((_, rej) => setTimeout(() => rej(new Error("发布超时(10min)")), 10 * 60_000)),
     ]);
   } catch (err) {
