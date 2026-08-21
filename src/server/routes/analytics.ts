@@ -234,7 +234,12 @@ function queryWorkDashboardRows(filters: {
   if (filters.accountId) { conds.push("pr.account_id = ?"); params.push(filters.accountId); }
   if (filters.workId) { conds.push("pr.work_id = ?"); params.push(filters.workId); }
   if (filters.from) { conds.push("pr.published_at >= ?"); params.push(filters.from); }
-  if (filters.to) { conds.push("pr.published_at <= ?"); params.push(filters.to); }
+  if (filters.to) {
+    // date-only 的 to(YYYY-MM-DD)视为当天结束,含当天发布的记录(2026-08-21 终审顺手项)
+    const to = /^\d{4}-\d{2}-\d{2}$/.test(filters.to) ? `${filters.to}T23:59:59.999Z` : filters.to;
+    conds.push("pr.published_at <= ?");
+    params.push(to);
+  }
   return db.prepare(`
     SELECT w.id AS work_id, w.title, w.type AS work_type, w.topic_category,
            pr.id AS record_id, pr.platform, pr.account_id, pr.status, pr.published_at,
