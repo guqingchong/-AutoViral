@@ -142,6 +142,28 @@ describe("PlaywrightPublisher 多账号", () => {
     expect(mockAddCookies).toHaveBeenCalledWith(JSON.parse(COOKIE));
   });
 
+  // 2026-08-21 "丰羽教育没扫码却自动登录"根因:显式账号无本账号凭证时,
+  // 播种/isConfigured 走 resolver 兜底链拿到默认账号的会话 —— 新账号画像
+  // 一出生就登录成别人。显式账号只允许用本账号凭证;兜底链只服务 accountId 缺省。
+  it("显式账号无本账号凭证:不播种兜底链会话,isConfigured 为 false", async () => {
+    seedAccount("acc-default", PLATFORM, 1);
+    setAccountCredential("acc-default", "session_cookie", COOKIE);
+    seedAccount("acc-new"); // 无凭证
+    const pub = new AccountTestPublisher();
+    expect(await pub.isConfigured("acc-new")).toBe(false);
+    await pub.ensureBrowser("acc-new");
+    expect(mockAddCookies).not.toHaveBeenCalled();
+  });
+
+  it("accountId 缺省时兜底链保留(默认账号凭证可播种)", async () => {
+    seedAccount("acc-default", PLATFORM, 1);
+    setAccountCredential("acc-default", "session_cookie", COOKIE);
+    const pub = new AccountTestPublisher();
+    expect(await pub.isConfigured()).toBe(true);
+    await pub.ensureBrowser();
+    expect(mockAddCookies).toHaveBeenCalledWith(JSON.parse(COOKIE));
+  });
+
   it("close() 关闭全部账号 context", async () => {
     const pub = new AccountTestPublisher();
     await pub.ensureBrowser("acc-1");

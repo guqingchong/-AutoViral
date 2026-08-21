@@ -2,9 +2,8 @@ import { Hono } from "hono";
 import { randomUUID } from "node:crypto";
 import * as accountsRepo from "../../db/accounts-repo.js";
 import { AccountReferencedError } from "../../db/accounts-repo.js";
-import { getCredential, getCredentialsByPlatform } from "../../db/platform-credentials-repo.js";
+import { getCredentialsByPlatform } from "../../db/platform-credentials-repo.js";
 import { setAccountCredential } from "../../db/account-credentials-repo.js";
-import { normalizePlatformKey } from "../../services/credential-resolver.js";
 import { triggerLogin } from "../../services/publishing.js";
 import { verifyAllAccounts } from "../../services/login-health.js";
 import type { DbAccount } from "../../db/types.js";
@@ -75,16 +74,12 @@ function storeAccountCredentials(accountId: string, platform: string, username?:
 /**
  * 按账号触发浏览器登录。accountId 透传到发布器:登录直接用该账号的画像目录
  * (browser-profiles/<platform>/<accountId>),与发布同画像,避免指纹分裂。
- * 发布器 login() 内部会把 cookie 写入 account_credentials(账号维度);
- * 下面的旧表桥保留作冗余兜底(登录中途异常时仍可从旧表补齐)。
+ * 发布器 login() 成功后由 saveCookies 把该账号画像的 cookie 写入 account_credentials。
+ * 2026-08-21 修复:删除旧表桥(此前登录成功后把 platform_credentials 旧表值
+ * 覆盖写入本账号 —— 会把默认账号的会话贴到从未登录的新账号上)。
  */
 async function loginForAccount(account: DbAccount): Promise<boolean> {
-  const ok = await triggerLogin(account.platform, account.id);
-  if (ok) {
-    const legacy = getCredential(normalizePlatformKey(account.platform), "session_cookie");
-    if (legacy) setAccountCredential(account.id, "session_cookie", legacy);
-  }
-  return ok;
+  return triggerLogin(account.platform, account.id);
 }
 
 // GET / — list all accounts

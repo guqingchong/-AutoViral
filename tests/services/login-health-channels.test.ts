@@ -70,4 +70,17 @@ describe("verifyChannels 按账号画像", () => {
     const synced = getAccountCredential(ACC, "session_cookie");
     expect(synced).toContain("fresh");
   });
+
+  // 2026-08-21:按账号健康检查必须只读本账号凭证 —— 走兜底链会让
+  // 没登录过的新账号继承默认账号的"已验证"。
+  it("无本账号凭证的账号报「未配置」,不继承默认账号的登录态", async () => {
+    createAccount({
+      id: "acc-ch-2", name: "新号未登录", platform: "channels", tone_profile: {}, status: "active",
+      created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+    });
+    const results = await verifyAllAccounts(true);
+    const second = results.find((r) => r.accountId === "acc-ch-2");
+    expect(second?.configured).toBe(false);
+    expect(second?.valid).toBeNull();
+  });
 });
