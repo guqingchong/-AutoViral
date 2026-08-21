@@ -2,7 +2,7 @@
  * Kuaishou (快手) platform adapter using the official Kuaishou Open API.
  *
  * Configuration required:
- *   - KUASHOU_APP_ID / KUASHOU_APP_SECRET (env)
+ *   - KUAISHOU_APP_ID / KUAISHOU_APP_SECRET (env)
  *   - Access token refreshed via OAuth 2.0 client_credentials.
  */
 
@@ -20,8 +20,8 @@ export class KuaishouAdapter implements PlatformAdapter {
   private tokenExpiry = 0;
 
   constructor(
-    private appId: string = process.env["KUASHOU_APP_ID"] ?? "",
-    private appSecret: string = process.env["KUASHOU_APP_SECRET"] ?? "",
+    private appId: string = process.env["KUAISHOU_APP_ID"] ?? "",
+    private appSecret: string = process.env["KUAISHOU_APP_SECRET"] ?? "",
     private readonly accountId?: string
   ) {}
 
