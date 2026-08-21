@@ -5,6 +5,7 @@
    */
   import { onMount } from "svelte";
   import PublishBoard from "../components/PublishBoard.svelte";
+  import { loginAccount, setDefaultAccount } from "$lib/api";
 
   /** 视频发布平台（看板 + 账号管理共用） */
   const VIDEO_PLATFORMS = [
@@ -138,6 +139,38 @@
       loginBusy = { ...loginBusy, [platform]: false };
       await loadCredentialStatus();
       loadLoginHealth(true); // 登录成功后强制重测登录态
+    }
+  }
+
+  /** 按账号触发浏览器登录(2026-08-21 多账号 UI 补齐):POST /api/accounts/:id/login,
+   *  登录态落到该账号自己的画像与 account_credentials —— 平台级按钮只登默认账号,多账号必须用本入口 */
+  async function handleAccountLogin(acct: any) {
+    loginBusy = { ...loginBusy, [acct.id]: true };
+    showMessage("success", `正在打开${platformLabel(acct.platform)}登录页，请在浏览器中完成登录…`);
+    try {
+      const data = await loginAccount(acct.id);
+      if (data.success) {
+        showMessage("success", `${platformLabel(acct.platform)}/${acct.name} 登录成功，Cookie 已保存，发布链路已就绪`);
+      } else {
+        showMessage("error", `${platformLabel(acct.platform)}/${acct.name} 登录未完成`);
+      }
+    } catch (err) {
+      showMessage("error", `登录失败：${String(err)}`);
+    } finally {
+      loginBusy = { ...loginBusy, [acct.id]: false };
+      await loadCredentialStatus();
+      loadLoginHealth(true);
+    }
+  }
+
+  /** 设为该平台默认账号(发布不传 accountId 时回落到默认账号) */
+  async function handleSetDefault(acct: any) {
+    try {
+      await setDefaultAccount(acct.id);
+      showMessage("success", `已将「${acct.name}」设为${platformLabel(acct.platform)}默认账号`);
+      await loadAccounts();
+    } catch (err) {
+      showMessage("error", "设置默认账号失败: " + String(err));
     }
   }
 
@@ -277,9 +310,14 @@
               <span class="cg-mode">{credGuide.mode === "api" ? "官方 API 发布" : "浏览器自动化发布"}</span>
               <p>{credGuide.note}</p>
               {#if credGuide.loginBtn}
-                <button class="btn-login" disabled={loginBusy[acctForm.platform]} onclick={() => handleBrowserLogin(acctForm.platform)}>
-                  {loginBusy[acctForm.platform] ? "等待登录中…" : "🌐 浏览器登录（推荐）"}
-                </button>
+                {#if editingAccount}
+                  <button class="btn-login" disabled={loginBusy[editingAccount.id]} onclick={() => handleAccountLogin(editingAccount)}>
+                    {loginBusy[editingAccount.id] ? "等待登录中…" : "🌐 浏览器登录（推荐）"}
+                  </button>
+                {:else}
+                  <button class="btn-login" disabled title="先保存账号，再在该账号行点「登录」">🌐 浏览器登录（推荐）</button>
+                  <p class="cg-hint">新增账号请先保存，保存后在账号卡片上点「登录」按该账号扫码登录。</p>
+                {/if}
               {/if}
             </div>
           {/if}
@@ -336,10 +374,21 @@
                   <div class="acct-row">
                     <div class="acct-info">
                       <span class="acct-name">{acct.name}</span>
+                      {#if acct.is_default === 1}<span class="acct-default" title="发布未指定账号时使用该账号">默认</span>{/if}
                       {#if acct.username}<span class="acct-user">{acct.username}</span>{/if}
                       <span class="acct-status {acct.status}">{acct.status === "active" ? "启用" : "停用"}</span>
                     </div>
                     <div class="acct-btns">
+                      {#if CRED_GUIDES[p.key]?.loginBtn}
+                        <button class="btn-sm" disabled={loginBusy[acct.id]} title="按该账号浏览器登录(扫码)"
+                          onclick={() => handleAccountLogin(acct)}>
+                          {loginBusy[acct.id] ? "登录中…" : "登录"}
+                        </button>
+                      {/if}
+                      {#if acct.is_default !== 1}
+                        <button class="btn-sm" title="发布未指定账号时默认使用该账号"
+                          onclick={() => handleSetDefault(acct)}>设为默认</button>
+                      {/if}
                       <button class="btn-sm" onclick={() => startEditAccount(acct)}>编辑</button>
                       <button class="btn-sm btn-danger" onclick={() => deleteAccount(acct.id)}>删除</button>
                     </div>
@@ -407,6 +456,8 @@
   .acct-status { font-size: 0.65rem; padding: 0.1rem 0.35rem; border-radius: 3px; font-weight: 600; }
   .acct-status.active { background: var(--success-soft); color: var(--success); }
   .acct-status.inactive { background: var(--accent-soft); color: var(--text-dim); }
+  .acct-default { font-size: 0.65rem; padding: 0.1rem 0.35rem; border-radius: 3px; font-weight: 600; background: var(--accent-soft); color: var(--accent); }
+  .cg-hint { font-size: 0.72rem; color: var(--text-dim); margin: 0.3rem 0 0; }
   .acct-btns { display: flex; gap: 0.3rem; }
   .btn-sm { padding: 0.25rem 0.55rem; border: 1px solid var(--border); border-radius: 3px; background: var(--bg-surface); color: var(--text-secondary); cursor: pointer; font-size: 0.72rem; }
   .btn-sm:hover { color: var(--text); }
