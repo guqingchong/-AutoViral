@@ -1,7 +1,7 @@
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { type Publisher, type PublishInput, type PublishOutput } from "./types.js";
 import { setCredential } from "../../db/platform-credentials-repo.js";
-import { setAccountCredential } from "../../db/account-credentials-repo.js";
+import { getAccountCredential, setAccountCredential } from "../../db/account-credentials-repo.js";
 import { resolveAccountCredential } from "../credential-resolver.js";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -37,8 +37,19 @@ export abstract class PlaywrightPublisher implements Publisher {
   abstract readonly loginUrl: string;
   abstract readonly uploadUrl: string;
 
+  /**
+   * 凭证读取(2026-08-21 "没扫码也登录成功"根因修复):
+   * 显式 accountId 只读本账号自己的凭证 —— 走 resolver 兜底链会把默认账号的
+   * 会话种进新账号画像(新号一出生就登录成别人,健康检查也跟着谎报)。
+   * 兜底链(默认账号>活跃>旧表)只服务 accountId 缺省的旧调用。
+   */
+  private sessionCookie(accountId?: string): string | undefined {
+    if (accountId) return getAccountCredential(accountId, "session_cookie");
+    return resolveAccountCredential(this.platform, undefined, "session_cookie");
+  }
+
   async isConfigured(accountId?: string): Promise<boolean> {
-    const cred = resolveAccountCredential(this.platform, accountId, "session_cookie");
+    const cred = this.sessionCookie(accountId);
     if (!cred) return false;
     try {
       const cookies = JSON.parse(cred);
@@ -66,7 +77,7 @@ export abstract class PlaywrightPublisher implements Publisher {
       this.contexts.set(key, context);
       const existing = await context.cookies();
       if (existing.length === 0) {
-        const cred = resolveAccountCredential(this.platform, accountId, "session_cookie");
+        const cred = this.sessionCookie(accountId);
         if (cred) {
           try {
             const cookies = JSON.parse(cred);

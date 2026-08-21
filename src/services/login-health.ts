@@ -1,7 +1,7 @@
 import { chromium, type Browser } from "playwright";
 import { getCredential } from "../db/platform-credentials-repo.js";
 import { listAccounts } from "../db/accounts-repo.js";
-import { resolveAccountCredential } from "./credential-resolver.js";
+import { getAccountCredential } from "../db/account-credentials-repo.js";
 import { resolveProfileDir } from "./publishers/playwright-publisher.js";
 
 /**
@@ -248,7 +248,7 @@ export async function verifyAllPlatforms(force = false): Promise<Record<string, 
 }
 
 // ── 按账号维度的健康检查(2026-08-20 Task 3) ──────────────────────────────
-// 结构同 verifyAllPlatforms:包一层按账号迭代,凭证经 resolveAccountCredential
+// 结构同 verifyAllPlatforms:包一层按账号迭代,凭证只读本账号(2026-08-21 修复,不走兜底链)
 // 解析(指定账号 > 默认账号 > 活跃账号 > 旧表兜底)。
 
 let accountCache: { at: number; result: AccountHealth[] } | null = null;
@@ -264,7 +264,9 @@ export async function verifyAllAccounts(force = false): Promise<AccountHealth[]>
     const needsBrowser = accounts.some((a) => a.platform in RPA_CHECKS);
     if (needsBrowser) browser = await chromium.launch({ headless: true });
     for (const account of accounts) {
-      const getCred: CredGetter = (keyType) => resolveAccountCredential(account.platform, account.id, keyType);
+      // 2026-08-21:按账号健康检查只读本账号自己的凭证 —— 走 resolver 兜底链
+      // 会让从没登录过的新账号继承默认账号的"已验证"(实测复现)。
+      const getCred: CredGetter = (keyType) => getAccountCredential(account.id, keyType);
       let h: PlatformHealth;
       if (account.platform in RPA_CHECKS && browser) {
         h = await verifyRpa(account.platform, browser, getCred);
