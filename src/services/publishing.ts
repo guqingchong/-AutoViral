@@ -66,34 +66,38 @@ const PLATFORM_ALIASES: Record<string, string> = {
   wechat_mp: "wechat",
 };
 
-export function resolvePublisher(platform: string): Publisher {
+export function resolvePublisher(platform: string, accountId?: string): Publisher {
   const key = PLATFORM_ALIASES[platform] ?? platform;
-  if (!publisherCache.has(key)) {
-    if (key === "douyin") publisherCache.set(key, new DouyinPublisher());
-    else if (key === "xiaohongshu") publisherCache.set(key, new XiaohongshuPublisher());
-    else if (key === "channels") publisherCache.set(key, new ChannelsPublisher());
-    else if (key === "zhihu") publisherCache.set(key, new ZhihuPublisher());
-    else publisherCache.set(key, getPublisher(key));
+  // 2026-08-21 多账号隔离:发布器实例按账号缓存(各自持有独立 context Map 与画像目录)
+  const cacheKey = `${key}:${accountId ?? "legacy"}`;
+  if (!publisherCache.has(cacheKey)) {
+    if (key === "douyin") publisherCache.set(cacheKey, new DouyinPublisher());
+    else if (key === "xiaohongshu") publisherCache.set(cacheKey, new XiaohongshuPublisher());
+    else if (key === "channels") publisherCache.set(cacheKey, new ChannelsPublisher());
+    else if (key === "zhihu") publisherCache.set(cacheKey, new ZhihuPublisher());
+    else publisherCache.set(cacheKey, getPublisher(key));
   }
-  return publisherCache.get(key)!;
+  return publisherCache.get(cacheKey)!;
 }
 
 const FALLBACK_PLATFORMS = ["douyin", "xiaohongshu", "channels"];
 
-let zhihuVideoPublisher: Publisher | null = null;
+const zhihuVideoPublishers = new Map<string, Publisher>();
 
 /**
  * 按「作品类型」分发发布器(2026-08-07 视频/图文分块约定):
  * 知乎 short-video 作品 → 视频发布器(upload-video 页);
  * 知乎 image-text 作品 → 文章发布器(写专栏)。其余平台不分类型。
+ * accountId 透传:视频发布器同样按账号缓存(画像隔离)。
  */
-function resolvePublisherForWork(platform: string, workType?: string): Publisher {
+function resolvePublisherForWork(platform: string, workType?: string, accountId?: string): Publisher {
   const key = PLATFORM_ALIASES[platform] ?? platform;
   if (key === "zhihu" && workType !== "image-text") {
-    if (!zhihuVideoPublisher) zhihuVideoPublisher = new ZhihuVideoPublisher();
-    return zhihuVideoPublisher;
+    const cacheKey = accountId ?? "legacy";
+    if (!zhihuVideoPublishers.has(cacheKey)) zhihuVideoPublishers.set(cacheKey, new ZhihuVideoPublisher());
+    return zhihuVideoPublishers.get(cacheKey)!;
   }
-  return resolvePublisher(platform);
+  return resolvePublisher(platform, accountId);
 }
 
 /** 解析发布目标账号:显式 > 平台默认 > undefined(走旧凭证兜底)。显式值非法直接抛错。 */
@@ -130,7 +134,7 @@ export async function publishToPlatform(workId: string, platform: string, input:
   }
 
   const work = getWork(workId);
-  const publisher = resolvePublisherForWork(platform, work?.type);
+  const publisher = resolvePublisherForWork(platform, work?.type, accountId);
   let result: PublishOutput;
   try {
     // 发布外层超时护栏(2026-08-19 P2):Playwright 流程正常 5-8 分钟,给 10 分钟;
@@ -229,9 +233,9 @@ async function collectCardImages(outputDir: string): Promise<string[]> {
     .sort();
 }
 
-export async function triggerLogin(platform: string): Promise<boolean> {
-  const publisher = resolvePublisher(platform);
-  if (publisher.login) return publisher.login();
+export async function triggerLogin(platform: string, accountId?: string): Promise<boolean> {
+  const publisher = resolvePublisher(platform, accountId);
+  if (publisher.login) return publisher.login(accountId);
   throw new Error(`平台 ${platform} 不支持浏览器登录`);
 }
 

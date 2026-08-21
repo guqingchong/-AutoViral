@@ -1,6 +1,8 @@
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { type Publisher, type PublishInput, type PublishOutput } from "./types.js";
-import { getCredential, setCredential } from "../../db/platform-credentials-repo.js";
+import { setCredential } from "../../db/platform-credentials-repo.js";
+import { setAccountCredential } from "../../db/account-credentials-repo.js";
+import { resolveAccountCredential } from "../credential-resolver.js";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { dataDir } from "../../config.js";
@@ -11,10 +13,20 @@ export interface PlaywrightOptions {
   userDataDir?: string;
 }
 
+/**
+ * 浏览器画像目录(2026-08-21 多账号隔离):browser-profiles/<platform>/<accountKey>,
+ * accountKey = accountId ?? "legacy"。旧目录 browser-profiles/<platform> 不迁移,
+ * 各账号首次发布/登录时从账号凭证重新播种 cookie。
+ */
+export function resolveProfileDir(platform: string, accountId?: string): string {
+  return join(dataDir, "browser-profiles", platform, accountId ?? "legacy");
+}
+
 export abstract class PlaywrightPublisher implements Publisher {
   protected options: PlaywrightOptions;
   protected browser: Browser | null = null;
-  protected context: BrowserContext | null = null;
+  /** 按账号隔离的 context 多实例:key = accountId ?? "legacy" */
+  protected contexts = new Map<string, BrowserContext>();
 
   constructor(options: PlaywrightOptions = {}) {
     this.options = options;
@@ -25,8 +37,8 @@ export abstract class PlaywrightPublisher implements Publisher {
   abstract readonly loginUrl: string;
   abstract readonly uploadUrl: string;
 
-  async isConfigured(): Promise<boolean> {
-    const cred = getCredential(this.platform, "session_cookie");
+  async isConfigured(accountId?: string): Promise<boolean> {
+    const cred = resolveAccountCredential(this.platform, accountId, "session_cookie");
     if (!cred) return false;
     try {
       const cookies = JSON.parse(cred);
@@ -36,32 +48,35 @@ export abstract class PlaywrightPublisher implements Publisher {
     }
   }
 
-  async ensureBrowser(): Promise<{ browser: Browser | null; context: BrowserContext; page: Page }> {
-    if (!this.context) {
-      // 每平台持久化浏览器画像:指纹(localStorage/IndexedDB)跨次稳定,
+  async ensureBrowser(accountId?: string): Promise<{ browser: Browser | null; context: BrowserContext; page: Page }> {
+    const key = accountId ?? "legacy";
+    let context = this.contexts.get(key);
+    if (!context) {
+      // 每账号持久化浏览器画像:指纹(localStorage/IndexedDB)跨次稳定,
       // 避免微信系平台把"每次都是全新设备"判定为异常而强制下线
       // (视频号 cookie 4 小时内即失效的根因 —— 2026-08-07 实证)。
-      // 首次启动画像为空时从凭证库播种 cookie(历史兼容)。
-      const profileDir = join(dataDir, "browser-profiles", this.platform);
+      // 首次启动画像为空时从账号凭证播种 cookie(历史兼容走 resolver 兜底链)。
+      const profileDir = resolveProfileDir(this.platform, accountId);
       await mkdir(profileDir, { recursive: true });
-      this.context = await chromium.launchPersistentContext(profileDir, {
+      context = await chromium.launchPersistentContext(profileDir, {
         headless: this.options.headless ?? true,
         userAgent: this.getUserAgent(),
         viewport: { width: 1280, height: 800 },
       });
-      const existing = await this.context.cookies();
+      this.contexts.set(key, context);
+      const existing = await context.cookies();
       if (existing.length === 0) {
-        const cred = getCredential(this.platform, "session_cookie");
+        const cred = resolveAccountCredential(this.platform, accountId, "session_cookie");
         if (cred) {
           try {
             const cookies = JSON.parse(cred);
-            if (Array.isArray(cookies)) await this.context.addCookies(cookies);
+            if (Array.isArray(cookies)) await context.addCookies(cookies);
           } catch { /* malformed cookie — ignore */ }
         }
       }
     }
-    const page = await this.context.newPage();
-    return { browser: this.browser, context: this.context, page };
+    const page = await context.newPage();
+    return { browser: this.browser, context, page };
   }
 
   protected getUserAgent(): string {
@@ -72,7 +87,7 @@ export abstract class PlaywrightPublisher implements Publisher {
   protected abstract doUpload(page: Page, input: PublishInput): Promise<PublishOutput>;
 
   async publish(input: PublishInput): Promise<PublishOutput> {
-    const { context, page } = await this.ensureBrowser();
+    const { context, page } = await this.ensureBrowser(input.accountId);
     try {
       const loggedIn = await this.checkLoggedIn(page);
       if (!loggedIn) {
@@ -82,7 +97,7 @@ export abstract class PlaywrightPublisher implements Publisher {
         };
       }
       const result = await this.doUpload(page, input);
-      if (result.success) await this.saveCookies(context);
+      if (result.success) await this.saveCookies(context, input.accountId);
       // 失败或结果无法确认时留现场截图,否则平台改版类问题无法定位
       if (!result.success) {
         const shot = await this.captureDebugSnapshot(page, input.workId);
@@ -113,12 +128,12 @@ export abstract class PlaywrightPublisher implements Publisher {
     }
   }
 
-  async login(): Promise<boolean> {
+  async login(accountId?: string): Promise<boolean> {
     // 登录必须打开可见浏览器（用户要扫码/输密码），强制有头模式。
     // 若已有无头持久画像在跑,先关掉再以有头模式重开同一画像(指纹一致)。
     this.options = { ...this.options, headless: false };
     await this.close();
-    const { context, page } = await this.ensureBrowser();
+    const { context, page } = await this.ensureBrowser(accountId);
     try {
       // 用 domcontentloaded 而非 networkidle：扫码登录页有长轮询，networkidle 永远不触发
       await page.goto(this.loginUrl, { waitUntil: "domcontentloaded" });
@@ -148,7 +163,7 @@ export abstract class PlaywrightPublisher implements Publisher {
             const loggedIn = await this.checkLoggedIn(page).catch(() => false);
             console.log(`[login:${this.platform}] 验证结果=${loggedIn} url=${page.url()}`);
             if (loggedIn) {
-              await this.saveCookies(context);
+              await this.saveCookies(context, accountId);
               return true;
             }
             const u = page.url();
@@ -174,14 +189,22 @@ export abstract class PlaywrightPublisher implements Publisher {
     }
   }
 
-  protected async saveCookies(context: BrowserContext): Promise<void> {
+  /**
+   *  cookie 落库:指定账号时写 account_credentials(账号维度);
+   *  同时保留旧 platform_credentials 写入(deprecated 兜底,accounts 路由登录桥依赖它)。
+   */
+  protected async saveCookies(context: BrowserContext, accountId?: string): Promise<void> {
     const cookies = await context.cookies();
-    setCredential(this.platform, "session_cookie", JSON.stringify(cookies));
+    const serialized = JSON.stringify(cookies);
+    if (accountId) setAccountCredential(accountId, "session_cookie", serialized);
+    setCredential(this.platform, "session_cookie", serialized);
   }
 
   async close(): Promise<void> {
-    await this.context?.close();
-    this.context = null;
+    for (const context of this.contexts.values()) {
+      await context.close().catch(() => {});
+    }
+    this.contexts.clear();
     await this.browser?.close();
     this.browser = null;
   }

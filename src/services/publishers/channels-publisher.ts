@@ -12,17 +12,17 @@ export class ChannelsPublisher implements Publisher {
 
   constructor(private web: Publisher = new ChannelsWebPublisher()) {}
 
-  async isConfigured(): Promise<boolean> {
-    return this.web.isConfigured();
+  async isConfigured(accountId?: string): Promise<boolean> {
+    return this.web.isConfigured(accountId);
   }
 
   publish(input: PublishInput): Promise<PublishOutput> {
     return this.web.publish(input);
   }
 
-  async login(): Promise<boolean> {
+  async login(accountId?: string): Promise<boolean> {
     if ("login" in this.web && typeof (this.web as ChannelsWebPublisher).login === "function") {
-      return (this.web as ChannelsWebPublisher).login();
+      return (this.web as ChannelsWebPublisher).login(accountId);
     }
     return false;
   }
