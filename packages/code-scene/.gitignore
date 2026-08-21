@@ -1,4 +1,1 @@
-node_modules/
-out/
-src/generated/
-src/custom/current.tsx
+public/

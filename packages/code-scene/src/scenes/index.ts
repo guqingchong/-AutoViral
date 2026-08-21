@@ -9,6 +9,7 @@ import makePyramid from "./pyramid";
 import makeQuoteCard from "./quote-card";
 import makeChecklist from "./checklist";
 import makeBarCompare from "./bar-compare";
+import makeKeynoteLeather from "./keynote-leather";
 
 /** 场景模板注册表:模板名 → 参数化工厂(参数 → Revideo 场景) */
 export const SCENE_REGISTRY: Record<string, (params: any) => any> = {
@@ -22,6 +23,8 @@ export const SCENE_REGISTRY: Record<string, (params: any) => any> = {
   "quote-card": makeQuoteCard,
   "checklist": makeChecklist,
   "bar-compare": makeBarCompare,
+  // 2026-08-21:横屏苹果风×深色皮革 数字人口播模板(代码渲染整片形态验证)
+  "keynote-leather": makeKeynoteLeather,
 };
 
 export function getSceneFactory(name: string): (params: any) => any {
