@@ -297,6 +297,7 @@ export interface DbPlatformMetric {
   id: number;
   publish_record_id?: number;
   platform: string;
+  account_id?: string | null;
   metric_type: DbMetricType;
   external_id?: string;
   collected_at: string;

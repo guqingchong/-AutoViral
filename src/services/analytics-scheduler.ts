@@ -8,7 +8,8 @@
 
 import { listPublishRecords } from "../db/publish-records-repo.js";
 import { createMetric } from "../db/platform-metrics-repo.js";
-import { getAdapter, listAdapters } from "./platform-adapters/registry.js";
+import { listAccounts } from "../db/accounts-repo.js";
+import { getAdapterForAccount, listAdapters } from "./platform-adapters/registry.js";
 import { collectComments } from "./comment-service.js";
 import { analyzeWork, computeBaseline } from "./hit-failure-analysis.js";
 import { evolveFromPerformance } from "./self-evolution.js";
@@ -48,22 +49,26 @@ export function startScheduler(
   if (accountJob || metricsJob || baselineJob) stopScheduler();
   console.log("[analytics-scheduler] starting...");
 
-  // Account metrics: daily
+  // Account metrics: daily —— 遍历活跃账号(Task 8),单账号失败跳过不拖死整轮
   accountJob = cron.schedule(accountCron, async () => {
     console.log("[analytics-scheduler] collecting account metrics...");
-    for (const adapter of listAdapters()) {
+    const accounts = listAccounts().filter((a) => !a.status || a.status === "active");
+    for (const account of accounts) {
+      const adapter = getAdapterForAccount(account.platform, account.id);
+      if (!adapter) continue;
       try {
         const metrics = await adapter.collectAccountMetrics();
         await createMetric({
-          platform: adapter.platform,
+          platform: account.platform,
+          account_id: account.id,
           metric_type: "account",
           collected_at: metrics.collectedAt,
           followers: metrics.followers,
           raw_data: metrics.rawData,
         });
-        console.log(`[analytics-scheduler] ${adapter.platform} account: followers=${metrics.followers}`);
+        console.log(`[analytics-scheduler] ${account.platform}/${account.name} account: followers=${metrics.followers}`);
       } catch (e) {
-        console.error(`[analytics-scheduler] ${adapter.platform} account error:`, e);
+        console.error(`[analytics-scheduler] ${account.platform}/${account.name} 采集失败(跳过):`, e);
       }
     }
     // P3-T4 数据回流:发布满 48h 的作品抓三率 → topic_scores(选题权重)
@@ -84,7 +89,7 @@ export function startScheduler(
     const reviewing = listPublishRecords({ status: "reviewing" });
     for (const record of reviewing) {
       if (!record.platform_post_id) continue; // 无 id 无法探测,等发布侧解析补录
-      const adapter = getAdapter(record.platform);
+      const adapter = getAdapterForAccount(record.platform, record.account_id ?? undefined);
       if (!adapter) continue;
       try {
         const m = await adapter.collectPostMetrics(record.platform_post_id);
@@ -115,7 +120,7 @@ export function startScheduler(
       // For posts older than 72h, only collect once per day (skip if the hour isn't ~0-6)
       if (publishedAt < cutoff72h && now.getHours() > 6) continue;
 
-      const adapter = getAdapter(record.platform);
+      const adapter = getAdapterForAccount(record.platform, record.account_id ?? undefined);
       if (!adapter || !record.platform_post_id) continue;
 
       try {
@@ -123,6 +128,7 @@ export function startScheduler(
         await createMetric({
           publish_record_id: record.id,
           platform: record.platform,
+          account_id: record.account_id ?? null,
           metric_type: "work",
           external_id: record.platform_post_id,
           collected_at: metrics.collectedAt,
@@ -215,8 +221,11 @@ export function startMetricsScheduler(analytics: Config["analytics"]): void {
 /**
  * Run a one-shot collection of all metrics (useful for manual trigger / testing).
  */
-export async function collectAllOnce(): Promise<{ accounts: number; posts: number; errors: string[] }> {
-  const result = await collectAll();
+export async function collectAllOnce(options?: {
+  accountId?: string;
+  workId?: string;
+}): Promise<{ accounts: number; posts: number; errors: string[] }> {
+  const result = await collectAll(options);
   return {
     accounts: result.accountMetricsCollected,
     posts: result.metricsCollected,
