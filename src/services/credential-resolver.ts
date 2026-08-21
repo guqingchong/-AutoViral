@@ -28,13 +28,14 @@ export function resolveAccountCredential(
     const v = getAccountCredential(def.id, keyType);
     if (v) return v;
   }
-  const any = db.prepare(
-    "SELECT id FROM accounts WHERE platform = ? AND (status IS NULL OR status = 'active') ORDER BY created_at ASC LIMIT 1"
-  ).get(platform) as { id: string } | undefined;
-  if (any && any.id !== def?.id) {
-    const v = getAccountCredential(any.id, keyType);
+  const actives = db.prepare(
+    "SELECT id FROM accounts WHERE platform = ? AND (status IS NULL OR status = 'active') ORDER BY created_at ASC"
+  ).all(platform) as { id: string }[];
+  for (const acc of actives) {
+    if (acc.id === def?.id) continue; // 默认账号已试过,不重复查
+    const v = getAccountCredential(acc.id, keyType);
     if (v) {
-      console.warn(`[credential-resolver] ${platform} 无默认账号凭证,回落活跃账号 ${any.id}`);
+      console.warn(`[credential-resolver] ${platform} 无默认账号凭证,回落活跃账号 ${acc.id}`);
       return v;
     }
   }
