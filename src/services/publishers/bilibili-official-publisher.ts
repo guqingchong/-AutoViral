@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import type { Publisher, PublishInput, PublishOutput } from "./types.js";
-import { getCredential } from "../../db/platform-credentials-repo.js";
+import { resolveAccountCredential } from "../credential-resolver.js";
 
 const MEMBER_BASE = "https://member.bilibili.com";
 const UA =
@@ -45,13 +45,16 @@ export class BilibiliOfficialPublisher implements Publisher {
   readonly platform = "bilibili";
   readonly name = "哔哩哔哩";
 
-  isConfigured(): boolean {
-    return !!(getCredential("bilibili", "access_token") && getCredential("bilibili", "csrf"));
+  isConfigured(accountId?: string): boolean {
+    return !!(
+      resolveAccountCredential(this.platform, accountId, "access_token") &&
+      resolveAccountCredential(this.platform, accountId, "csrf")
+    );
   }
 
-  private cookieHeader(): string {
-    const sess = getCredential("bilibili", "access_token") ?? "";
-    const csrf = getCredential("bilibili", "csrf") ?? "";
+  private cookieHeader(accountId?: string): string {
+    const sess = resolveAccountCredential(this.platform, accountId, "access_token") ?? "";
+    const csrf = resolveAccountCredential(this.platform, accountId, "csrf") ?? "";
     return `SESSDATA=${sess}; bili_jct=${csrf}`;
   }
 
@@ -60,7 +63,7 @@ export class BilibiliOfficialPublisher implements Publisher {
    * 实测（2026-08-06）：/x/vu/web/cover/up 只接受 base64 dataURL 字符串字段
    * （multipart 文件字段返回 -400 请求错误）；投稿 add/v3 要求封面必须来自该接口。
    */
-  private async uploadCover(coverPath: string, csrf: string): Promise<string | undefined> {
+  private async uploadCover(coverPath: string, csrf: string, accountId?: string): Promise<string | undefined> {
     try {
       const img = await readFile(coverPath);
       const mime = /\.png$/i.test(coverPath) ? "image/png" : "image/jpeg";
@@ -69,7 +72,7 @@ export class BilibiliOfficialPublisher implements Publisher {
       form.append("csrf", csrf);
       const res = await fetch(`${MEMBER_BASE}/x/vu/web/cover/up`, {
         method: "POST",
-        headers: { Cookie: this.cookieHeader(), "User-Agent": UA, Referer: `${MEMBER_BASE}/york/videoup` },
+        headers: { Cookie: this.cookieHeader(accountId), "User-Agent": UA, Referer: `${MEMBER_BASE}/york/videoup` },
         body: form,
       });
       const data = (await res.json().catch(() => null)) as { code?: number; data?: { url?: string } } | null;
@@ -80,7 +83,8 @@ export class BilibiliOfficialPublisher implements Publisher {
   }
 
   async publish(input: PublishInput): Promise<PublishOutput> {
-    const csrf = getCredential("bilibili", "csrf");
+    const accountId = input.accountId;
+    const csrf = resolveAccountCredential(this.platform, accountId, "csrf");
     if (!csrf) {
       return { success: false, error: "缺少哔哩哔哩 csrf (bili_jct)" };
     }
@@ -88,7 +92,7 @@ export class BilibiliOfficialPublisher implements Publisher {
     try {
       const videoBuffer = await readFile(input.videoPath);
       const size = videoBuffer.byteLength;
-      const cookie = this.cookieHeader();
+      const cookie = this.cookieHeader(accountId);
 
       // 1. preupload
       const preRes = await fetch(
@@ -164,7 +168,7 @@ export class BilibiliOfficialPublisher implements Publisher {
       // 封面：add/v3 要求封面必须先经 /x/vu/web/cover/up 上传，拒绝外部链接/本地路径
       let coverUrl = "";
       if (input.coverPath) {
-        coverUrl = (await this.uploadCover(input.coverPath, csrf)) ?? "";
+        coverUrl = (await this.uploadCover(input.coverPath, csrf, accountId)) ?? "";
       }
       const biliFilename = uposPath.split("/").pop()!.replace(/\.[^.]+$/, "");
       const addRes = await fetch(`${MEMBER_BASE}/x/vu/web/add/v3?csrf=${encodeURIComponent(csrf)}`, {

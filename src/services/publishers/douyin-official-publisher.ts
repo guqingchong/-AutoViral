@@ -1,21 +1,21 @@
 import { readFile } from "node:fs/promises";
 import { Publisher, type PublishInput, type PublishOutput } from "./types.js";
-import { getCredential } from "../../db/platform-credentials-repo.js";
+import { resolveAccountCredential } from "../credential-resolver.js";
 
 export class DouyinOfficialPublisher implements Publisher {
   readonly platform = "douyin";
   readonly name = "抖音开放平台";
 
-  isConfigured(): boolean {
-    const appKey = getCredential("douyin", "app_key");
-    const accessToken = getCredential("douyin", "access_token");
-    const openId = getCredential("douyin", "open_id");
+  isConfigured(accountId?: string): boolean {
+    const appKey = resolveAccountCredential(this.platform, accountId, "app_key");
+    const accessToken = resolveAccountCredential(this.platform, accountId, "access_token");
+    const openId = resolveAccountCredential(this.platform, accountId, "open_id");
     return !!(appKey && accessToken && openId);
   }
 
   async publish(input: PublishInput): Promise<PublishOutput> {
-    const accessToken = getCredential("douyin", "access_token");
-    const openId = getCredential("douyin", "open_id");
+    const accessToken = resolveAccountCredential(this.platform, input.accountId, "access_token");
+    const openId = resolveAccountCredential(this.platform, input.accountId, "open_id");
     if (!accessToken || !openId) {
       return { success: false, error: "缺少抖音开放平台 access_token / open_id" };
     }

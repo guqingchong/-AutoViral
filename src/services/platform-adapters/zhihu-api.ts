@@ -6,6 +6,7 @@
 
 import type { CollectedComment, CollectedMetrics, PlatformAdapter, ReplyResult } from "./types.js";
 import { apiGet, apiPost } from "./fetch-helper.js";
+import { resolveAccountCredential } from "../credential-resolver.js";
 
 const BASE = "https://api.zhihu.com";
 
@@ -25,9 +26,12 @@ export class ZhihuAdapter implements PlatformAdapter {
     if (this.accessToken && Date.now() < this.tokenExpiry) {
       return this.accessToken;
     }
+    // 惰性 resolve:账号维度凭证(默认/活跃账号链 + 旧表兜底)优先,构造参数(env)兜底
+    const clientId = resolveAccountCredential(this.platform, undefined, "client_id") ?? this.clientId;
+    const clientSecret = resolveAccountCredential(this.platform, undefined, "client_secret") ?? this.clientSecret;
     const data = (await apiPost(`${BASE}/oauth/token`, {
-      client_id: this.clientId,
-      client_secret: this.clientSecret,
+      client_id: clientId,
+      client_secret: clientSecret,
       grant_type: "client_credentials",
     })) as { access_token: string; expires_in: number };
     this.accessToken = data.access_token;

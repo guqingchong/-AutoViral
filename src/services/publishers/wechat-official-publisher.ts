@@ -1,7 +1,7 @@
 ﻿import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
 import type { Publisher, PublishInput, PublishOutput } from "./types.js";
-import { getCredential } from "../../db/platform-credentials-repo.js";
+import { resolveAccountCredential } from "../credential-resolver.js";
 
 const BASE = "https://api.weixin.qq.com/cgi-bin";
 
@@ -69,15 +69,21 @@ export class WechatOfficialPublisher implements Publisher {
 
   private cachedToken: string | null = null;
   private tokenExpiry = 0;
+  private cachedAccountId: string | undefined;
 
-  isConfigured(): boolean {
-    return !!(getCredential("wechat", "app_id") && getCredential("wechat", "app_secret"));
+  isConfigured(accountId?: string): boolean {
+    return !!(
+      resolveAccountCredential(this.platform, accountId, "app_id") &&
+      resolveAccountCredential(this.platform, accountId, "app_secret")
+    );
   }
 
-  private async ensureToken(): Promise<string> {
-    if (this.cachedToken && Date.now() < this.tokenExpiry) return this.cachedToken;
-    const appId = getCredential("wechat", "app_id");
-    const appSecret = getCredential("wechat", "app_secret");
+  private async ensureToken(accountId?: string): Promise<string> {
+    if (this.cachedToken && this.cachedAccountId === accountId && Date.now() < this.tokenExpiry) {
+      return this.cachedToken;
+    }
+    const appId = resolveAccountCredential(this.platform, accountId, "app_id");
+    const appSecret = resolveAccountCredential(this.platform, accountId, "app_secret");
     if (!appId || !appSecret) throw new Error("缺少公众号 app_id / app_secret");
     const res = await fetch(
       `${BASE}/token?grant_type=client_credential&appid=${encodeURIComponent(appId)}&secret=${encodeURIComponent(appSecret)}`
@@ -88,6 +94,7 @@ export class WechatOfficialPublisher implements Publisher {
     }
     this.cachedToken = data.access_token;
     this.tokenExpiry = Date.now() + ((data.expires_in ?? 7200) - 300) * 1000;
+    this.cachedAccountId = accountId;
     return this.cachedToken;
   }
 
@@ -167,7 +174,7 @@ export class WechatOfficialPublisher implements Publisher {
 
   async publish(input: PublishInput): Promise<PublishOutput> {
     try {
-      const token = await this.ensureToken();
+      const token = await this.ensureToken(input.accountId);
 
       // 1. 封面图（公众号草稿必填 thumb_media_id）
       let thumbMediaId: string | undefined;

@@ -1,5 +1,5 @@
 ﻿import type { Publisher, PublishInput, PublishOutput } from "./types.js";
-import { getCredential } from "../../db/platform-credentials-repo.js";
+import { resolveAccountCredential } from "../credential-resolver.js";
 
 const BASE = "https://api.zhihu.com";
 
@@ -22,12 +22,12 @@ export class ZhihuOfficialPublisher implements Publisher {
   readonly platform = "zhihu";
   readonly name = "知乎";
 
-  isConfigured(): boolean {
-    return !!getCredential("zhihu", "access_token");
+  isConfigured(accountId?: string): boolean {
+    return !!resolveAccountCredential(this.platform, accountId, "access_token");
   }
 
   async publish(input: PublishInput): Promise<PublishOutput> {
-    const accessToken = getCredential("zhihu", "access_token");
+    const accessToken = resolveAccountCredential(this.platform, input.accountId, "access_token");
     if (!accessToken) {
       return { success: false, error: "缺少知乎 access_token" };
     }
