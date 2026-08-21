@@ -138,6 +138,27 @@ describe("publish accountId 链路", () => {
     expect(row?.account_id).toBeUndefined();
   });
 
+  // 2026-08-21 终审 I2:无默认账号时镜像 resolveAccountCredential 语义,
+  // 回落第一个活跃账号并告警,而不是直接 undefined(落账错位到旧凭证兜底)
+  it("⑤c 无默认账号但有活跃账号 → 回落活跃账号并 console.warn", async () => {
+    const active = createAccount(makeAccount({ name: "活跃号" })); // is_default 默认 0
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const record = await publishToPlatform(WORK_ID, "douyin", input);
+
+    const row = recordsRepo.getPublishRecord(record.id);
+    expect(row?.account_id).toBe(active.id);
+    const warnText = warn.mock.calls.flat().join(" ");
+    expect(warnText).toContain("默认账号");
+    expect(warnText).toContain(active.id);
+  });
+
+  it("⑤d 回落只取活跃账号:停用账号不回退", () => {
+    createAccount(makeAccount({ name: "停用号", status: "inactive" }));
+
+    expect(resolvePublishAccountId("douyin")).toBeUndefined();
+  });
+
   it("resolvePublishAccountId 显式 > 默认 > undefined", () => {
     const explicit = createAccount(makeAccount({ name: "显式" }));
     const def = createAccount(makeAccount({ name: "默认" }));
