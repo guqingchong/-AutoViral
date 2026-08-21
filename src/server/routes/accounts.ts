@@ -73,11 +73,13 @@ function storeAccountCredentials(accountId: string, platform: string, username?:
 }
 
 /**
- * 按账号触发浏览器登录。发布器 login() 内部仍写旧 platform_credentials 表，
- * 成功后把画像中的 cookie 桥到 account_credentials（账号维度）。
+ * 按账号触发浏览器登录。accountId 透传到发布器:登录直接用该账号的画像目录
+ * (browser-profiles/<platform>/<accountId>),与发布同画像,避免指纹分裂。
+ * 发布器 login() 内部会把 cookie 写入 account_credentials(账号维度);
+ * 下面的旧表桥保留作冗余兜底(登录中途异常时仍可从旧表补齐)。
  */
 async function loginForAccount(account: DbAccount): Promise<boolean> {
-  const ok = await triggerLogin(account.platform);
+  const ok = await triggerLogin(account.platform, account.id);
   if (ok) {
     const legacy = getCredential(normalizePlatformKey(account.platform), "session_cookie");
     if (legacy) setAccountCredential(account.id, "session_cookie", legacy);
