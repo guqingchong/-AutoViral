@@ -100,7 +100,7 @@ function resolvePublisherForWork(platform: string, workType?: string, accountId?
   return resolvePublisher(platform, accountId);
 }
 
-/** 解析发布目标账号:显式 > 平台默认 > undefined(走旧凭证兜底)。显式值非法直接抛错。 */
+/** 解析发布目标账号:显式 > 平台默认 > 平台第一个活跃账号(告警) > undefined(走旧凭证兜底)。显式值非法直接抛错。 */
 export function resolvePublishAccountId(platform: string, accountId?: string): string | undefined {
   if (accountId) {
     const account = getAccount(accountId);
@@ -108,8 +108,17 @@ export function resolvePublishAccountId(platform: string, accountId?: string): s
     if (account.platform !== platform) throw new Error(`账号 ${accountId} 不属于平台 ${platform}`);
     return accountId;
   }
-  const def = listAccountsByPlatform(platform).find((a) => a.is_default === 1);
-  return def?.id;
+  const accounts = listAccountsByPlatform(platform);
+  const def = accounts.find((a) => a.is_default === 1);
+  if (def) return def.id;
+  // 2026-08-21 终审 I2:镜像 resolveAccountCredential 语义——无默认账号时回落第一个
+  // 活跃账号(listAccountsByPlatform 按 is_default DESC, created_at ASC 排序,首个活跃即最早创建)
+  const active = accounts.find((a) => !a.status || a.status === "active");
+  if (active) {
+    console.warn(`[publishing] ${platform} 无默认账号,回落活跃账号 ${active.id}`);
+    return active.id;
+  }
+  return undefined;
 }
 
 export async function publishToPlatform(workId: string, platform: string, input: PublishInput): Promise<PublishRecord> {
