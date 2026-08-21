@@ -71,6 +71,31 @@ describe("resolveAccountCredential", () => {
     expect(warnSpy).toHaveBeenCalled();
   });
 
+  it("③c 活跃账号回落迭代:最早活跃账号无凭证时,取第一个有凭证的活跃账号", () => {
+    addAccount("a-def", "douyin", { isDefault: 1, createdAt: "2026-01-01" }); // 活跃但无凭证
+    addAccount("a-early", "douyin", { isDefault: 0, createdAt: "2026-02-01" }); // 活跃但无凭证
+    addAccount("a-late", "douyin", { isDefault: 0, createdAt: "2026-03-01" });
+    setAccountCredential("a-late", "session_cookie", "late-val");
+
+    expect(resolveAccountCredential("douyin", undefined, "session_cookie")).toBe("late-val");
+    expect(warnSpy).toHaveBeenCalled();
+    const msg = warnSpy.mock.calls[0]?.[0] as string;
+    expect(msg).toContain("无默认账号凭证,回落活跃账号");
+    expect(msg).toContain("a-late");
+  });
+
+  it("③d 全部活跃账号都无凭证 → 落旧表兜底", () => {
+    addAccount("a-def", "douyin", { isDefault: 1, createdAt: "2026-01-01" });
+    addAccount("a-early", "douyin", { isDefault: 0, createdAt: "2026-02-01" });
+    addAccount("a-late", "douyin", { isDefault: 0, createdAt: "2026-03-01" });
+    getDb().prepare(
+      "INSERT INTO platform_credentials (platform, key_type, value) VALUES ('douyin','session_cookie','legacy-val')"
+    ).run();
+
+    expect(resolveAccountCredential("douyin", undefined, "session_cookie")).toBe("legacy-val");
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
   it("④ 新表全无 → 回落旧 platform_credentials", () => {
     addAccount("a1", "douyin", { isDefault: 1 });
     getDb().prepare(
