@@ -132,6 +132,20 @@ describe("works-dashboard — 作品一级分类聚合", () => {
     expect(work.records.every((r: { platform: string }) => r.platform === "douyin")).toBe(true);
   });
 
+  // 2026-08-21 终审顺手项:date-only 的 to(如 2026-08-19)此前按 00:00:00 比较,
+  // 当天发布的记录全部被排除;date-only to 应视为当天结束(含当天记录)
+  it("from/to 过滤:date-only 的 to 含当天记录", async () => {
+    const { r1 } = seed();
+    // r1 published_at = iso(2*DAY),取当天日期;from=to=同一天 → 只应命中 r1
+    const day = iso(2 * DAY).slice(0, 10);
+    const res = await setupApp().request(`/api/analytics/works-dashboard?from=${day}&to=${day}`);
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.works).toHaveLength(1);
+    expect(data.works[0].records).toHaveLength(1);
+    expect(data.works[0].records[0].recordId).toBe(r1.id);
+  });
+
   it("accountId 过滤:只保留该账号的记录", async () => {
     seed();
     const res = await setupApp().request("/api/analytics/works-dashboard?accountId=acc2");
