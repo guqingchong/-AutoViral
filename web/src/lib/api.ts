@@ -79,6 +79,8 @@ export interface Account {
   platform: string;
   tone_profile: Record<string, unknown>;
   status: "active" | "inactive";
+  /** 平台内默认账号标记。后端 GET /api/accounts 原样返回 SQLite 的 is_default(0/1) */
+  is_default?: number;
   created_at: string;
   updated_at: string;
 }
@@ -106,6 +108,16 @@ export async function updateAccountApi(id: string, updates: { name?: string; pla
 
 export async function deleteAccountApi(id: string): Promise<void> {
   await request<{ deleted: boolean }>(`/api/accounts/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+/** 按账号触发浏览器登录（仅 RPA 平台：抖音/小红书/知乎/视频号） */
+export async function loginAccount(accountId: string): Promise<{ success: boolean }> {
+  return post<{ success: boolean }>(`/api/accounts/${encodeURIComponent(accountId)}/login`, {});
+}
+
+/** 设为该平台默认账号（发布未指定 accountId 时后端用它） */
+export async function setDefaultAccount(accountId: string): Promise<{ success: boolean }> {
+  return post<{ success: boolean }>(`/api/accounts/${encodeURIComponent(accountId)}/default`, {});
 }
 
 // ---------------------------------------------------------------------------
@@ -712,6 +724,77 @@ export function triggerCollect(): Promise<Record<string, unknown>> {
   return post<Record<string, unknown>>("/api/analytics/v2/collect", {});
 }
 
+// ---------------------------------------------------------------------------
+// Works Dashboard（作品一级数据看板，2026-08-20 重构 Task 9）
+// ---------------------------------------------------------------------------
+
+export interface WorkDashboardMetrics {
+  views: number;
+  likes: number;
+  comments: number;
+  shares: number;
+  collects: number;
+  completionRate: number | null;
+}
+
+export interface WorkDashboardRecord {
+  recordId: number;
+  platform: string;
+  accountId: string | null;
+  accountName: string | null;
+  status: string;
+  publishedAt: string | null;
+  /** 无指标记录（如 reviewing）为 null，且不计入 totals */
+  metrics: WorkDashboardMetrics | null;
+}
+
+export interface WorkDashboardRow {
+  workId: string;
+  /** 列表接口恒非 null（缺省"未命名"）；详情接口对无记录作品返回 null */
+  title: string | null;
+  workType: string | null;
+  category: string | null;
+  publishedAt: string | null;
+  platforms: string[];
+  /** 各发布记录最新指标求和 */
+  totals: { views: number; likes: number; comments: number; shares: number; collects: number };
+  records: WorkDashboardRecord[];
+}
+
+export interface WorkDashboardSeriesPoint {
+  collectedAt: string;
+  views: number;
+  likes: number;
+  comments: number;
+  shares: number;
+  collects: number;
+}
+
+/** 详情接口响应 = 平铺的 workRow + series（非嵌套） */
+export interface WorkDashboardDetail extends WorkDashboardRow {
+  /** 近 7 天按发布记录分组的采集序列 */
+  series: Array<{ recordId: number; points: WorkDashboardSeriesPoint[] }>;
+}
+
+export function getWorksDashboard(params?: {
+  platform?: string;
+  accountId?: string;
+  from?: string;
+  to?: string;
+}): Promise<{ works: WorkDashboardRow[] }> {
+  const qs = new URLSearchParams();
+  if (params?.platform) qs.set("platform", params.platform);
+  if (params?.accountId) qs.set("accountId", params.accountId);
+  if (params?.from) qs.set("from", params.from);
+  if (params?.to) qs.set("to", params.to);
+  const s = qs.toString();
+  return request<{ works: WorkDashboardRow[] }>(`/api/analytics/works-dashboard${s ? `?${s}` : ""}`);
+}
+
+export function getWorkDashboard(workId: string): Promise<WorkDashboardDetail> {
+  return request<WorkDashboardDetail>(`/api/analytics/works-dashboard/${encodeURIComponent(workId)}`);
+}
+
 export function recomputeBaselines(): Promise<{ ok: boolean }> {
   return post<{ ok: boolean }>("/api/analytics/recompute-baselines", {});
 }
@@ -883,6 +966,8 @@ export interface PublishRecord {
   id: number;
   workId: string;
   platform: string;
+  /** 本次发布使用的账号（2026-08-20 数据看板重构，Task 4 起后端记录） */
+  accountId?: string;
   status: "pending" | "publishing" | "published" | "failed" | "scheduled" | "fallback";
   platformPostId?: string;
   postUrl?: string;
@@ -905,9 +990,13 @@ export interface PublishInput {
 export async function publishWorkToPlatform(
   workId: string,
   platform: string,
-  input?: Partial<PublishInput>,
+  input?: { videoPath?: string; coverPath?: string; title?: string; options?: Record<string, unknown> },
+  accountId?: string,
 ): Promise<PublishRecord> {
-  return post<PublishRecord>(`/api/works/${encodeURIComponent(workId)}/publish/${encodeURIComponent(platform)}`, input ?? {});
+  return post<PublishRecord>(
+    `/api/works/${encodeURIComponent(workId)}/publish/${encodeURIComponent(platform)}`,
+    { ...(input ?? {}), accountId },
+  );
 }
 
 export async function triggerWorkPublishLogin(workId: string, platform: string): Promise<{ success: boolean }> {

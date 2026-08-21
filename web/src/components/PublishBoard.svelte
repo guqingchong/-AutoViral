@@ -13,6 +13,7 @@
   import {
     fetchWorks,
     fetchWorkPublishRecords,
+    fetchAccounts,
     publishWorkToPlatform,
     rejectWork,
     type WorkSummary,
@@ -40,6 +41,11 @@
 
   // 凭证配置状态（platform → configured）
   let credentialStatus = $state<Record<string, { keys: string[]; configured: boolean }>>({});
+
+  // 平台账号（platform → 账号列表）与每平台选中的发布账号（platform → accountId）
+  // 2026-08-20 数据看板重构：发布按账号维度，默认选中 is_default 的账号
+  let accountsByPlatform = $state<Record<string, Array<{ id: string; name: string; isDefault: boolean }>>>({});
+  let selectedAccount = $state<Record<string, string>>({});
 
   // 每个作品的发布记录（待发布 + 已发布栏需要）
   let recordsByWork = $state<Record<string, PublishRecord[]>>({});
@@ -171,6 +177,25 @@
       const res = await fetch("/api/accounts/credential-status");
       const data = await res.json();
       credentialStatus = data.status ?? {};
+    } catch {}
+  }
+
+  /** 拉取账号按平台分组；每平台默认选中 is_default 的账号（无默认则取第一个活跃账号） */
+  async function loadAccounts() {
+    try {
+      const accounts = await fetchAccounts();
+      const grouped: Record<string, Array<{ id: string; name: string; isDefault: boolean }>> = {};
+      for (const a of accounts) {
+        if (a.status && a.status !== "active") continue;
+        (grouped[a.platform] ??= []).push({ id: a.id, name: a.name, isDefault: a.is_default === 1 });
+      }
+      accountsByPlatform = grouped;
+      const sel: Record<string, string> = {};
+      for (const [platform, list] of Object.entries(grouped)) {
+        const def = list.find((a) => a.isDefault) ?? list[0];
+        if (def) sel[platform] = def.id;
+      }
+      selectedAccount = sel;
     } catch {}
   }
 
@@ -314,12 +339,12 @@
     }
   }
 
-  /** 单平台发布。返回是否成功（供一键全发布统计）。 */
+  /** 单平台发布（使用该平台下拉选中的账号；未选/无账号时后端用默认账号或旧凭证兜底）。返回是否成功（供一键全发布统计）。 */
   async function publishOne(workId: string, platform: string, label: string): Promise<boolean> {
     const busyKey = `${workId}:${platform}`;
     publishing = { ...publishing, [busyKey]: true };
     try {
-      const result = await publishWorkToPlatform(workId, platform, {});
+      const result = await publishWorkToPlatform(workId, platform, undefined, selectedAccount[platform]);
       const ok = result.status === "published";
       if (!ok) {
         showMessage("error", `${label} 发布失败：${result.error ?? "未知错误"}`);
@@ -375,7 +400,7 @@
 
   onMount(() => {
     (async () => {
-      await Promise.all([loadWorks(), loadCredentialStatus()]);
+      await Promise.all([loadWorks(), loadCredentialStatus(), loadAccounts()]);
       if (!destroyed) loading = false;
     })();
     // 轮询刷新：打回重做完成（回 reviewing）、发布状态变化都会自动反映到看板
@@ -658,6 +683,16 @@
                   {:else if st.state === "fallback"}
                     <span class="plat-state state-fail">已导出离线包</span>
                   {/if}
+                  {@const accts = accountsByPlatform[p.key] ?? []}
+                  {#if accts.length > 0}
+                    <select class="acct-select" bind:value={selectedAccount[p.key]} title="选择发布账号">
+                      {#each accts as acc}
+                        <option value={acc.id}>{acc.name}{acc.isDefault ? "(默认)" : ""}</option>
+                      {/each}
+                    </select>
+                  {:else}
+                    <span class="plat-state state-dim">该平台未绑账号，将使用旧凭证兜底</span>
+                  {/if}
                   <button
                     class="btn-publish"
                     disabled={publishing[busyKey] || publishAllBusy}
@@ -836,6 +871,7 @@
   .state-dim { color: var(--text-dim); }
   .state-busy { color: var(--state-running); }
   .plat-link { font-size: 0.7rem; color: var(--info); }
+  .acct-select { max-width: 100%; background: var(--bg-inset); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 0.25rem 0.4rem; font-size: 0.72rem; }
   .btn-publish { padding: 0.4rem 1rem; border: none; border-radius: 4px; background: var(--spark-red); color: #fff; cursor: pointer; font-size: 0.8rem; font-weight: 600; }
   .btn-publish:disabled { opacity: 0.5; cursor: not-allowed; }
   .hint-warn { margin-top: 0.75rem; font-size: 0.78rem; color: var(--state-running); }

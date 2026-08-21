@@ -73,9 +73,19 @@
     } catch {}
   }
 
-  /** 登录态健康检查（实测凭证有效性，区分"已配置"与"仍有效"） */
-  interface PlatformHealth { configured: boolean; valid: boolean | null; detail: string }
-  let loginHealth = $state<Record<string, PlatformHealth>>({});
+  /** 登录态健康检查（实测凭证有效性，区分"已配置"与"仍有效"）
+   *  2026-08-20 Task 3 起 GET /api/accounts/login-health 返回 { accounts: AccountHealth[] }（按账号维度） */
+  interface AccountHealth {
+    accountId: string;
+    name: string;
+    platform: string;
+    configured: boolean;
+    valid: boolean | null;
+    detail: string;
+    /** valid === true 的便捷布尔 */
+    healthy: boolean;
+  }
+  let loginHealth = $state<AccountHealth[]>([]);
   let healthLoading = $state(false);
 
   async function loadLoginHealth(force = false) {
@@ -83,23 +93,30 @@
     try {
       const res = await fetch(`/api/accounts/login-health${force ? "?force=1" : ""}`);
       const data = await res.json();
-      loginHealth = data.health ?? {};
+      loginHealth = data.accounts ?? [];
     } catch {} finally { healthLoading = false; }
   }
 
-  /** 健康检查接口的平台键（wechat）→ 显示名 */
-  function healthLabel(key: string): string {
-    return key === "wechat" ? "公众号" : platformLabel(key);
+  /** 平台标题栏徽标数据：聚合该平台全部账号的健康状态（platform 为账号存储键，如 wechat_mp） */
+  function platformHealth(platform: string): { count: number; anyInvalid: boolean; allValid: boolean; detail: string } {
+    const list = loginHealth.filter((a) => a.platform === platform);
+    const invalid = list.filter((a) => a.configured && a.valid === false);
+    return {
+      count: list.length,
+      anyInvalid: invalid.length > 0,
+      allValid: list.length > 0 && invalid.length === 0 && list.some((a) => a.healthy),
+      detail: invalid.map((a) => `${a.name}: ${a.detail}`).join("；"),
+    };
   }
 
-  /** 发布预检：强制实测全部平台，失效平台标红提示 */
+  /** 发布预检：强制实测全部账号，失效账号标红提示 */
   async function handlePrecheck() {
     await loadLoginHealth(true);
-    const bad = Object.entries(loginHealth).filter(([, h]) => h.configured && h.valid === false);
+    const bad = loginHealth.filter((a) => a.configured && !a.healthy);
     if (bad.length === 0) {
-      showMessage("success", "发布预检通过：所有已配置平台登录态有效");
+      showMessage("success", "发布预检通过：所有已配置账号登录态有效");
     } else {
-      showMessage("error", `预检发现 ${bad.length} 个平台登录态失效：${bad.map(([k]) => healthLabel(k)).join("、")}，请重新登录`);
+      showMessage("error", `预检发现 ${bad.length} 个账号登录态失效：${bad.map((a) => `${platformLabel(a.platform)}/${a.name}`).join("、")}，请重新登录`);
     }
   }
 
@@ -288,7 +305,7 @@
       <div class="accounts-grid">
         {#each PLATFORMS as p}
           {@const cred = credentialStatus[credKeyOf(p.key)]}
-          {@const health = loginHealth[credKeyOf(p.key)]}
+          {@const health = platformHealth(p.key)}
           <div class="platform-group">
             <h3 class="platform-title">
               {p.label}
@@ -298,11 +315,11 @@
                   {cred.configured ? "✓ 发布就绪" : "⚠ 未配置凭证"}
                 </span>
               {/if}
-              {#if healthLoading && !health}
+              {#if healthLoading && health.count === 0}
                 <span class="cred-badge cred-checking">登录态检测中…</span>
-              {:else if health?.configured && health.valid === false}
+              {:else if health.anyInvalid}
                 <span class="cred-badge cred-missing" title={health.detail}>✗ 需重新登录</span>
-              {:else if health?.valid === true}
+              {:else if health.allValid}
                 <span class="cred-badge cred-verified" title={health.detail}>✓ 已验证</span>
               {/if}
               {#if CRED_GUIDES[p.key]?.loginBtn}
