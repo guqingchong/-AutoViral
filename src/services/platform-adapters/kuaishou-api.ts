@@ -21,16 +21,22 @@ export class KuaishouAdapter implements PlatformAdapter {
 
   constructor(
     private appId: string = process.env["KUASHOU_APP_ID"] ?? "",
-    private appSecret: string = process.env["KUASHOU_APP_SECRET"] ?? ""
+    private appSecret: string = process.env["KUASHOU_APP_SECRET"] ?? "",
+    private readonly accountId?: string
   ) {}
 
   private async ensureToken(): Promise<string> {
     if (this.accessToken && Date.now() < this.tokenExpiry) {
       return this.accessToken;
     }
-    // 惰性 resolve:账号维度凭证(默认/活跃账号链 + 旧表兜底)优先,构造参数(env)兜底
-    const appId = resolveAccountCredential(this.platform, undefined, "app_id") ?? this.appId;
-    const appSecret = resolveAccountCredential(this.platform, undefined, "app_secret") ?? this.appSecret;
+    // 惰性 resolve:账号维度凭证(指定账号 > 默认/活跃账号链 + 旧表兜底)优先,构造参数(env)兜底
+    const appId = resolveAccountCredential(this.platform, this.accountId, "app_id") ?? this.appId;
+    const appSecret = resolveAccountCredential(this.platform, this.accountId, "app_secret") ?? this.appSecret;
+    if (!appId || !appSecret) {
+      throw new Error(
+        `kuaishou 缺少凭证:未解析到 app_id/app_secret(账号 ${this.accountId ?? "default"};请配置账号凭证或 KUAISHOU_APP_ID/KUAISHOU_APP_SECRET)`
+      );
+    }
     const data = (await apiPost(`${BASE}/oauth2/access_token`, {
       app_id: appId,
       app_secret: appSecret,

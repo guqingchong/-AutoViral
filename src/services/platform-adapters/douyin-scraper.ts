@@ -12,9 +12,15 @@ import { getContext, saveState } from "./playwright-helper.js";
 export class DouyinScraper implements PlatformAdapter {
   readonly platform = "douyin";
   readonly label = "抖音";
+  /** 浏览器 context 键:`douyin:<accountId ?? "default">`,画像目录按账号隔离 */
+  readonly contextKey: string;
+
+  constructor(readonly accountId?: string) {
+    this.contextKey = `douyin:${accountId ?? "default"}`;
+  }
 
   async collectAccountMetrics(): Promise<CollectedMetrics> {
-    const ctx = await getContext("douyin");
+    const ctx = await getContext(this.contextKey);
     const page = await ctx.newPage();
     try {
       await page.goto("https://creator.douyin.com/", {
@@ -41,7 +47,7 @@ export class DouyinScraper implements PlatformAdapter {
   }
 
   async collectPostMetrics(externalId: string): Promise<CollectedMetrics> {
-    const ctx = await getContext("douyin");
+    const ctx = await getContext(this.contextKey);
     const page = await ctx.newPage();
     try {
       await page.goto(`https://creator.douyin.com/content/video/${externalId}`, {
@@ -82,7 +88,7 @@ export class DouyinScraper implements PlatformAdapter {
     externalId: string,
     cursor?: string
   ): Promise<{ comments: CollectedComment[]; nextCursor?: string }> {
-    const ctx = await getContext("douyin");
+    const ctx = await getContext(this.contextKey);
     const page = await ctx.newPage();
     try {
       const pageNum = cursor ? parseInt(cursor, 10) : 1;
@@ -120,7 +126,7 @@ export class DouyinScraper implements PlatformAdapter {
       };
     } finally {
       await page.close();
-      await saveState("douyin");
+      await saveState(this.contextKey);
     }
   }
 
