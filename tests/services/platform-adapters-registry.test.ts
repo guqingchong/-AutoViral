@@ -49,3 +49,23 @@ describe("platform-adapters/registry", () => {
     expect(getAdapter("unknown")).toBeUndefined();
   });
 });
+
+describe("platform key 归一(2026-08-21 终审 C1)", () => {
+  beforeEach(() => {
+    clearRegistry();
+  });
+
+  it("注册 wechat → 用账号侧键 wechat_mp 也能取到(双侧归一)", async () => {
+    const { registerAdapterFactory, getAdapterForAccount, listPlatforms } = await import("../../src/services/platform-adapters/registry.js");
+    registerAdapterFactory("wechat", () => new MockAdapter());
+    expect(getAdapterForAccount("wechat_mp", "acc_1")).toBeDefined();
+    expect(getAdapterForAccount("wechat_mp")).toBeDefined();
+    expect(listPlatforms()).toEqual(["wechat"]);
+  });
+
+  it("注册别名键 wechat_mp 与 wechat 视为同一平台(重复注册报错)", async () => {
+    const { registerAdapterFactory } = await import("../../src/services/platform-adapters/registry.js");
+    registerAdapterFactory("wechat_mp", () => new MockAdapter());
+    expect(() => registerAdapterFactory("wechat", () => new MockAdapter())).toThrow("already registered");
+  });
+});

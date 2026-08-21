@@ -10,6 +10,7 @@
  */
 
 import { getAdapter, getAdapterForAccount, listPlatforms } from "./services/platform-adapters/registry.js";
+import { normalizePlatformKey, toAccountPlatformKey } from "./services/credential-resolver.js";
 import { listPublishRecords } from "./db/publish-records-repo.js";
 import { listAccounts } from "./db/accounts-repo.js";
 import { createMetric, getLatestAccountMetric } from "./db/platform-metrics-repo.js";
@@ -49,6 +50,8 @@ export async function collectAll(options?: string[] | CollectAllOptions): Promis
   };
 
   const targetPlatforms = opts.platforms ?? listPlatforms();
+  // 2026-08-21 终审 C1:平台匹配双侧归一(账号/发布记录用 wechat_mp,注册侧用 wechat)
+  const normalizedTargets = new Set(targetPlatforms.map(normalizePlatformKey));
 
   // 显式指定平台但未注册 adapter → 记录错误(保持旧行为)
   if (opts.platforms) {
@@ -61,10 +64,10 @@ export async function collectAll(options?: string[] | CollectAllOptions): Promis
   const accounts = listAccounts().filter(
     (a) =>
       (!a.status || a.status === "active") &&
-      targetPlatforms.includes(a.platform) &&
+      normalizedTargets.has(normalizePlatformKey(a.platform)) &&
       (!opts.accountId || a.id === opts.accountId)
   );
-  const platformsWithAccounts = new Set(accounts.map((a) => a.platform));
+  const platformsWithAccounts = new Set(accounts.map((a) => normalizePlatformKey(a.platform)));
   for (const account of accounts) {
     const adapter = getAdapterForAccount(account.platform, account.id);
     if (!adapter) continue;
@@ -87,13 +90,14 @@ export async function collectAll(options?: string[] | CollectAllOptions): Promis
   // 无活跃账号的平台回落平台级采集(旧行为;指定 accountId 时不回落)
   if (!opts.accountId) {
     for (const platform of targetPlatforms) {
-      if (platformsWithAccounts.has(platform)) continue;
+      if (platformsWithAccounts.has(normalizePlatformKey(platform))) continue;
       const adapter = getAdapter(platform);
       if (!adapter) continue;
       try {
         const accountMetrics = await adapter.collectAccountMetrics();
         createMetric({
-          platform,
+          // 指标行 platform 统一写账号侧键(wechat → wechat_mp),消除两键混存(终审 M2)
+          platform: toAccountPlatformKey(platform),
           metric_type: "account",
           collected_at: accountMetrics.collectedAt,
           followers: accountMetrics.followers,
@@ -107,7 +111,7 @@ export async function collectAll(options?: string[] | CollectAllOptions): Promis
   }
 
   // Post metrics + comments for published records
-  let records = listPublishRecords({ status: "published" }).filter((r) => targetPlatforms.includes(r.platform));
+  let records = listPublishRecords({ status: "published" }).filter((r) => normalizedTargets.has(normalizePlatformKey(r.platform)));
   if (opts.accountId) records = records.filter((r) => r.account_id === opts.accountId);
   if (opts.workId) records = records.filter((r) => r.work_id === opts.workId);
 

@@ -7,6 +7,11 @@ export function normalizePlatformKey(platform: string): string {
   return platform === "wechat_mp" ? "wechat" : platform;
 }
 
+/** 凭证/注册键 → 账号体系键(wechat 的账号体系键是 wechat_mp;指标行统一写账号侧键,2026-08-21 终审 C1) */
+export function toAccountPlatformKey(platform: string): string {
+  return platform === "wechat" ? "wechat_mp" : platform;
+}
+
 /**
  * 凭证解析(2026-08-20 方案A):指定账号 > 平台默认账号 > 平台任一活跃账号(告警)
  * > 旧 platform_credentials(deprecated 兜底,矩阵改造过渡期保留)。

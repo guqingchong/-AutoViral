@@ -1,4 +1,5 @@
 import type { PlatformAdapter } from "./types.js";
+import { normalizePlatformKey } from "../credential-resolver.js";
 
 /** 旧式直注册实例(无账号维度) */
 const adapters = new Map<string, PlatformAdapter>();
@@ -13,12 +14,14 @@ function instanceCacheKey(platform: string, accountId?: string): string {
 
 /**
  * Register a platform adapter. Called once at server startup for each platform.
+ * 平台键双侧归一(2026-08-21 终审 C1):wechat_mp 等账号侧键与注册侧键 wechat 视为同键。
  */
 export function registerAdapter(adapter: PlatformAdapter): void {
-  if (adapters.has(adapter.platform) || factories.has(adapter.platform)) {
-    throw new Error(`Platform adapter already registered: ${adapter.platform}`);
+  const platform = normalizePlatformKey(adapter.platform);
+  if (adapters.has(platform) || factories.has(platform)) {
+    throw new Error(`Platform adapter already registered: ${platform}`);
   }
-  adapters.set(adapter.platform, adapter);
+  adapters.set(platform, adapter);
 }
 
 /**
@@ -29,31 +32,34 @@ export function registerAdapterFactory(
   platform: string,
   factory: (accountId?: string) => PlatformAdapter
 ): void {
-  if (factories.has(platform) || adapters.has(platform)) {
-    throw new Error(`Platform adapter already registered: ${platform}`);
+  const key = normalizePlatformKey(platform);
+  if (factories.has(key) || adapters.has(key)) {
+    throw new Error(`Platform adapter already registered: ${key}`);
   }
-  factories.set(platform, factory);
+  factories.set(key, factory);
 }
 
 /**
  * Get the adapter instance for a specific account.
  * 实例缓存键 `${platform}:${accountId ?? "default"}`;同参返回同一实例。
  * 平台仅有旧式直注册实例时,按账号获取回落到该共享实例。
+ * platform 入参先归一:账号/发布记录侧键(wechat_mp)与注册键(wechat)等价。
  */
 export function getAdapterForAccount(
   platform: string,
   accountId?: string
 ): PlatformAdapter | undefined {
-  const factory = factories.get(platform);
+  const key = normalizePlatformKey(platform);
+  const factory = factories.get(key);
   if (!factory) {
     // 旧式直注册:无账号维度,共享同一实例
-    return adapters.get(platform);
+    return adapters.get(key);
   }
-  const key = instanceCacheKey(platform, accountId);
-  const cached = instances.get(key);
+  const cacheKey = instanceCacheKey(key, accountId);
+  const cached = instances.get(cacheKey);
   if (cached) return cached;
   const instance = factory(accountId);
-  instances.set(key, instance);
+  instances.set(cacheKey, instance);
   return instance;
 }
 
@@ -66,7 +72,7 @@ export function getAdapter(platform: string): PlatformAdapter | undefined {
 }
 
 /**
- * All registered platform keys.
+ * All registered platform keys (归一后的注册侧键)。
  */
 export function listPlatforms(): string[] {
   const keys = Array.from(adapters.keys());
