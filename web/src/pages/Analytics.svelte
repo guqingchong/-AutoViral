@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { getAnalyticsWorks, getAnalyticsInsights, triggerCollect, recomputeBaselines } from "$lib/api.js";
+  import WorksDashboard from "../components/WorksDashboard.svelte";
 
   // ── Types ──────────────────────────────────────────────────────────────────
   interface AccountInfo {
@@ -426,296 +427,293 @@
         </div>
       {/if}
     </section>
-  </div>
 
-{:else if loading}
-  <div class="center-state">
-    <div class="spinner"></div>
-    <span class="hint-text">加载中…</span>
-  </div>
+    <!-- ── 账号总览(旧版 /api/analytics/creator 看板,Task 12 自「数据看板」tab 挪入,保留可回退)── -->
+    <section class="records-section acct-overview">
+      <h2>账号总览</h2>
 
-{:else if !configured || !creatorData}
-  <!-- ── Empty / Not-configured state ───────────────────────────────────── -->
-  <div class="empty-state">
-    <span class="empty-emoji">☹️</span>
+      {#if loading}
+        <div class="center-state" style="min-height: 140px">
+          <div class="spinner"></div>
+          <span class="hint-text">加载中…</span>
+        </div>
 
-    <!-- Platform tabs -->
-    <div class="platform-switch">
-      <button class="ps-tab" class:active={analyticsPlatform === "douyin"} onclick={() => analyticsPlatform = "douyin"}>抖音</button>
-      <button class="ps-tab" class:active={analyticsPlatform === "xiaohongshu"} onclick={() => analyticsPlatform = "xiaohongshu"}>小红书</button>
-    </div>
+      {:else if !configured || !creatorData}
+        <!-- ── 连接账号引导(原 dashboard 空态)────────────────────────── -->
+        <div class="empty-state compact">
+          <span class="empty-emoji">☹️</span>
 
-    <h2 class="empty-title">
-      {analyticsPlatform === "douyin" ? "连接你的抖音账号" : "连接你的小红书账号"}
-    </h2>
-    <p class="empty-sub">
-      输入账号主页链接，开始采集创作者数据，解锁完整数据看板
-    </p>
+          <!-- Platform tabs -->
+          <div class="platform-switch">
+            <button class="ps-tab" class:active={analyticsPlatform === "douyin"} onclick={() => analyticsPlatform = "douyin"}>抖音</button>
+            <button class="ps-tab" class:active={analyticsPlatform === "xiaohongshu"} onclick={() => analyticsPlatform = "xiaohongshu"}>小红书</button>
+          </div>
 
-    <div class="how-to-get">
-      <span class="how-label">如何获取链接？</span>
-      {#if analyticsPlatform === "douyin"}
-        <ol class="how-steps-list">
-          <li>打开手机抖音</li>
-          <li>点击右上角 <strong>≡</strong></li>
-          <li>选择 <strong>我的二维码</strong></li>
-          <li>右上角 <strong>分享</strong></li>
-          <li><strong>复制链接</strong></li>
-        </ol>
+          <h2 class="empty-title">
+            {analyticsPlatform === "douyin" ? "连接你的抖音账号" : "连接你的小红书账号"}
+          </h2>
+          <p class="empty-sub">
+            输入账号主页链接，开始采集创作者数据，解锁完整数据看板
+          </p>
+
+          <div class="how-to-get">
+            <span class="how-label">如何获取链接？</span>
+            {#if analyticsPlatform === "douyin"}
+              <ol class="how-steps-list">
+                <li>打开手机抖音</li>
+                <li>点击右上角 <strong>≡</strong></li>
+                <li>选择 <strong>我的二维码</strong></li>
+                <li>右上角 <strong>分享</strong></li>
+                <li><strong>复制链接</strong></li>
+              </ol>
+            {:else}
+              <ol class="how-steps-list">
+                <li>打开小红书 App</li>
+                <li>进入 <strong>「我」</strong> 页面</li>
+                <li>点击右上角 <strong>···</strong></li>
+                <li><strong>复制链接</strong></li>
+              </ol>
+            {/if}
+          </div>
+
+          <div class="url-form">
+            <input
+              class="url-input"
+              type="text"
+              placeholder={analyticsPlatform === "douyin"
+                ? "粘贴你的抖音主页链接，如 https://v.douyin.com/xxx/"
+                : "粘贴你的小红书主页链接，如 https://www.xiaohongshu.com/user/xxx"}
+              bind:value={douyinUrlInput}
+              onkeydown={(e) => { if (e.key === "Enter") saveDouyinUrl(); }}
+            />
+            <button class="start-btn" onclick={saveDouyinUrl} disabled={savingUrl || !douyinUrlInput.trim()}>
+              {#if savingUrl}
+                <span class="btn-spinner"></span>
+              {/if}
+              开始采集
+            </button>
+          </div>
+          {#if saveMsg}
+            <p class="save-msg" class:err={saveMsg.includes("失败")}>{saveMsg}</p>
+          {/if}
+        </div>
+
       {:else}
-        <ol class="how-steps-list">
-          <li>打开小红书 App</li>
-          <li>进入 <strong>「我」</strong> 页面</li>
-          <li>点击右上角 <strong>···</strong></li>
-          <li><strong>复制链接</strong></li>
-        </ol>
-      {/if}
-    </div>
+        <!-- ── 创作者数据(原 dashboard 账号总览卡,已删除写死 disabled 的小红书 ptab)── -->
+        <div class="dashboard">
 
-    <div class="url-form">
-      <input
-        class="url-input"
-        type="text"
-        placeholder={analyticsPlatform === "douyin"
-          ? "粘贴你的抖音主页链接，如 https://v.douyin.com/xxx/"
-          : "粘贴你的小红书主页链接，如 https://www.xiaohongshu.com/user/xxx"}
-        bind:value={douyinUrlInput}
-        onkeydown={(e) => { if (e.key === "Enter") saveDouyinUrl(); }}
-      />
-      <button class="start-btn" onclick={saveDouyinUrl} disabled={savingUrl || !douyinUrlInput.trim()}>
-        {#if savingUrl}
-          <span class="btn-spinner"></span>
-        {/if}
-        开始采集
-      </button>
-    </div>
-    {#if saveMsg}
-      <p class="save-msg" class:err={saveMsg.includes("失败")}>{saveMsg}</p>
-    {/if}
+          <!-- 1. Account Header Bar -->
+          <div class="acct-bar">
+            <div class="acct-left">
+              <div class="acct-avatar">
+                {creatorData.account.nickname.slice(0, 1)}
+              </div>
+              <div class="acct-info">
+                <span class="acct-name">{creatorData.account.nickname}</span>
+                <span class="platform-badge">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/></svg>
+                  抖音
+                </span>
+              </div>
+            </div>
+            <div class="acct-right">
+              <span class="acct-collected">上次采集: {timeAgo(creatorData.collected_at)}</span>
+              <button class="refresh-btn" onclick={loadAnalytics} title="刷新数据">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
+              </button>
+              <button class="change-acct-btn" onclick={() => { showUrlEdit = !showUrlEdit; editUrlValue = ""; }} title="更换账号">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+              </button>
+            </div>
+          </div>
+
+          {#if showUrlEdit}
+            <div class="url-edit-bar">
+              <span class="url-edit-hint">手机抖音 → ≡ → 我的二维码 → 分享 → 复制链接</span>
+              <input
+                class="url-edit-input"
+                type="text"
+                placeholder="粘贴抖音主页链接..."
+                bind:value={editUrlValue}
+                onkeydown={(e) => { if (e.key === "Enter" && editUrlValue.trim()) { douyinUrlInput = editUrlValue; saveDouyinUrl(); showUrlEdit = false; } if (e.key === "Escape") showUrlEdit = false; }}
+              />
+              <button class="url-edit-save" disabled={!editUrlValue.trim()} onclick={() => { douyinUrlInput = editUrlValue; saveDouyinUrl(); showUrlEdit = false; }}>
+                保存
+              </button>
+              <button class="url-edit-cancel" onclick={() => showUrlEdit = false}>
+                取消
+              </button>
+            </div>
+          {/if}
+
+          <!-- 2. Key Metrics Row -->
+          <div class="metrics-row">
+
+            <!-- Followers -->
+            <div class="metric-card">
+              <div class="metric-icon followers-icon">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+              </div>
+              <div class="metric-body">
+                <span class="metric-val">{fmtNum(creatorData.account.follower_count)}</span>
+                <span class="metric-label">粉丝</span>
+              </div>
+              {#if delta.followers !== undefined}
+                <span class="delta {deltaClass(delta.followers)}">{deltaLabel(delta.followers)}</span>
+              {/if}
+            </div>
+
+            <!-- Total Favorited -->
+            <div class="metric-card">
+              <div class="metric-icon likes-icon">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+              </div>
+              <div class="metric-body">
+                <span class="metric-val">{fmtNum(creatorData.account.total_favorited)}</span>
+                <span class="metric-label">获赞</span>
+              </div>
+              {#if delta.favorited !== undefined}
+                <span class="delta {deltaClass(delta.favorited)}">{deltaLabel(delta.favorited)}</span>
+              {/if}
+            </div>
+
+            <!-- Avg Play -->
+            <div class="metric-card">
+              <div class="metric-icon play-icon">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              </div>
+              <div class="metric-body">
+                <span class="metric-val">{fmtNum(creatorData.summary.avg_play)}</span>
+                <span class="metric-label">平均播放</span>
+              </div>
+            </div>
+
+            <!-- Engagement Rate -->
+            <div class="metric-card">
+              <div class="metric-icon engage-icon">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+              </div>
+              <div class="metric-body">
+                <span class="metric-val" style="color: {engagementColor(creatorData.summary.engagement_rate)}">
+                  {fmtPct(creatorData.summary.engagement_rate)}
+                </span>
+                <span class="metric-label">互动率</span>
+              </div>
+              <span
+                class="engage-badge"
+                style="background: {engagementColor(creatorData.summary.engagement_rate)}20; color: {engagementColor(creatorData.summary.engagement_rate)}"
+              >
+                {#if creatorData.summary.engagement_rate >= 0.05}优秀{:else if creatorData.summary.engagement_rate >= 0.02}正常{:else}偏低{/if}
+              </span>
+            </div>
+
+          </div>
+
+          <!-- Secondary stats strip -->
+          <div class="strip-row">
+            <div class="strip-item">
+              <span class="strip-val">{creatorData.account.aweme_count}</span>
+              <span class="strip-lbl">发布作品</span>
+            </div>
+            <div class="strip-sep"></div>
+            <div class="strip-item">
+              <span class="strip-val">{creatorData.summary.total_works_collected}</span>
+              <span class="strip-lbl">已采集</span>
+            </div>
+            <div class="strip-sep"></div>
+            <div class="strip-item">
+              <span class="strip-val">{fmtNum(creatorData.summary.avg_digg)}</span>
+              <span class="strip-lbl">均点赞</span>
+            </div>
+            <div class="strip-sep"></div>
+            <div class="strip-item">
+              <span class="strip-val">{creatorData.summary.avg_comment ? fmtNum(creatorData.summary.avg_comment) : "-"}</span>
+              <span class="strip-lbl">均评论</span>
+            </div>
+            <div class="strip-sep"></div>
+            <div class="strip-item">
+              <span class="strip-val">{creatorData.summary.avg_share ? fmtNum(creatorData.summary.avg_share) : "-"}</span>
+              <span class="strip-lbl">均分享</span>
+            </div>
+            <div class="strip-sep"></div>
+            <div class="strip-item">
+              <span class="strip-val">{creatorData.summary.avg_collect ? fmtNum(creatorData.summary.avg_collect) : "-"}</span>
+              <span class="strip-lbl">均收藏</span>
+            </div>
+          </div>
+
+          <!-- 3. Works Performance Table -->
+          <div class="table-card">
+            <div class="table-header">
+              <h3 class="table-title">作品表现</h3>
+              <span class="table-sub">Top 3 已标注爆款</span>
+            </div>
+
+            {#if sortedWorks.length === 0}
+              <p class="empty-msg">暂无作品数据</p>
+            {:else}
+              <div class="table-wrap">
+                <table class="works-table">
+                  <thead>
+                    <tr>
+                      <th class="col-title">标题</th>
+                      <th class="col-date sortable" onclick={() => toggleSort("create_time")}>
+                        日期 {sortCol === "create_time" ? (sortAsc ? "↑" : "↓") : ""}
+                      </th>
+                      <th class="col-num sortable" onclick={() => toggleSort("play_count")}>
+                        播放 {sortCol === "play_count" ? (sortAsc ? "↑" : "↓") : ""}
+                      </th>
+                      <th class="col-num sortable" onclick={() => toggleSort("digg_count")}>
+                        点赞 {sortCol === "digg_count" ? (sortAsc ? "↑" : "↓") : ""}
+                      </th>
+                      <th class="col-num sortable" onclick={() => toggleSort("comment_count")}>
+                        评论 {sortCol === "comment_count" ? (sortAsc ? "↑" : "↓") : ""}
+                      </th>
+                      <th class="col-num sortable" onclick={() => toggleSort("share_count")}>
+                        分享 {sortCol === "share_count" ? (sortAsc ? "↑" : "↓") : ""}
+                      </th>
+                      <th class="col-bar">热度</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {#each sortedWorks as work, i}
+                      <tr class="work-row" class:top3={i < 3}>
+                        <td class="col-title">
+                          {#if i < 3}
+                            <span class="hot-badge">爆</span>
+                          {/if}
+                          <span class="work-desc" title={work.desc}>{work.desc || "（无标题）"}</span>
+                        </td>
+                        <td class="col-date muted">{fmtDate(work.create_time)}</td>
+                        <td class="col-num">{fmtNum(work.play_count)}</td>
+                        <td class="col-num">{fmtNum(work.digg_count)}</td>
+                        <td class="col-num">{work.comment_count ? fmtNum(work.comment_count) : "-"}</td>
+                        <td class="col-num">{work.share_count ? fmtNum(work.share_count) : "-"}</td>
+                        <td class="col-bar">
+                          <div class="bar-track">
+                            <div
+                              class="bar-fill"
+                              class:bar-top={i < 3}
+                              style="width: {Math.round((work.play_count / maxPlay) * 100)}%"
+                            ></div>
+                          </div>
+                        </td>
+                      </tr>
+                    {/each}
+                  </tbody>
+                </table>
+              </div>
+            {/if}
+          </div>
+
+        </div>
+      {/if}
+    </section>
   </div>
 
 {:else}
-  <!-- ── Dashboard ──────────────────────────────────────────────────────── -->
-  <div class="dashboard">
-
-    <!-- 0. Platform tabs -->
-    <div class="platform-tabs">
-      <button class="ptab active">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12a4 4 0 1 0 4 4V4a5 5 0 0 0 5 5"/></svg>
-        抖音
-      </button>
-      <button class="ptab disabled" disabled title="即将支持">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="M8 12h8M12 8v8"/></svg>
-        小红书
-        <span class="coming-soon">即将支持</span>
-      </button>
-    </div>
-
-    <!-- 1. Account Header Bar -->
-    <div class="acct-bar">
-      <div class="acct-left">
-        <div class="acct-avatar">
-          {creatorData.account.nickname.slice(0, 1)}
-        </div>
-        <div class="acct-info">
-          <span class="acct-name">{creatorData.account.nickname}</span>
-          <span class="platform-badge">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/></svg>
-            抖音
-          </span>
-        </div>
-      </div>
-      <div class="acct-right">
-        <span class="acct-collected">上次采集: {timeAgo(creatorData.collected_at)}</span>
-        <button class="refresh-btn" onclick={loadAnalytics} title="刷新数据">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
-        </button>
-        <button class="change-acct-btn" onclick={() => { showUrlEdit = !showUrlEdit; editUrlValue = ""; }} title="更换账号">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-        </button>
-      </div>
-    </div>
-
-    {#if showUrlEdit}
-      <div class="url-edit-bar">
-        <span class="url-edit-hint">手机抖音 → ≡ → 我的二维码 → 分享 → 复制链接</span>
-        <input
-          class="url-edit-input"
-          type="text"
-          placeholder="粘贴抖音主页链接..."
-          bind:value={editUrlValue}
-          onkeydown={(e) => { if (e.key === "Enter" && editUrlValue.trim()) { douyinUrlInput = editUrlValue; saveDouyinUrl(); showUrlEdit = false; } if (e.key === "Escape") showUrlEdit = false; }}
-        />
-        <button class="url-edit-save" disabled={!editUrlValue.trim()} onclick={() => { douyinUrlInput = editUrlValue; saveDouyinUrl(); showUrlEdit = false; }}>
-          保存
-        </button>
-        <button class="url-edit-cancel" onclick={() => showUrlEdit = false}>
-          取消
-        </button>
-      </div>
-    {/if}
-
-    <!-- 2. Key Metrics Row -->
-    <div class="metrics-row">
-
-      <!-- Followers -->
-      <div class="metric-card">
-        <div class="metric-icon followers-icon">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-        </div>
-        <div class="metric-body">
-          <span class="metric-val">{fmtNum(creatorData.account.follower_count)}</span>
-          <span class="metric-label">粉丝</span>
-        </div>
-        {#if delta.followers !== undefined}
-          <span class="delta {deltaClass(delta.followers)}">{deltaLabel(delta.followers)}</span>
-        {/if}
-      </div>
-
-      <!-- Total Favorited -->
-      <div class="metric-card">
-        <div class="metric-icon likes-icon">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
-        </div>
-        <div class="metric-body">
-          <span class="metric-val">{fmtNum(creatorData.account.total_favorited)}</span>
-          <span class="metric-label">获赞</span>
-        </div>
-        {#if delta.favorited !== undefined}
-          <span class="delta {deltaClass(delta.favorited)}">{deltaLabel(delta.favorited)}</span>
-        {/if}
-      </div>
-
-      <!-- Avg Play -->
-      <div class="metric-card">
-        <div class="metric-icon play-icon">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-        </div>
-        <div class="metric-body">
-          <span class="metric-val">{fmtNum(creatorData.summary.avg_play)}</span>
-          <span class="metric-label">平均播放</span>
-        </div>
-      </div>
-
-      <!-- Engagement Rate -->
-      <div class="metric-card">
-        <div class="metric-icon engage-icon">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-        </div>
-        <div class="metric-body">
-          <span class="metric-val" style="color: {engagementColor(creatorData.summary.engagement_rate)}">
-            {fmtPct(creatorData.summary.engagement_rate)}
-          </span>
-          <span class="metric-label">互动率</span>
-        </div>
-        <span
-          class="engage-badge"
-          style="background: {engagementColor(creatorData.summary.engagement_rate)}20; color: {engagementColor(creatorData.summary.engagement_rate)}"
-        >
-          {#if creatorData.summary.engagement_rate >= 0.05}优秀{:else if creatorData.summary.engagement_rate >= 0.02}正常{:else}偏低{/if}
-        </span>
-      </div>
-
-    </div>
-
-    <!-- Secondary stats strip -->
-    <div class="strip-row">
-      <div class="strip-item">
-        <span class="strip-val">{creatorData.account.aweme_count}</span>
-        <span class="strip-lbl">发布作品</span>
-      </div>
-      <div class="strip-sep"></div>
-      <div class="strip-item">
-        <span class="strip-val">{creatorData.summary.total_works_collected}</span>
-        <span class="strip-lbl">已采集</span>
-      </div>
-      <div class="strip-sep"></div>
-      <div class="strip-item">
-        <span class="strip-val">{fmtNum(creatorData.summary.avg_digg)}</span>
-        <span class="strip-lbl">均点赞</span>
-      </div>
-      <div class="strip-sep"></div>
-      <div class="strip-item">
-        <span class="strip-val">{creatorData.summary.avg_comment ? fmtNum(creatorData.summary.avg_comment) : "-"}</span>
-        <span class="strip-lbl">均评论</span>
-      </div>
-      <div class="strip-sep"></div>
-      <div class="strip-item">
-        <span class="strip-val">{creatorData.summary.avg_share ? fmtNum(creatorData.summary.avg_share) : "-"}</span>
-        <span class="strip-lbl">均分享</span>
-      </div>
-      <div class="strip-sep"></div>
-      <div class="strip-item">
-        <span class="strip-val">{creatorData.summary.avg_collect ? fmtNum(creatorData.summary.avg_collect) : "-"}</span>
-        <span class="strip-lbl">均收藏</span>
-      </div>
-    </div>
-
-    <!-- 3. Works Performance Table -->
-    <div class="table-card">
-      <div class="table-header">
-        <h3 class="table-title">作品表现</h3>
-        <span class="table-sub">Top 3 已标注爆款</span>
-      </div>
-
-      {#if sortedWorks.length === 0}
-        <p class="empty-msg">暂无作品数据</p>
-      {:else}
-        <div class="table-wrap">
-          <table class="works-table">
-            <thead>
-              <tr>
-                <th class="col-title">标题</th>
-                <th class="col-date sortable" onclick={() => toggleSort("create_time")}>
-                  日期 {sortCol === "create_time" ? (sortAsc ? "↑" : "↓") : ""}
-                </th>
-                <th class="col-num sortable" onclick={() => toggleSort("play_count")}>
-                  播放 {sortCol === "play_count" ? (sortAsc ? "↑" : "↓") : ""}
-                </th>
-                <th class="col-num sortable" onclick={() => toggleSort("digg_count")}>
-                  点赞 {sortCol === "digg_count" ? (sortAsc ? "↑" : "↓") : ""}
-                </th>
-                <th class="col-num sortable" onclick={() => toggleSort("comment_count")}>
-                  评论 {sortCol === "comment_count" ? (sortAsc ? "↑" : "↓") : ""}
-                </th>
-                <th class="col-num sortable" onclick={() => toggleSort("share_count")}>
-                  分享 {sortCol === "share_count" ? (sortAsc ? "↑" : "↓") : ""}
-                </th>
-                <th class="col-bar">热度</th>
-              </tr>
-            </thead>
-            <tbody>
-              {#each sortedWorks as work, i}
-                <tr class="work-row" class:top3={i < 3}>
-                  <td class="col-title">
-                    {#if i < 3}
-                      <span class="hot-badge">爆</span>
-                    {/if}
-                    <span class="work-desc" title={work.desc}>{work.desc || "（无标题）"}</span>
-                  </td>
-                  <td class="col-date muted">{fmtDate(work.create_time)}</td>
-                  <td class="col-num">{fmtNum(work.play_count)}</td>
-                  <td class="col-num">{fmtNum(work.digg_count)}</td>
-                  <td class="col-num">{work.comment_count ? fmtNum(work.comment_count) : "-"}</td>
-                  <td class="col-num">{work.share_count ? fmtNum(work.share_count) : "-"}</td>
-                  <td class="col-bar">
-                    <div class="bar-track">
-                      <div
-                        class="bar-fill"
-                        class:bar-top={i < 3}
-                        style="width: {Math.round((work.play_count / maxPlay) * 100)}%"
-                      ></div>
-                    </div>
-                  </td>
-                </tr>
-              {/each}
-            </tbody>
-          </table>
-        </div>
-      {/if}
-    </div>
-
-  </div>
+  <!-- ── 数据看板:作品一级分类(Task 12, WorksDashboard)───────────── -->
+  <WorksDashboard />
 {/if}
 
 <style>
@@ -883,6 +881,12 @@
   .empty-emoji {
     font-size: 3.5rem;
     line-height: 1;
+  }
+
+  /* 挪入「数据回收」tab 的连接账号引导:去掉全屏高度 */
+  .empty-state.compact {
+    min-height: 0;
+    padding: 1.5rem 1rem;
   }
 
   .platform-switch {
