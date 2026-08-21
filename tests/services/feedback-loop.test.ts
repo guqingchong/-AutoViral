@@ -1,5 +1,7 @@
 /**
  * P3-T4 数据回流测试（2026-08-18）：三率计算 / 48h 门槛 / 品类×情绪权重。
+ * 2026-08-21 Task 10:48h 回流从按记录改为按作品聚合(跨平台跨账号),
+ * topic_scores 每作品每天一行(platform='all'),三率按合计加权。
  */
 import { describe, it, expect, beforeAll } from "vitest";
 import { mkdtempSync } from "node:fs";
@@ -61,6 +63,39 @@ describe("feedback-loop", () => {
     expect(yule!.weight).toBeLessThan(1);
     expect(getTopicWeight("城投", "信息价值")).toBe(cheng!.weight);
     expect(getTopicWeight("不存在品类")).toBe(1);
+  });
+
+  // 2026-08-21 Task 10:跨平台跨账号按作品汇总——单行 platform='all',加权率,同日幂等
+  it("collectFeedback:同作品多平台多账号记录汇总为一行 platform='all',三率按合计加权,同日重跑幂等", () => {
+    const db = getDb();
+    const old = "2020-06-01T00:00:00Z";
+    db.prepare(`INSERT INTO works (id, title, type, status, platforms, created_at, updated_at, topic_category, emotion_type)
+                VALUES ('w_multi', 'w_multi', 'short-video', 'published', '[]', ?, ?, '城投', '信息价值')`)
+      .run(old, old);
+    // 平台 A(douyin/账号1):views=1000 likes=50;平台 B(xiaohongshu/账号2):views=2000 likes=150
+    const prA = db.prepare(`INSERT INTO publish_records (work_id, platform, account_id, status, published_at)
+                            VALUES ('w_multi', 'douyin', 'acc_1', 'published', ?)`).run(old);
+    const prB = db.prepare(`INSERT INTO publish_records (work_id, platform, account_id, status, published_at)
+                            VALUES ('w_multi', 'xiaohongshu', 'acc_2', 'published', ?)`).run(old);
+    const insM = db.prepare(`INSERT INTO platform_metrics (publish_record_id, platform, metric_type, collected_at, views, likes, comments, shares, collects, completion_rate, raw_data)
+                             VALUES (?, ?, 'work', ?, ?, ?, 0, 0, 0, NULL, '{}')`);
+    insM.run(prA.lastInsertRowid, 'douyin', old, 1000, 50);
+    insM.run(prB.lastInsertRowid, 'xiaohongshu', old, 2000, 150);
+
+    collectFeedback();
+    // ① 仅一行,platform='all',views=3000(跨记录求和)
+    let rows = db.prepare(`SELECT * FROM topic_scores WHERE work_id = 'w_multi'`).all() as any[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0].platform).toBe("all");
+    expect(rows[0].views).toBe(3000);
+    // ② like_rate = 200/3000(按合计加权,不是两率取平均 (0.05+0.075)/2=0.0625)
+    expect(rows[0].like_rate).toBeCloseTo(200 / 3000, 10);
+    expect(rows[0].like_rate).not.toBeCloseTo((50 / 1000 + 150 / 2000) / 2, 10);
+    // ③ 同日再跑幂等(先删后插,仍一行)
+    collectFeedback();
+    rows = db.prepare(`SELECT * FROM topic_scores WHERE work_id = 'w_multi'`).all() as any[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0].views).toBe(3000);
   });
 
   // 2026-08-19 m9:三率按用途聚合反哺 purpose_skills 权重
