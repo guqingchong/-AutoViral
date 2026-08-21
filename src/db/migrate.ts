@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { getDb } from "./connection.js";
 
 export const MIGRATIONS: Array<{ version: number; name: string; sql: string }> = [
@@ -789,6 +790,30 @@ CREATE TABLE IF NOT EXISTS purpose_performance (
 );
 `,
   },
+  {
+    version: 29,
+    name: "account_credentials_and_account_dimension",
+    sql: `
+-- 2026-08-20 数据看板重构(方案A):账号成为一等公民。
+-- account_credentials 取代 platform_credentials 成为凭证唯一事实源,
+-- 去重键从 (platform, key_type) 降为 (account_id, key_type),支持一平台多账号。
+CREATE TABLE IF NOT EXISTS account_credentials (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  key_type TEXT NOT NULL,
+  value TEXT,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(account_id, key_type)
+);
+CREATE INDEX IF NOT EXISTS idx_account_credentials_account ON account_credentials(account_id);
+
+ALTER TABLE publish_records ADD COLUMN account_id TEXT;
+ALTER TABLE platform_metrics ADD COLUMN account_id TEXT;
+ALTER TABLE accounts ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE topic_scores ADD COLUMN platform TEXT NOT NULL DEFAULT 'all';
+CREATE INDEX IF NOT EXISTS idx_publish_records_account ON publish_records(account_id);
+`,
+  },
 ];
 
 export function migrate(): void {
@@ -815,4 +840,45 @@ export function migrate(): void {
       );
     })();
   }
+
+  backfillV29Accounts();
+}
+
+/** v29 数据回填(幂等):旧 platform_credentials → 各平台默认账号的 account_credentials;
+ *  publish_records.account_id 回填为该平台默认账号。 */
+export function backfillV29Accounts(): void {
+  const db = getDb();
+  const hasTable = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='account_credentials'").get();
+  if (!hasTable) return;
+
+  const platforms = db.prepare("SELECT DISTINCT platform FROM platform_credentials").pluck().all() as string[];
+  for (const platform of platforms) {
+    // 别名归一:platform_credentials 里 wechat_mp 账号体系的凭证存在 wechat 键下,
+    // accounts 查询/占位账号用归一后的 accountPlatform,凭证搬迁仍用原 platform。
+    const accountPlatform = platform === "wechat" ? "wechat_mp" : platform;
+    // 该平台没有账号 → 建占位账号;有 → 取最早创建的一个
+    let account = db.prepare("SELECT id FROM accounts WHERE platform = ? ORDER BY created_at ASC LIMIT 1").get(accountPlatform) as { id: string } | undefined;
+    if (!account) {
+      const id = randomUUID();
+      const now = new Date().toISOString();
+      db.prepare("INSERT INTO accounts (id, name, platform, tone_profile, status, created_at, updated_at) VALUES (?, ?, ?, '{}', 'active', ?, ?)")
+        .run(id, `默认账号-${accountPlatform}`, accountPlatform, now, now);
+      account = { id };
+    }
+    // 每平台保证恰有一个默认账号(此前无条件)
+    db.prepare("UPDATE accounts SET is_default = 0 WHERE platform = ?").run(accountPlatform);
+    db.prepare("UPDATE accounts SET is_default = 1 WHERE id = ?").run(account.id);
+    // 凭证搬迁:旧表值不覆盖新表已有值(幂等 + 保护已手工配置的新凭证)
+    db.prepare(`
+      INSERT INTO account_credentials (account_id, key_type, value, updated_at)
+      SELECT ?, key_type, value, updated_at FROM platform_credentials WHERE platform = ?
+      ON CONFLICT(account_id, key_type) DO NOTHING
+    `).run(account.id, platform);
+  }
+  // 历史发布记录回填默认账号(只补 NULL)
+  db.prepare(`
+    UPDATE publish_records SET account_id = (
+      SELECT id FROM accounts WHERE accounts.platform = publish_records.platform AND is_default = 1 LIMIT 1
+    ) WHERE account_id IS NULL
+  `).run();
 }
