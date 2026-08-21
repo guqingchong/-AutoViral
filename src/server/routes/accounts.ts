@@ -2,9 +2,11 @@ import { Hono } from "hono";
 import { randomUUID } from "node:crypto";
 import * as accountsRepo from "../../db/accounts-repo.js";
 import { AccountReferencedError } from "../../db/accounts-repo.js";
-import { setCredential, getCredentialsByPlatform } from "../../db/platform-credentials-repo.js";
+import { getCredential, getCredentialsByPlatform } from "../../db/platform-credentials-repo.js";
+import { setAccountCredential } from "../../db/account-credentials-repo.js";
+import { normalizePlatformKey } from "../../services/credential-resolver.js";
 import { triggerLogin } from "../../services/publishing.js";
-import { verifyAllPlatforms } from "../../services/login-health.js";
+import { verifyAllAccounts } from "../../services/login-health.js";
 import type { DbAccount } from "../../db/types.js";
 
 export const accountsRoutes = new Hono();
@@ -13,8 +15,9 @@ export const accountsRoutes = new Hono();
 const RPA_PLATFORMS = new Set(["douyin", "xiaohongshu", "channels", "zhihu"]);
 
 /**
- * 账号凭证桥接：把 accounts 表中的凭证字段同步到发布器实际读取的
- * platform_credentials 表（此前两张表零同步，填了账号密码发布器看不到）。
+ * 账号凭证入库：凭证落 account_credentials（账号维度，2026-08-20 数据看板重构）。
+ * 此前桥接到 platform_credentials 旧表，同平台第二个账号会顶掉第一个的 cookie；
+ * 旧表不再由本路由写入（保留作 deprecated 兜底，见 credential-resolver）。
  *
  * 字段约定（UI 引导用户按此填写）：
  * - RPA 平台：cookie 字段粘贴浏览器导出的 cookie（JSON 数组或 cookie 字符串均可，
@@ -25,48 +28,61 @@ const RPA_PLATFORMS = new Set(["douyin", "xiaohongshu", "channels", "zhihu"]);
  *   若持有有效 OAuth token 也可填 access_token 走官方 API（见下方兼容分支）
  * - B站：cookie 字段粘贴完整 cookie（自动解析 SESSDATA/bili_jct）或仅 SESSDATA
  */
-function bridgeAccountCredentials(platform: string, username?: string | null, cookie?: string | null): string[] {
-  const bridged: string[] = [];
+function storeAccountCredentials(accountId: string, platform: string, username?: string | null, cookie?: string | null): string[] {
+  const stored: string[] = [];
   const cookieVal = (cookie ?? "").trim();
   const userVal = (username ?? "").trim();
 
   if (RPA_PLATFORMS.has(platform)) {
     if (cookieVal) {
-      setCredential(platform, "session_cookie", cookieVal);
-      bridged.push(`${platform}/session_cookie`);
+      setAccountCredential(accountId, "session_cookie", cookieVal);
+      stored.push(`${platform}/session_cookie`);
       // 知乎兼容：若填的不是 cookie JSON 而是 OAuth access_token，同步给官方 API 发布器
       if (platform === "zhihu" && !cookieVal.startsWith("[")) {
-        setCredential("zhihu", "access_token", cookieVal);
-        bridged.push("zhihu/access_token");
+        setAccountCredential(accountId, "access_token", cookieVal);
+        stored.push("zhihu/access_token");
       }
     }
-    return bridged;
+    return stored;
   }
 
   if (platform === "wechat_mp") {
-    if (userVal) { setCredential("wechat", "app_id", userVal); bridged.push("wechat/app_id"); }
-    if (cookieVal) { setCredential("wechat", "app_secret", cookieVal); bridged.push("wechat/app_secret"); }
-    return bridged;
+    if (userVal) { setAccountCredential(accountId, "app_id", userVal); stored.push("wechat/app_id"); }
+    if (cookieVal) { setAccountCredential(accountId, "app_secret", cookieVal); stored.push("wechat/app_secret"); }
+    return stored;
   }
 
   if (platform === "kuaishou") {
-    if (userVal) { setCredential("kuaishou", "app_id", userVal); bridged.push("kuaishou/app_id"); }
-    if (cookieVal) { setCredential("kuaishou", "app_secret", cookieVal); bridged.push("kuaishou/app_secret"); }
-    return bridged;
+    if (userVal) { setAccountCredential(accountId, "app_id", userVal); stored.push("kuaishou/app_id"); }
+    if (cookieVal) { setAccountCredential(accountId, "app_secret", cookieVal); stored.push("kuaishou/app_secret"); }
+    return stored;
   }
 
   if (platform === "bilibili") {
     if (cookieVal) {
       const sess = cookieVal.match(/SESSDATA=([^;]+)/)?.[1];
       const csrf = cookieVal.match(/bili_jct=([^;]+)/)?.[1];
-      if (sess) { setCredential("bilibili", "access_token", sess); bridged.push("bilibili/access_token"); }
-      if (csrf) { setCredential("bilibili", "csrf", csrf); bridged.push("bilibili/csrf"); }
-      if (!sess) { setCredential("bilibili", "access_token", cookieVal); bridged.push("bilibili/access_token"); }
+      if (sess) { setAccountCredential(accountId, "access_token", sess); stored.push("bilibili/access_token"); }
+      if (csrf) { setAccountCredential(accountId, "csrf", csrf); stored.push("bilibili/csrf"); }
+      if (!sess) { setAccountCredential(accountId, "access_token", cookieVal); stored.push("bilibili/access_token"); }
     }
-    return bridged;
+    return stored;
   }
 
-  return bridged;
+  return stored;
+}
+
+/**
+ * 按账号触发浏览器登录。发布器 login() 内部仍写旧 platform_credentials 表，
+ * 成功后把画像中的 cookie 桥到 account_credentials（账号维度）。
+ */
+async function loginForAccount(account: DbAccount): Promise<boolean> {
+  const ok = await triggerLogin(account.platform);
+  if (ok) {
+    const legacy = getCredential(normalizePlatformKey(account.platform), "session_cookie");
+    if (legacy) setAccountCredential(account.id, "session_cookie", legacy);
+  }
+  return ok;
 }
 
 // GET / — list all accounts
@@ -92,12 +108,13 @@ accountsRoutes.get("/credential-status", (c) => {
   return c.json({ status });
 });
 
-// GET /login-health — 实测各平台登录态是否仍然有效（?force=1 跳过 10 分钟缓存）
+// GET /login-health — 实测各账号登录态是否仍然有效（?force=1 跳过 10 分钟缓存）
+// 2026-08-20 Task 3:按账号维度返回(原按平台)。
 accountsRoutes.get("/login-health", async (c) => {
   const force = c.req.query("force") === "1";
   try {
-    const health = await verifyAllPlatforms(force);
-    return c.json({ health });
+    const accounts = await verifyAllAccounts(force);
+    return c.json({ accounts });
   } catch (err) {
     return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
   }
@@ -138,8 +155,8 @@ accountsRoutes.post("/", async (c) => {
     created_at: now,
     updated_at: now,
   });
-  const bridged = bridgeAccountCredentials(body.platform, body.username, body.cookie);
-  return c.json({ ...account, bridgedCredentials: bridged }, 201);
+  const stored = storeAccountCredentials(account.id, body.platform, body.username, body.cookie);
+  return c.json({ ...account, bridgedCredentials: stored }, 201);
 });
 
 // PUT /:id — update account
@@ -156,19 +173,41 @@ accountsRoutes.put("/:id", async (c) => {
   if (body.cookie !== undefined) updates.cookie = body.cookie;
   const account = accountsRepo.updateAccount(id, updates);
   if (!account) return c.json({ error: "Account not found" }, 404);
-  const platform = account.platform;
-  const bridged = bridgeAccountCredentials(platform, account.username, account.cookie);
-  return c.json({ ...account, bridgedCredentials: bridged });
+  const stored = storeAccountCredentials(account.id, account.platform, account.username, account.cookie);
+  return c.json({ ...account, bridgedCredentials: stored });
 });
 
-// POST /login/:platform — 触发浏览器登录（RPA 平台：人工登录一次后 cookie 自动入库）
+// POST /:id/default — 设为该平台默认账号
+accountsRoutes.post("/:id/default", (c) => {
+  const account = accountsRepo.getAccount(c.req.param("id"));
+  if (!account) return c.json({ error: "Account not found" }, 404);
+  accountsRepo.setDefaultAccount(account.platform, account.id);
+  return c.json({ success: true });
+});
+
+// POST /:id/login — 按账号触发浏览器登录（仅 RPA 平台）
+accountsRoutes.post("/:id/login", async (c) => {
+  const account = accountsRepo.getAccount(c.req.param("id"));
+  if (!account) return c.json({ error: "Account not found" }, 404);
+  if (!RPA_PLATFORMS.has(account.platform)) return c.json({ error: "该平台不支持浏览器登录" }, 400);
+  try {
+    const ok = await loginForAccount(account);
+    return c.json({ success: ok });
+  } catch (err) {
+    return c.json({ success: false, error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// POST /login/:platform — 旧端点保留:转发到该平台默认账号(无账号时退化为原平台级登录)
 accountsRoutes.post("/login/:platform", async (c) => {
   const platform = c.req.param("platform");
-  if (!["douyin", "xiaohongshu", "zhihu", "channels"].includes(platform)) {
+  if (!RPA_PLATFORMS.has(platform)) {
     return c.json({ error: "该平台不支持浏览器登录（仅抖音/小红书/知乎/视频号支持）" }, 400);
   }
   try {
-    const ok = await triggerLogin(platform);
+    const target = accountsRepo.listAccountsByPlatform(platform)
+      .find((a) => !a.status || a.status === "active");
+    const ok = target ? await loginForAccount(target) : await triggerLogin(platform);
     return c.json({ success: ok });
   } catch (err) {
     return c.json({ success: false, error: err instanceof Error ? err.message : String(err) });

@@ -21,6 +21,7 @@ function rowToAccount(row: Record<string, unknown>): DbAccount {
     username: (row.username as string) || undefined,
     password: (row.password as string) || undefined,
     cookie: (row.cookie as string) || undefined,
+    is_default: row.is_default as number | undefined,
     created_at: row.created_at as string,
     updated_at: row.updated_at as string,
   };
@@ -58,6 +59,22 @@ export function listAccounts(): DbAccount[] {
   const db = getDb();
   const rows = db.prepare("SELECT * FROM accounts ORDER BY updated_at DESC").all() as Record<string, unknown>[];
   return rows.map(rowToAccount);
+}
+
+/** 按平台列出账号,默认账号优先,其次按创建时间升序。 */
+export function listAccountsByPlatform(platform: string): DbAccount[] {
+  const db = getDb();
+  const rows = db.prepare("SELECT * FROM accounts WHERE platform = ? ORDER BY is_default DESC, created_at ASC").all(platform) as Record<string, unknown>[];
+  return rows.map(rowToAccount);
+}
+
+/** 设置平台默认账号(同事务:该平台全清 0 再置 1)。 */
+export function setDefaultAccount(platform: string, accountId: string): void {
+  const db = getDb();
+  db.transaction(() => {
+    db.prepare("UPDATE accounts SET is_default = 0 WHERE platform = ?").run(platform);
+    db.prepare("UPDATE accounts SET is_default = 1 WHERE id = ?").run(accountId);
+  })();
 }
 
 export function updateAccount(id: string, updates: Partial<DbAccount>): DbAccount | undefined {
