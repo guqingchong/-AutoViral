@@ -48,24 +48,31 @@ export function computeRates(m: {
   };
 }
 
-/** 主入口:发布满 48h 的 publish_records → 最新 post 指标 → topic_scores(幂等:同作品同日先删后插) */
+/** 主入口:发布满 48h 的 publish_records → 最新作品级指标 → 按作品跨平台跨账号汇总 → topic_scores
+ *  (每作品每天一行,platform='all';幂等:同作品同日先删后插) */
 export function collectFeedback(): { processed: number; skipped: number } {
   const db = getDb();
-  // 发布满 48h 且有作品级指标的记录;每记录取最新一条作品级指标
-  // 2026-08-19 修复:写入方(analytics-scheduler)用 metric_type='work',
+  // 2026-08-21 Task 10:按记录回流改为按作品聚合——
+  // 内层取每条记录最新一条作品级指标(metric_type='work',同 Task 9 works-dashboard 写法),
+  // 外层按 work_id 聚合:views/likes 等跨该作品全部 published 记录求和,三率按合计加权。
+  // 历史教训:写入方(analytics-scheduler)用 metric_type='work',
   // 此处曾误写 'post'(类型系统里不存在该值)导致回流死链、topic_scores 永空
   const rows = db.prepare(`
-    SELECT pr.work_id, pr.published_at, w.topic_id, w.topic_category, w.emotion_type,
-           pm.views, pm.likes, pm.comments, pm.shares, pm.collects, pm.completion_rate
+    SELECT pr.work_id,
+           MIN(w.topic_id) AS topic_id, MIN(w.topic_category) AS topic_category, MIN(w.emotion_type) AS emotion_type,
+           SUM(pm.views) AS views, SUM(pm.likes) AS likes, SUM(pm.comments) AS comments,
+           SUM(pm.shares) AS shares, SUM(pm.collects) AS collects,
+           AVG(pm.completion_rate) AS completion_rate
     FROM publish_records pr
     JOIN works w ON w.id = pr.work_id
-    JOIN platform_metrics pm ON pm.publish_record_id = pr.id
+    JOIN platform_metrics pm ON pm.id = (
+      SELECT id FROM platform_metrics WHERE publish_record_id = pr.id AND metric_type = 'work'
+      ORDER BY collected_at DESC LIMIT 1
+    )
     WHERE pr.status = 'published'
       AND pr.published_at IS NOT NULL
       AND datetime(pr.published_at) <= datetime('now', '-48 hours')
-      AND pm.metric_type = 'work'
-    GROUP BY pr.id
-    HAVING MAX(pm.collected_at)
+    GROUP BY pr.work_id
   `).all() as Array<Record<string, unknown>>;
 
   let processed = 0;
@@ -79,10 +86,10 @@ export function collectFeedback(): { processed: number; skipped: number } {
     });
     if (!rates) { skipped++; continue; }
     const workId = r.work_id as string;
-    db.prepare(`DELETE FROM topic_scores WHERE work_id = ? AND date(computed_at) = ?`).run(workId, today);
+    db.prepare(`DELETE FROM topic_scores WHERE work_id = ? AND date(computed_at) = ? AND platform = 'all'`).run(workId, today);
     db.prepare(`
-      INSERT INTO topic_scores (work_id, topic_id, category, emotion_type, views, completion_rate, like_rate, interaction_rate)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO topic_scores (work_id, topic_id, category, emotion_type, views, completion_rate, like_rate, interaction_rate, platform)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'all')
     `).run(
       workId, r.topic_id ?? null, r.topic_category ?? null, r.emotion_type ?? null,
       r.views ?? 0, rates.completionRate ?? null, rates.likeRate, rates.interactionRate,
@@ -99,12 +106,13 @@ export function collectFeedback(): { processed: number; skipped: number } {
 /** 按用途聚合作品三率 → 调整 purpose_skills.weight 并留痕 purpose_performance */
 export function refreshPurposePerformance(): number {
   const db = getDb();
-  const globalRow = db.prepare(`SELECT AVG(interaction_rate) AS g FROM topic_scores`).get() as { g: number | null };
+  // 2026-08-21 Task 10:只读跨平台汇总行(platform='all'),全局均值同理
+  const globalRow = db.prepare(`SELECT AVG(interaction_rate) AS g FROM topic_scores WHERE platform = 'all'`).get() as { g: number | null };
   const g = globalRow.g && globalRow.g > 0 ? globalRow.g : 1;
   const rows = db.prepare(`
     SELECT w.purpose AS purpose, AVG(ts.interaction_rate) AS ai, COUNT(*) AS n
     FROM topic_scores ts JOIN works w ON w.id = ts.work_id
-    WHERE w.purpose IS NOT NULL
+    WHERE w.purpose IS NOT NULL AND ts.platform = 'all'
     GROUP BY w.purpose
   `).all() as Array<{ purpose: string; ai: number | null; n: number }>;
   for (const r of rows) {
@@ -134,12 +142,12 @@ export function getTopicWeights(): TopicWeight[] {
            AVG(like_rate) AS avg_like,
            AVG(interaction_rate) AS avg_interaction
     FROM topic_scores
-    WHERE category IS NOT NULL
+    WHERE category IS NOT NULL AND platform = 'all'
     GROUP BY category, emotion_type
   `).all() as Array<Record<string, unknown>>;
 
-  // 全局均值作归一基准;无数据时权重恒 1
-  const globalRow = db.prepare(`SELECT AVG(interaction_rate) AS g FROM topic_scores`).get() as { g: number | null };
+  // 全局均值作归一基准;无数据时权重恒 1(同样只读 platform='all' 汇总行)
+  const globalRow = db.prepare(`SELECT AVG(interaction_rate) AS g FROM topic_scores WHERE platform = 'all'`).get() as { g: number | null };
   const globalAvg = globalRow.g && globalRow.g > 0 ? globalRow.g : 1;
 
   return rows.map((r) => {
