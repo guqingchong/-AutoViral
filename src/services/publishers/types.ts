@@ -9,6 +9,8 @@ export interface PublishInput {
   coverPath?: string;
   /** Video / post title. */
   title: string;
+  /** 目标发布账号(accounts.id);缺省走平台默认账号/旧凭证兜底。 */
+  accountId?: string;
   /** Platform-specific extra fields (description, tags, schedule, …). */
   options?: Record<string, unknown>;
 }
@@ -31,8 +33,8 @@ export interface Publisher {
   readonly platform: string;
   readonly name: string;
 
-  /** Quick check whether credentials are configured. */
-  isConfigured(): boolean | Promise<boolean>;
+  /** Quick check whether credentials are configured (optionally per account). */
+  isConfigured(accountId?: string): boolean | Promise<boolean>;
 
   /** Execute the publish flow. */
   publish(input: PublishInput): Promise<PublishOutput>;

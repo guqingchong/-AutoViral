@@ -280,6 +280,7 @@ export interface DbPublishRecord {
   id: number;
   work_id: string;
   platform: string;
+  account_id?: string;
   platform_post_id?: string;
   status: DbPublishRecordStatus;
   scheduled_at?: string;
