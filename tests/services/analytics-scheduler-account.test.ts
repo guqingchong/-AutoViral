@@ -66,9 +66,9 @@ function makeAdapter(platform: string, opts: MockOptions = {}): PlatformAdapter 
   };
 }
 
-function addAccount(id: string, platform = "mock", status: DbAccountStatus = "active"): void {
+function addAccount(id: string, platform = "mock", status: DbAccountStatus = "active", updatedAt?: string): void {
   const now = new Date().toISOString();
-  createAccount({ id, name: id, platform, tone_profile: {}, status, created_at: now, updated_at: now });
+  createAccount({ id, name: id, platform, tone_profile: {}, status, created_at: now, updated_at: updatedAt ?? now });
 }
 
 function accountMetricRows(): Array<Record<string, unknown>> {
@@ -113,8 +113,10 @@ describe("analytics-scheduler 按账号遍历 (Task 8)", () => {
     registerAdapterFactory("mock", (accountId) =>
       makeAdapter("mock", { failAccount: accountId === "acc-bad", followers: 999 })
     );
-    addAccount("acc-bad");
-    addAccount("acc-good");
+    // listAccounts 按 updated_at DESC 排序:给 acc-bad 更晚的时间戳,
+    // 确保失败账号排在迭代首位——断言才真实验证"失败跳过不中断后续账号"
+    addAccount("acc-good", "mock", "active", "2026-08-20T00:00:00.000Z");
+    addAccount("acc-bad", "mock", "active", "2026-08-21T00:00:00.000Z");
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     startScheduler();
