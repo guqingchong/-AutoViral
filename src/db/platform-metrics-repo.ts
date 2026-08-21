@@ -7,6 +7,7 @@ function rowToMetric(row: Record<string, unknown>): DbPlatformMetric {
     id: row.id as number,
     publish_record_id: (row.publish_record_id as number) || undefined,
     platform: row.platform as string,
+    account_id: (row.account_id as string) || undefined,
     metric_type: row.metric_type as DbMetricType,
     external_id: (row.external_id as string) || undefined,
     collected_at: row.collected_at as string,
@@ -25,12 +26,13 @@ export function createMetric(metric: Omit<DbPlatformMetric, "id">): DbPlatformMe
   const db = getDb();
   const result = db
     .prepare(
-      `INSERT INTO platform_metrics (publish_record_id, platform, metric_type, external_id, collected_at, views, likes, comments, shares, collects, completion_rate, followers, raw_data)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO platform_metrics (publish_record_id, platform, account_id, metric_type, external_id, collected_at, views, likes, comments, shares, collects, completion_rate, followers, raw_data)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       metric.publish_record_id ?? null,
       metric.platform,
+      metric.account_id ?? null,
       metric.metric_type,
       metric.external_id ?? null,
       metric.collected_at,

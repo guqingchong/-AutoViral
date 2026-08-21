@@ -151,9 +151,13 @@ analyticsApi.post("/baselines/compute", async (c) => {
 // ── Collection Control ─────────────────────────────────────────────────────
 
 // POST /api/analytics/v2/collect — trigger one-shot collection
+// body 可选 { accountId, workId } 透传给 collectAll 做定向采集(Task 8)
 analyticsApi.post("/collect", async (c) => {
   try {
-    const result = await collectAllOnce();
+    const body = await c.req
+      .json<{ accountId?: string; workId?: string }>()
+      .catch((): { accountId?: string; workId?: string } => ({}));
+    const result = await collectAllOnce({ accountId: body.accountId, workId: body.workId });
     return c.json(result);
   } catch (e) {
     return c.json({ error: String(e) }, 500);
