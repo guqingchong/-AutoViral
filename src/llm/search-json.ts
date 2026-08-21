@@ -18,6 +18,8 @@ export interface SearchJsonOptions {
   builtinSearchTool?: string;
   /** 记账阶段(2026-08-19 P1):默认 research;失败也记(tokens 已燃烧) */
   usageStage?: string;
+  /** 终局非 JSON/被截断时的修复轮上限(2026-08-21 三平台调研失败根因),默认 2 */
+  maxRepairs?: number;
 }
 
 export async function chatJsonWithSearch<T>(
@@ -51,7 +53,10 @@ export async function chatJsonWithSearch<T>(
     : [];
 
   try {
-    for (let round = 0; round <= maxRounds; round++) {
+    let repairs = 0;
+    const maxRepairs = opts.maxRepairs ?? 2;
+    // round 预算 = 搜索往返 maxRounds + 已用修复轮 repairs(修复不消耗搜索预算)
+    for (let round = 0; round <= maxRounds + repairs; round++) {
       // 单轮调用:独立 AbortController + 最多 3 次尝试(断流/超时重试)
       let stopReason = "";
       let assistant: AgentMessage | undefined;
@@ -84,10 +89,20 @@ export async function chatJsonWithSearch<T>(
           .map((b) => b.text)
           .join("");
         const parsed = extractJsonFromText(text);
-        if (parsed === null) {
-          throw new Error(`chatJsonWithSearch 无法从终局回复提取 JSON: ${text.slice(0, 200)}`);
+        if (parsed !== null) return parsed as T;
+        // 2026-08-21 根因修复:kimi-for-coding 多轮搜索后终局常非 JSON
+        // (叙述文本)或被 max_tokens 截断(半截 JSON)——旧实现一次踏空整平台失败。
+        // 给模型修复轮:回填其回复 + 针对性输出纪律,重新生成。
+        if (repairs < maxRepairs) {
+          repairs++;
+          const repairText = stopReason === "max_tokens"
+            ? "你的上一条回复因长度限制被截断,不是完整的 JSON。请重新输出:条目数量可适当精简,每个字段的文字从简,直接输出完整的 JSON 对象,不要 markdown 围栏,不要任何解释文字。"
+            : "你的上一条回复不是可解析的 JSON。请直接输出符合前文格式要求的 JSON 对象:不要 markdown 围栏,不要解释文字,不要调用任何工具。";
+          messages.push({ role: "user", content: [{ type: "text", text: repairText }] });
+          continue;
         }
-        return parsed as T;
+        const truncHint = stopReason === "max_tokens" ? "(输出被 max_tokens 截断)" : "";
+        throw new Error(`chatJsonWithSearch 无法从终局回复提取 JSON${truncHint}(已修复重试 ${repairs} 次): ${text.slice(0, 200)}`);
       }
 
       // 内置搜索:本地无实现,arguments 逐字回填为 tool 消息,平台下一轮执行并注入结果
