@@ -208,6 +208,7 @@ export interface DbAccount {
   username?: string;
   password?: string;
   cookie?: string;
+  is_default?: number;             // 平台内默认账号标记(迁移 v29)
   created_at: string;
   updated_at: string;
 }

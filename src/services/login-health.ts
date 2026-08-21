@@ -1,5 +1,7 @@
 import { chromium, type Browser } from "playwright";
 import { getCredential } from "../db/platform-credentials-repo.js";
+import { listAccounts } from "../db/accounts-repo.js";
+import { resolveAccountCredential } from "./credential-resolver.js";
 import { dataDir } from "../config.js";
 import { join } from "node:path";
 
@@ -24,6 +26,26 @@ export interface PlatformHealth {
   detail: string;
 }
 
+/** 按账号维度的登录态健康(2026-08-20 数据看板重构 Task 3) */
+export interface AccountHealth {
+  accountId: string;
+  name: string;
+  platform: string;
+  configured: boolean;
+  valid: boolean | null;
+  detail: string;
+  /** valid === true 的便捷布尔 */
+  healthy: boolean;
+}
+
+/** 凭证读取器:按 keyType 取值。默认读旧 platform_credentials(平台维度)。 */
+type CredGetter = (keyType: string) => string | undefined;
+
+/** 平台维度的默认读取器(旧行为)。 */
+function platformCred(platform: string): CredGetter {
+  return (keyType) => getCredential(platform, keyType);
+}
+
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
@@ -42,9 +64,9 @@ const RPA_CHECKS: Record<string, { url: string; loginPattern: RegExp; loginConte
  * 裸 cookie 检测却报失效(2026-08-07 实测)。与 ChannelsWebPublisher.checkLoggedIn
  * 同标准:登录墙持续 3s+ → 失效;出现已登录信号 → 有效。
  */
-async function verifyChannels(): Promise<PlatformHealth> {
+async function verifyChannels(getCred: CredGetter = platformCred("channels")): Promise<PlatformHealth> {
   const platform = "channels";
-  const raw = getCredential(platform, "session_cookie");
+  const raw = getCred("session_cookie");
   if (!raw) return { platform, configured: false, valid: null, detail: "未配置 Cookie" };
   const profileDir = join(dataDir, "browser-profiles", platform);
   let context: import("playwright").BrowserContext | null = null;
@@ -92,9 +114,9 @@ async function verifyChannels(): Promise<PlatformHealth> {
   }
 }
 
-async function verifyRpa(platform: string, browser: Browser): Promise<PlatformHealth> {
+async function verifyRpa(platform: string, browser: Browser, getCred: CredGetter = platformCred(platform)): Promise<PlatformHealth> {
   const check = RPA_CHECKS[platform];
-  const raw = getCredential(platform, "session_cookie");
+  const raw = getCred("session_cookie");
   if (!raw) return { platform, configured: false, valid: null, detail: "未配置 Cookie" };
   let cookies: unknown;
   try {
@@ -132,10 +154,10 @@ async function verifyRpa(platform: string, browser: Browser): Promise<PlatformHe
   }
 }
 
-async function verifyWechat(): Promise<PlatformHealth> {
+async function verifyWechat(getCred: CredGetter = platformCred("wechat")): Promise<PlatformHealth> {
   const platform = "wechat";
-  const appId = getCredential("wechat", "app_id");
-  const appSecret = getCredential("wechat", "app_secret");
+  const appId = getCred("app_id");
+  const appSecret = getCred("app_secret");
   if (!appId || !appSecret) return { platform, configured: false, valid: null, detail: "未配置 AppID/AppSecret" };
   try {
     const res = await fetch(
@@ -152,10 +174,10 @@ async function verifyWechat(): Promise<PlatformHealth> {
   }
 }
 
-async function verifyBilibili(): Promise<PlatformHealth> {
+async function verifyBilibili(getCred: CredGetter = platformCred("bilibili")): Promise<PlatformHealth> {
   const platform = "bilibili";
-  const sess = getCredential("bilibili", "access_token");
-  const csrf = getCredential("bilibili", "csrf");
+  const sess = getCred("access_token");
+  const csrf = getCred("csrf");
   if (!sess || !csrf) return { platform, configured: false, valid: null, detail: "未配置 SESSDATA/bili_jct" };
   try {
     const res = await fetch("https://api.bilibili.com/x/web-interface/nav", {
@@ -171,10 +193,10 @@ async function verifyBilibili(): Promise<PlatformHealth> {
   }
 }
 
-async function verifyKuaishou(): Promise<PlatformHealth> {
+async function verifyKuaishou(getCred: CredGetter = platformCred("kuaishou")): Promise<PlatformHealth> {
   const platform = "kuaishou";
-  const appId = getCredential("kuaishou", "app_id");
-  const appSecret = getCredential("kuaishou", "app_secret");
+  const appId = getCred("app_id");
+  const appSecret = getCred("app_secret");
   if (!appId || !appSecret) return { platform, configured: false, valid: null, detail: "未配置 app_id/app_secret" };
   try {
     const res = await fetch("https://open.kuaishou.com/oauth2/access_token", {
@@ -215,4 +237,53 @@ export async function verifyAllPlatforms(force = false): Promise<Record<string, 
   }
   cache = { at: Date.now(), result };
   return result;
+}
+
+// ── 按账号维度的健康检查(2026-08-20 Task 3) ──────────────────────────────
+// 结构同 verifyAllPlatforms:包一层按账号迭代,凭证经 resolveAccountCredential
+// 解析(指定账号 > 默认账号 > 活跃账号 > 旧表兜底)。
+
+let accountCache: { at: number; result: AccountHealth[] } | null = null;
+
+/** 实测全部活跃账号的登录态。force=true 跳过缓存。 */
+export async function verifyAllAccounts(force = false): Promise<AccountHealth[]> {
+  if (!force && accountCache && Date.now() - accountCache.at < CACHE_TTL_MS) return accountCache.result;
+
+  const accounts = listAccounts().filter((a) => !a.status || a.status === "active");
+  const results: AccountHealth[] = [];
+  let browser: Browser | null = null;
+  try {
+    const needsBrowser = accounts.some((a) => a.platform in RPA_CHECKS);
+    if (needsBrowser) browser = await chromium.launch({ headless: true });
+    for (const account of accounts) {
+      const getCred: CredGetter = (keyType) => resolveAccountCredential(account.platform, account.id, keyType);
+      let h: PlatformHealth;
+      if (account.platform in RPA_CHECKS && browser) {
+        h = await verifyRpa(account.platform, browser, getCred);
+      } else if (account.platform === "channels") {
+        h = await verifyChannels(getCred);
+      } else if (account.platform === "wechat_mp") {
+        h = await verifyWechat(getCred);
+      } else if (account.platform === "bilibili") {
+        h = await verifyBilibili(getCred);
+      } else if (account.platform === "kuaishou") {
+        h = await verifyKuaishou(getCred);
+      } else {
+        h = { platform: account.platform, configured: false, valid: null, detail: "不支持健康检查的平台" };
+      }
+      results.push({
+        accountId: account.id,
+        name: account.name,
+        platform: account.platform,
+        configured: h.configured,
+        valid: h.valid,
+        detail: h.detail,
+        healthy: h.valid === true,
+      });
+    }
+  } finally {
+    await browser?.close();
+  }
+  accountCache = { at: Date.now(), result: results };
+  return results;
 }
