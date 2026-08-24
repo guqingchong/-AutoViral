@@ -20,6 +20,19 @@ const WORKER_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "pa
 const RENDER_TIMEOUT_MS = 180_000;
 const VALID_THEMES = new Set(["finance_dark", "warm_gold", "ink_green", "minimal_light"]);
 
+// 时长上限按模板类型区分(2026-08-24 长口播支持):竖屏镜头模板是 4-8s 素材片段,
+// 30s 封顶;keynote-leather 是整片口播,时长跟随数字人源片,600s 封顶
+const DURATION_MAX_BY_TEMPLATE: Record<string, number> = { "keynote-leather": 600 };
+function durationMaxFor(templateName?: string): number {
+  return (templateName && DURATION_MAX_BY_TEMPLATE[templateName]) || 30;
+}
+
+// 渲染耗时随时长线性增长(实测约 4-6s 渲染/1s 成片):超时按目标时长 15× 自适应,
+// 短片保持 180s 兜底,600s 长片放宽到 2.5h
+function renderTimeoutMs(targetDuration: number): number {
+  return Math.max(RENDER_TIMEOUT_MS, Math.ceil(targetDuration * 15_000));
+}
+
 export interface CodeSceneInput {
   workId: string;
   filename: string;
@@ -114,8 +127,11 @@ export function validateCodeSceneInput(input: CodeSceneInput): string[] {
     }
   }
 
-  if (input.duration !== undefined && (input.duration < 1 || input.duration > 30)) {
-    errors.push("duration 须在 1-30 秒之间");
+  if (input.duration !== undefined) {
+    const durMax = durationMaxFor(input.template?.name);
+    if (input.duration < 1 || input.duration > durMax) {
+      errors.push(`duration 须在 1-${durMax} 秒之间`);
+    }
   }
   if (input.theme !== undefined && !VALID_THEMES.has(input.theme)) {
     errors.push(`theme 非法: ${input.theme}(可选: ${[...VALID_THEMES].join("/")})`);
@@ -160,7 +176,7 @@ async function doRender(input: CodeSceneInput): Promise<CodeSceneResult> {
   const outFile = `${input.filename}.mp4`;
 
   const isKeynote = input.template?.name === "keynote-leather";
-  const targetDuration = Math.min(Math.max(input.duration ?? (isKeynote ? 8 : 6), 1), 30);
+  const targetDuration = Math.min(Math.max(input.duration ?? (isKeynote ? 8 : 6), 1), durationMaxFor(input.template?.name));
   const params: Record<string, unknown> | undefined = input.template
     ? { ...input.template.params, theme: input.theme ?? input.template.params.theme }
     : undefined;
@@ -203,7 +219,7 @@ async function doRender(input: CodeSceneInput): Promise<CodeSceneResult> {
     // 渲染前清掉同名旧产物:渲染器对已有 outFile 可能跳过重渲染(实测 18:24 旧 3.8s
     // 产物原地复用),残留旧文件会污染补时判定与"成功但产物陈旧"的假象
     await rm(outputPath, { force: true });
-    await runWorker(specPath);
+    await runWorker(specPath, renderTimeoutMs(targetDuration));
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : String(err), code: err instanceof WorkerTimeout ? "TIMEOUT" : "RENDER_FAILED" };
   } finally {
@@ -284,7 +300,7 @@ async function stageDigitalHumanAsset(
   };
 }
 
-class WorkerTimeout extends Error { constructor() { super("渲染超时(180s)"); } }
+class WorkerTimeout extends Error { constructor(ms: number) { super(`渲染超时(${Math.round(ms / 1000)}s)`); } }
 
 /**
  * 末帧定格补时判定(2026-08-19 根因修复):Revideo 场景是生成器,内部动画时间轴
@@ -318,12 +334,12 @@ export async function padWithLastFrame(outputPath: string, padSeconds: number): 
   await rename(tmp, outputPath);
 }
 
-function runWorker(specPath: string): Promise<void> {
+function runWorker(specPath: string, timeoutMs: number): Promise<void> {
   return new Promise((resolve, reject) => {
     const proc = spawn("node", ["worker.mjs", specPath], { cwd: WORKER_DIR, stdio: ["ignore", "pipe", "pipe"] });
     let stderr = "";
     proc.stderr?.on("data", (d) => { stderr += String(d); });
-    const timer = setTimeout(() => { proc.kill("SIGKILL"); reject(new WorkerTimeout()); }, RENDER_TIMEOUT_MS);
+    const timer = setTimeout(() => { proc.kill("SIGKILL"); reject(new WorkerTimeout(timeoutMs)); }, timeoutMs);
     proc.on("error", (err) => { clearTimeout(timer); reject(err); });
     proc.on("exit", (code) => {
       clearTimeout(timer);

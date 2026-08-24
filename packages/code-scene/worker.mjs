@@ -16,7 +16,8 @@ const spec = JSON.parse(await readFile(specPath, "utf-8"));
 const jobId = spec.jobId ?? `job_${Date.now()}`;
 
 
-const duration = Math.min(Math.max(spec.duration ?? 6, 1), 30);
+// 渲染窗口上限 600s(2026-08-24 长口播支持);每模板实际上限由服务层校验兜底
+const duration = Math.min(Math.max(spec.duration ?? 6, 1), 600);
 const W = spec.width ?? 1080, H = spec.height ?? 1920;
 
 if (spec.scene === "custom") {

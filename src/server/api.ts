@@ -1186,7 +1186,7 @@ apiRoutes.get("/api/assets/code-scene/templates", (c) => {
       { name: "keynote-leather", label: "横屏数字人口播(苹果风×深色皮革)", params: "title(≤18字), kicker?, subtitleCn?(≤40字), subtitleEn?(≤80字符), videoSrc?(数字人源片本地路径,缺省渲染占位玻璃窗), videoRatio?(源片宽高比,缺省自动探测)", bestFor: "横屏整片口播:标题+数字人圆角辉光窗+中英双语字幕" },
     ],
     themes: ["finance_dark", "warm_gold", "ink_green", "minimal_light"],
-    duration: "1-30s,建议 4-8s;为目标时长——场景入场动画约 2s 保持干脆,不足目标时长时末帧定格补齐,超出不裁短",
+    duration: "1-30s(keynote-leather 整片 1-600s,建议跟随数字人源片时长),镜头模板建议 4-8s;为目标时长——场景入场动画约 2s 保持干脆,不足目标时长时末帧定格补齐,超出不裁短",
     note: "精确数据镜头仍走 /api/assets/chart|data-card;本端点服务结构/流程/逻辑镜头;keynote-leather 为 1920×1080 横屏整片模板(默认时长 8s),其余模板按 1080x1920 竖版设计,非默认尺寸可能导致布局错位",
   });
 });

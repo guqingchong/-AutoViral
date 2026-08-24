@@ -280,12 +280,13 @@ async function renderCodeTemplate(
   };
   if (req.digitalHumanVideo) params.videoSrc = req.digitalHumanVideo;
 
-  // 时长跟数字人源片走(口播内容长度决定整片时长);占位预览用模板默认
+  // 时长跟数字人源片走(口播内容长度决定整片时长);占位预览用模板默认。
+  // 600s 封顶:revideo 渲染窗口上限(2026-08-24 长口播支持,与 code-scene 校验一致)
   let duration: number | undefined;
   if (req.digitalHumanVideo) {
     const { probeMedia } = await import("../video/ffmpeg.js");
     const info = await probeMedia(req.digitalHumanVideo);
-    if (info.duration && info.duration > 0) duration = Math.min(Math.ceil(info.duration), 30);
+    if (info.duration && info.duration > 0) duration = Math.min(Math.ceil(info.duration), 600);
   }
 
   const { renderCodeScene } = await import("./code-scene.js");
