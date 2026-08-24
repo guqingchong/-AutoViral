@@ -502,6 +502,7 @@
           <option value="">全部类别</option>
           <option value="video">视频模板</option>
           <option value="image-text">图文模板</option>
+          <option value="code">代码渲染模板</option>
         </select>
         <select bind:value={statusFilter} onchange={load}>
           <option value="">{t("filterAll")}</option>
@@ -622,6 +623,8 @@
               <span class="status-badge" data-status={tpl.status}>{t(`template${tpl.status.charAt(0).toUpperCase() + tpl.status.slice(1)}`)}</span>
               {#if tpl.kind === "image-text"}
                 <span class="kind-badge">图文</span>
+              {:else if tpl.kind === "code"}
+                <span class="kind-badge">代码渲染</span>
               {/if}
               <span class="form">{tpl.contentForm ?? t("formGeneric")}</span>
             </div>

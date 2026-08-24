@@ -1183,10 +1183,11 @@ apiRoutes.get("/api/assets/code-scene/templates", (c) => {
       { name: "quote-card", label: "金句卡", params: "quote(≤40字), author?, source?", bestFor: "金句/原话引用/核心论断" },
       { name: "checklist", label: "清单打勾", params: "title, items[2-6]string, kicker?, source?", bestFor: "要点清单/避坑清单/条件罗列" },
       { name: "bar-compare", label: "条形数据对比", params: "title, bars[2-5]{label,value}, unit?, highlightIndex?, source?", bestFor: "轻量数据排行/量级对比(复杂图表仍走 /api/assets/chart)" },
+      { name: "keynote-leather", label: "横屏数字人口播(苹果风×深色皮革)", params: "title(≤18字), kicker?, subtitleCn?(≤40字), subtitleEn?(≤80字符), videoSrc?(数字人源片本地路径,缺省渲染占位玻璃窗), videoRatio?(源片宽高比,缺省自动探测)", bestFor: "横屏整片口播:标题+数字人圆角辉光窗+中英双语字幕" },
     ],
     themes: ["finance_dark", "warm_gold", "ink_green", "minimal_light"],
     duration: "1-30s,建议 4-8s;为目标时长——场景入场动画约 2s 保持干脆,不足目标时长时末帧定格补齐,超出不裁短",
-    note: "精确数据镜头仍走 /api/assets/chart|data-card;本端点服务结构/流程/逻辑镜头;模板按 1080x1920 竖版设计,非默认尺寸可能导致布局错位",
+    note: "精确数据镜头仍走 /api/assets/chart|data-card;本端点服务结构/流程/逻辑镜头;keynote-leather 为 1920×1080 横屏整片模板(默认时长 8s),其余模板按 1080x1920 竖版设计,非默认尺寸可能导致布局错位",
   });
 });
 
@@ -2221,6 +2222,7 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
             `3. 提交渲染(异步任务):`,
             `   \`curl -X POST http://localhost:3271/api/works/${id}/render -H "Content-Type: application/json" -d '{"templateId":"${boundTemplate.id}","variables":{...},"assets":{...}}'\``,
             `   返回 { jobId };模板若声明了 host_video/voice_audio 变量,必须额外传 digitalHumanVideo/voiceAudio 字段`,
+            `   (kind=code 代码渲染模板:整片由 Revideo 渲染,无需素材变量;digitalHumanVideo 即数字人源片,成片时长自动跟随源片;可用 variables 覆盖 title/kicker/subtitleCn/subtitleEn 文案)`,
             `4. 轮询 \`curl -s http://localhost:3271/api/render-jobs/{jobId}\` 直至 status=completed;failed 时读 error 修正变量后重试`,
             `5. 产物在 output/ 目录;不要对产物再做二次合成`,
             `6. 渲染完成后必须写 output/publish-text.md 发布文案(首个非空行=发布标题钩子;中段正文;最后一行 # 开头的话题标签 5-10 个,2-3 热门 + 2-3 垂类 + 1-2 品牌):首句 2 秒内抓人(好奇缺口/大胆断言/痛点),正文 2-3 句,结尾自然 CTA(关注/收藏/评论),语言匹配目标平台(抖音/小红书用中文)`,
@@ -4615,6 +4617,27 @@ apiRoutes.post("/api/templates", async (c) => {
       });
       return c.json(templateToApi(template), 201);
     }
+    // code 模板不走视频时间线校验:layers[0] 是场景配置 { scene, params? }(2026-08-24)
+    if (body.kind === "code") {
+      const sceneCfg = (body.layers?.[0] ?? {}) as { scene?: string };
+      if (typeof sceneCfg.scene !== "string" || !sceneCfg.scene) {
+        return c.json({ error: "code 模板必须在 layers[0].scene 声明场景模板名" }, 400);
+      }
+      const template = createTemplate({
+        id: body.id ?? `tpl_code_${randomUUID().slice(0, 8)}`,
+        name: body.name ?? "未命名代码模板",
+        content_form: body.contentForm ?? "video",
+        canvas: body.canvas ?? { width: 1920, height: 1080, fps: 30 },
+        variables: body.variables ?? [],
+        layers: body.layers,
+        audio: [],
+        transitions: [],
+        branding: sanitizeBranding(body.branding),
+        status: (body.status as DbTemplate["status"]) ?? "draft",
+        kind: "code",
+      });
+      return c.json(templateToApi(template), 201);
+    }
     const validated = validateTemplate({ id: body.id ?? `tpl_${randomUUID().slice(0, 8)}`, ...body });
     const template = createTemplate({
       id: validated.id,
@@ -4708,6 +4731,27 @@ apiRoutes.put("/api/templates/:id", async (c) => {
         content_form: body.contentForm ?? existing.content_form,
         canvas: body.canvas ?? existing.canvas,
         layers: body.layers ?? existing.layers,
+        branding,
+        status: (body.status as DbTemplate["status"]) ?? existing.status,
+      });
+      if (!updated) return c.json({ error: "Template update failed" }, 500);
+      return c.json(templateToApi(updated));
+    }
+    // code 模板不走视频时间线校验(layers 是场景配置;2026-08-24)
+    if (existing.kind === "code") {
+      const layers = body.layers ?? existing.layers;
+      if (body.layers !== undefined) {
+        const sceneCfg = (layers?.[0] ?? {}) as { scene?: string };
+        if (typeof sceneCfg.scene !== "string" || !sceneCfg.scene) {
+          return c.json({ error: "code 模板必须在 layers[0].scene 声明场景模板名" }, 400);
+        }
+      }
+      const updated = updateTemplate(id, {
+        name: body.name ?? existing.name,
+        content_form: body.contentForm ?? existing.content_form,
+        canvas: body.canvas ?? existing.canvas,
+        variables: body.variables ?? existing.variables,
+        layers,
         branding,
         status: (body.status as DbTemplate["status"]) ?? existing.status,
       });

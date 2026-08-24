@@ -28,6 +28,11 @@ describe("scoreTemplate 模板评分", () => {
     const r = scoreTemplate(good);
     expect(r.score).toBeGreaterThanOrEqual(88);
   });
+  it("code 模板固定通过分(layers 是场景配置,时间线规则不适用)", () => {
+    const r = scoreTemplate({ kind: "code", layers: [{ scene: "keynote-leather" }], variables: [] });
+    expect(r.score).toBe(80);
+    expect(r.issues).toEqual([]);
+  });
 
   it("空 layers 直接 0 分", () => {
     expect(scoreTemplate({ layers: [] }).score).toBe(0);

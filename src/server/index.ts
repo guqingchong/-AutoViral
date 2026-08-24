@@ -104,6 +104,9 @@ export async function startServer(port: number): Promise<{ server: Server }> {
   installCrashHandlers();
   // 0. Ensure database schema
   migrate();
+  // 0.0b. 内置 code 模板种子注册(幂等,2026-08-24)
+  const { ensureBuiltinCodeTemplates } = await import("../services/code-templates.js");
+  ensureBuiltinCodeTemplates();
 
   // 0.5. Recover publish jobs that were stuck "publishing" from a prior crash
   recoverStuckJobs();

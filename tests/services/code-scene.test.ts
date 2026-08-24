@@ -34,6 +34,25 @@ describe("validateCodeSceneInput", () => {
     const bad = { workId: "w", filename: "f", template: { name: "structure-growth", params: { title: "t", center: "c", branches: [{ text: "a", label: "b" }] } } };
     expect(validateCodeSceneInput(bad as any).join()).toContain("2-4");
   });
+  // 2026-08-24:keynote-leather 横屏整片模板接线
+  it("keynote-leather 最小参数通过(title 主参数)", () => {
+    const input = { workId: "w", filename: "f", template: { name: "keynote-leather", params: { title: "数字人新政解读" } } };
+    expect(validateCodeSceneInput(input as any)).toEqual([]);
+  });
+  it("keynote-leather 标题上限 18 字(比竖屏模板宽)", () => {
+    const ok = { workId: "w", filename: "f", template: { name: "keynote-leather", params: { title: "十四个字以内的标题没问题吧" } } };
+    expect(validateCodeSceneInput(ok as any)).toEqual([]);
+    const long = { workId: "w", filename: "f", template: { name: "keynote-leather", params: { title: "这是一个超过十八个字的横屏标题确实太长了点" } } };
+    expect(validateCodeSceneInput(long as any).join()).toContain("≤18");
+  });
+  it("keynote-leather 字幕与比例参数校验", () => {
+    const badCn = { workId: "w", filename: "f", template: { name: "keynote-leather", params: { title: "t", subtitleCn: "字".repeat(41) } } };
+    expect(validateCodeSceneInput(badCn as any).join()).toContain("subtitleCn ≤40");
+    const badRatio = { workId: "w", filename: "f", template: { name: "keynote-leather", params: { title: "t", videoRatio: -1 } } };
+    expect(validateCodeSceneInput(badRatio as any).join()).toContain("videoRatio");
+    const badSrc = { workId: "w", filename: "f", template: { name: "keynote-leather", params: { title: "t", videoSrc: 123 } } };
+    expect(validateCodeSceneInput(badSrc as any).join()).toContain("videoSrc 须为字符串");
+  });
 });
 
 // 集成测试:真实渲染(约 30-60s)。子项目未装依赖时跳过。
@@ -54,6 +73,98 @@ describe.skipIf(!workerReady)("renderCodeScene 集成", () => {
     // (flow-steps 3 步实测 3.8s),目标 4s 时产物须 ≥3.9s(末帧定格补齐),
     // 此前 >2 的断言太松放过了 bug
     expect(r.duration).toBeGreaterThanOrEqual(3.9);
+  });
+
+  // 2026-08-24:keynote-leather 接线验证——本地源片自动中转 public/staged + 横屏整片渲染
+  const dhSample = "packages/code-scene/public/dh-sample.mp4";
+  it.skipIf(!existsSync(dhSample))(
+    "keynote-leather 本地数字人源片渲染(自动中转+比例探测+清理)",
+    { timeout: 300_000 },
+    async () => {
+      const r = await renderCodeScene({
+        workId: "w_code_scene_test",
+        filename: "it-keynote",
+        template: {
+          name: "keynote-leather",
+          params: {
+            title: "数字人新政解读",
+            kicker: "POLICY KEYNOTE",
+            subtitleCn: "专项债新政,影响每一个城投人",
+            subtitleEn: "New policy on special bonds",
+            videoSrc: dhSample, // 本地路径:验证自动中转(而非已就绪的 /xxx.mp4 URL)
+          },
+        },
+        duration: 5,
+      });
+      expect(r.error).toBeUndefined();
+      expect(r.success).toBe(true);
+      expect(r.path && existsSync(r.path)).toBe(true);
+      // 横屏 1920×1080 默认尺寸
+      const info = await probeMedia(r.path!);
+      expect(info.width).toBe(1920);
+      expect(info.height).toBe(1080);
+      // 渲染结束后中转文件已清理(staged 目录不留 cs_* 残留)
+      const { readdirSync } = await import("node:fs");
+      const stagedDir = "packages/code-scene/public/staged";
+      const leftovers = existsSync(stagedDir) ? readdirSync(stagedDir).filter((f) => f.startsWith("cs_")) : [];
+      expect(leftovers).toEqual([]);
+    },
+  );
+});
+
+// 2026-08-24 kind="code" 集成:视频工厂整片路由端到端(种子模板→startRender→output 产物)
+describe.skipIf(!workerReady)("video-factory code 模板端到端", () => {
+  it("kind=code 模板经 startRender 渲染出横屏成片", { timeout: 420_000 }, async () => {
+    const { resetInMemoryDb, closeDb } = await import("../../src/db/connection.js");
+    const { migrate } = await import("../../src/db/migrate.js");
+    const { ensureBuiltinCodeTemplates, KEYNOTE_LEATHER_TEMPLATE_ID } = await import("../../src/services/code-templates.js");
+    const { createWork } = await import("../../src/db/works-repo.js");
+    const { startRender, getRenderStatus } = await import("../../src/services/video-factory.js");
+    const { resolve } = await import("node:path");
+
+    // 样片 315s 会触发 30s 封顶渲染(太慢),先剪 12s 短源片
+    const dir = await mkdtemp(join(tmpdir(), "av-code-tpl-"));
+    const shortSrc = join(dir, "dh-short.mp4");
+    const ffmpeg = await getFFmpegPath();
+    await promisify(execFile)(ffmpeg, [
+      "-ss", "30", "-t", "12", "-i", "packages/code-scene/public/dh-sample.mp4",
+      "-c", "copy", "-y", shortSrc,
+    ]);
+
+    resetInMemoryDb();
+    migrate();
+    ensureBuiltinCodeTemplates();
+    createWork({
+      id: "w_code_tpl_e2e", title: "代码模板端到端验证", type: "short-video", status: "draft",
+      platforms: ["douyin"], evaluation_mode: false, tags: [],
+      created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+    } as never, []);
+
+    const job = await startRender({
+      workId: "w_code_tpl_e2e",
+      templateId: KEYNOTE_LEATHER_TEMPLATE_ID,
+      digitalHumanVideo: resolve(shortSrc),
+      assets: {},
+      variables: { subtitleCn: "端到端中文字幕", subtitleEn: "E2E ENGLISH SUB" },
+    });
+
+    const deadline = Date.now() + 360_000;
+    let status = getRenderStatus(job.jobId);
+    while (status && (status.status === "pending" || status.status === "running") && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 2000));
+      status = getRenderStatus(job.jobId);
+    }
+    expect(status?.status).toBe("completed");
+    expect(existsSync(job.outputPath)).toBe(true);
+    const info = await probeMedia(job.outputPath);
+    expect(info.width).toBe(1920);
+    expect(info.height).toBe(1080);
+    // 数字人口播音轨随 revideo 导出(口播没声音=废片)
+    expect(info.hasAudio).toBe(true);
+    // 时长跟随源片(12s,末帧定格补齐)
+    expect(info.duration).toBeGreaterThanOrEqual(11.5);
+    closeDb();
+    await rm(dir, { recursive: true, force: true });
   });
 });
 
