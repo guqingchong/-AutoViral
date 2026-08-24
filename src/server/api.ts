@@ -4370,6 +4370,36 @@ apiRoutes.post("/api/templates/generate", async (c) => {
   return c.json({ jobId, status: "running", message: "模板生成已启动，可切换页面，稍后回来查看结果" });
 });
 
+// POST /api/templates/generate-code - LLM 生成代码渲染模板(Revideo TSX,2026-08-24)
+// 与 JSON 时间线生成平行:LLM 产 TSX 场景 → 真实渲染 5s 预览验证 → 存 kind=code
+apiRoutes.post("/api/templates/generate-code", async (c) => {
+  const body = await c.req.json<{ style?: string; orientation?: "portrait" | "landscape"; withDigitalHuman?: boolean }>().catch(() => ({} as { style?: string; orientation?: "portrait" | "landscape"; withDigitalHuman?: boolean }));
+  if (!body.style?.trim()) return c.json({ success: false, error: "style 必填(风格描述,如:赛博朋克霓虹、深色底、青色辉光)" }, 400);
+  const jobId = "tplcode_" + Date.now();
+  try {
+    const db = getDb();
+    db.prepare("INSERT INTO template_gen_jobs (id, status, count, generated, kind) VALUES (?, 'running', 1, 0, 'generate-code')").run(jobId);
+  } catch { /* 表不存在时退化为仅内存态 */ }
+
+  const { generateCodeTemplate } = await import("../services/code-template-generator.js");
+  generateCodeTemplate({ style: body.style!, orientation: body.orientation, withDigitalHuman: body.withDigitalHuman })
+    .then((tpl) => {
+      try {
+        const db = getDb();
+        db.prepare("UPDATE template_gen_jobs SET status = 'done', generated = 1, updated_at = datetime('now') WHERE id = ?").run(jobId);
+        console.log(`[code-template-gen] 「${tpl.name}」(${tpl.id}) 生成完成`);
+      } catch {}
+    })
+    .catch((err) => {
+      try {
+        const db = getDb();
+        db.prepare("UPDATE template_gen_jobs SET status = 'error', error = ?, updated_at = datetime('now') WHERE id = ?").run(err instanceof Error ? err.message : String(err), jobId);
+      } catch {}
+    });
+
+  return c.json({ jobId, status: "running", message: "代码模板生成中(LLM 设计 + Revideo 渲染验证,约 2-4 分钟),可切换页面" });
+});
+
 // GET /api/templates/generate/status/:jobId - poll async template generation status (DB-backed)
 apiRoutes.get("/api/templates/generate/status/:jobId", async (c) => {
   const jobId = c.req.param("jobId");

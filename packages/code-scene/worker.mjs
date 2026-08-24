@@ -32,7 +32,9 @@ if (spec.scene === "custom") {
 
 
 const sceneExpr = spec.scene === "custom"
-  ? "customScene"
+  // 自定义场景两种形态:导出厂函数 → 以 spec.params 调用(2026-08-24 LLM 生成模板
+  // 参数化);直接导出 makeScene2D 场景 → 原样使用(无参数旧形态)
+  ? `(typeof customScene === "function" ? customScene(${JSON.stringify(spec.params ?? {})}) : customScene)`
   : `getSceneFactory(${JSON.stringify(spec.scene)})(${JSON.stringify(spec.params ?? {})})`;
 const projectSrc = `
 import { makeProject, Vector2 } from "@revideo/core";
