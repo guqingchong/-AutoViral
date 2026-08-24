@@ -114,6 +114,12 @@ async function runRenderLoop(jobId: string, template: DbTemplate, req: RenderReq
   }, 1000);
 
   try {
+    let renderedDuration: number | undefined;
+
+    if (template.kind === "code") {
+      // ── code 模板(2026-08-24):不走时间线组装,整片路由到 Revideo 代码渲染 ──
+      renderedDuration = await renderCodeTemplate(jobId, template, req, outputPath);
+    } else {
     const variableValues = validateVariableValues(template.variables, { ...req.assets, ...(req.variables ?? {}) });
     // 变量通用化(2026-08-13 模板契约修复):约定变量仅当模板声明时才注入;
     // 声明了但请求未提供 → 可读错误,而非静默注入 undefined 导致渲染出坏片
@@ -156,12 +162,14 @@ async function runRenderLoop(jobId: string, template: DbTemplate, req: RenderReq
       outputPath,
       onProgress: updateProgress,
     });
+    renderedDuration = result.duration;
+    }
 
     renderFinished = true;
     updateRenderJob(jobId, {
       status: "completed",
       progress: 100,
-      duration: result.duration,
+      duration: renderedDuration,
     });
 
     // C5 素材沉淀:成片自动登记进资产库,供后续作品复用(2026-08-14)
@@ -177,7 +185,7 @@ async function runRenderLoop(jobId: string, template: DbTemplate, req: RenderReq
         source: "self-generated",
         license: "unknown",
         compliance_status: "pending",
-        metadata: { workId: req.workId, duration: result.duration, assetKind: "final_video" },
+        metadata: { workId: req.workId, duration: renderedDuration, assetKind: "final_video" },
         usage_count: 0,
       });
     } catch { /* 登记失败(如路径重复)不阻断渲染结果 */ }
@@ -189,8 +197,9 @@ async function runRenderLoop(jobId: string, template: DbTemplate, req: RenderReq
         subtitlePath: req.subtitlePath,
         expectedWidth: template.canvas?.width,
         expectedHeight: template.canvas?.height,
-        // 模板图解段(未传配音/字幕/BGM)按无声中间段处理,不强制音轨(2026-08-14 误报修复)
-        expectAudio: !!(req.subtitlePath || (req as unknown as Record<string, unknown>).voiceAudio || (req as unknown as Record<string, unknown>).voice_audio || (req as unknown as Record<string, unknown>).bgm),
+        // 模板图解段(未传配音/字幕/BGM)按无声中间段处理,不强制音轨(2026-08-14 误报修复);
+        // code 模板数字人口播音轨内嵌于 host_video(2026-08-24)
+        expectAudio: !!(req.subtitlePath || req.digitalHumanVideo || (req as unknown as Record<string, unknown>).voiceAudio || (req as unknown as Record<string, unknown>).voice_audio || (req as unknown as Record<string, unknown>).bgm),
       });
       await writeFile(join(dirname(outputPath), "quality-report.json"), JSON.stringify(report, null, 2), "utf-8");
       if (!report.passed) {
@@ -234,6 +243,65 @@ async function runRenderLoop(jobId: string, template: DbTemplate, req: RenderReq
 
 export function getRenderStatus(jobId: string): DbRenderJob | undefined {
   return getRenderJob(jobId);
+}
+
+/**
+ * code 模板整片渲染(2026-08-24 kind="code" 集成)。
+ *
+ * 约定:layers[0] 存场景配置 { scene: "keynote-leather", params?: {...} };
+ * 参数来源优先级:req.variables(每次渲染覆盖)> layers[0].params(模板默认)> 作品字段。
+ * host_video(数字人源片)映射为场景 videoSrc,时长取源片实际时长(封顶 30s,
+ * revideo worker 渲染窗口上限);产物复制到 outputPath 保持下游(资产登记/门禁)一致。
+ */
+async function renderCodeTemplate(
+  jobId: string,
+  template: DbTemplate,
+  req: RenderRequest,
+  outputPath: string,
+): Promise<number | undefined> {
+  const cfg = (template.layers?.[0] ?? {}) as { scene?: string; params?: Record<string, unknown> };
+  if (typeof cfg.scene !== "string" || !cfg.scene) {
+    throw new Error(`code 模板 ${template.id} 缺少场景配置(layers[0].scene)`);
+  }
+  const work = await getWork(req.workId);
+
+  // 白名单覆盖:agent 可通过 variables 逐作品定制文案
+  const OVERRIDABLE = ["title", "kicker", "subtitleCn", "subtitleEn"] as const;
+  const overrides: Record<string, unknown> = {};
+  for (const key of OVERRIDABLE) {
+    const v = req.variables?.[key];
+    if (typeof v === "string" && v.trim()) overrides[key] = v;
+  }
+
+  const params: Record<string, unknown> = {
+    title: (work?.title ?? "未命名作品").slice(0, 18),
+    ...cfg.params,
+    ...overrides,
+  };
+  if (req.digitalHumanVideo) params.videoSrc = req.digitalHumanVideo;
+
+  // 时长跟数字人源片走(口播内容长度决定整片时长);占位预览用模板默认
+  let duration: number | undefined;
+  if (req.digitalHumanVideo) {
+    const { probeMedia } = await import("../video/ffmpeg.js");
+    const info = await probeMedia(req.digitalHumanVideo);
+    if (info.duration && info.duration > 0) duration = Math.min(Math.ceil(info.duration), 30);
+  }
+
+  const { renderCodeScene } = await import("./code-scene.js");
+  const r = await renderCodeScene({
+    workId: req.workId,
+    filename: `${jobId}_code`,
+    template: { name: cfg.scene, params },
+    duration,
+    size: template.canvas ? { w: template.canvas.width, h: template.canvas.height } : undefined,
+  });
+  if (!r.success || !r.path) throw new Error(r.error ?? "code 模板渲染失败");
+
+  // code-scene 产物在 assets/clips/code/ 下,复制到 render_job 约定的输出位置
+  const { copyFile } = await import("node:fs/promises");
+  await copyFile(r.path, outputPath);
+  return r.duration;
 }
 
 export function recoverStuckRenderJobs(): number {

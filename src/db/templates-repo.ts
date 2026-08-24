@@ -3,8 +3,8 @@ import { fromJson, toJson } from "./json.js";
 
 export type TemplateStatus = "draft" | "candidate" | "approved" | "archived";
 
-/** 模板类别：video = 视频时间线模板（默认）；image-text = 图文版式模板 */
-export type TemplateKind = "video" | "image-text";
+/** 模板类别：video = 视频时间线模板（默认）；image-text = 图文版式模板；code = 代码渲染整片模板(Revideo,2026-08-24) */
+export type TemplateKind = "video" | "image-text" | "code";
 
 export interface TemplateVariable {
   name: string;

@@ -42,9 +42,13 @@ interface TemplateLike {
   canvas?: { width?: number; height?: number };
   variables?: unknown[];
   layers?: LayerLike[];
+  kind?: string;
 }
 
 export function scoreTemplate(tpl: TemplateLike): TemplateScore {
+  // code 模板(2026-08-24):layers 是场景配置而非时间线层,质量由代码渲染保证,
+  // 时间线机器规则不适用——给固定通过分,避免空 layers 误判拉低列表排序/生成门禁
+  if (tpl.kind === "code") return { score: 80, issues: [] };
   const issues: ScoreIssue[] = [];
   const layers = tpl.layers ?? [];
   const canvas = { width: tpl.canvas?.width ?? 1080, height: tpl.canvas?.height ?? 1920 };

@@ -42,6 +42,8 @@ const TEMPLATE_LIMITS: Record<string, { items?: string; min?: number; max?: numb
   "quote-card": {},                                        // 主参数 quote(替代 title)
   "checklist": { items: "items", min: 2, max: 6 },
   "bar-compare": { items: "bars", min: 2, max: 5 },
+  // 2026-08-24:横屏整片数字人口播模板(1920×1080,苹果风×深色皮革),主参数 title(≤18字)
+  "keynote-leather": {},
 };
 
 /** 纯校验:返回错误列表(空数组=合法) */
@@ -68,7 +70,25 @@ export function validateCodeSceneInput(input: CodeSceneInput): string[] {
       } else {
         const title = p.title;
         if (typeof title !== "string" || !title.trim()) errors.push("params.title 必填");
-        else if ([...title].length > 12) errors.push(`params.title ≤12 字(当前 ${[...title].length})`);
+        else {
+          // keynote-leather 横屏标题区更宽,上限放宽到 18 字;竖屏镜头模板仍 12 字
+          const titleMax = t.name === "keynote-leather" ? 18 : 12;
+          if ([...title].length > titleMax) errors.push(`params.title ≤${titleMax} 字(当前 ${[...title].length})`);
+        }
+      }
+      if (t.name === "keynote-leather") {
+        for (const key of ["kicker", "subtitleCn", "subtitleEn", "videoSrc"] as const) {
+          if (p[key] !== undefined && typeof p[key] !== "string") errors.push(`params.${key} 须为字符串`);
+        }
+        if (typeof p.subtitleCn === "string" && [...p.subtitleCn].length > 40) {
+          errors.push(`params.subtitleCn ≤40 字(当前 ${[...p.subtitleCn].length})`);
+        }
+        if (typeof p.subtitleEn === "string" && p.subtitleEn.length > 80) {
+          errors.push(`params.subtitleEn ≤80 字符(当前 ${p.subtitleEn.length})`);
+        }
+        if (p.videoRatio !== undefined && (typeof p.videoRatio !== "number" || p.videoRatio <= 0)) {
+          errors.push("params.videoRatio 须为正数(源片宽高比)");
+        }
       }
       if (t.name === "structure-growth" && (typeof p.center !== "string" || !p.center.trim())) {
         errors.push("params.center 必填");
@@ -132,20 +152,46 @@ export async function renderCodeScene(input: CodeSceneInput): Promise<CodeSceneR
 }
 
 async function doRender(input: CodeSceneInput): Promise<CodeSceneResult> {
+  let stagedCleanup: (() => Promise<void>) | undefined;
   try {
   const jobId = `cs_${randomUUID().slice(0, 8)}`;
   const outDirAbs = join(dataDir, "works", input.workId, "assets", "clips", "code");
   await mkdir(outDirAbs, { recursive: true });
   const outFile = `${input.filename}.mp4`;
 
+  const isKeynote = input.template?.name === "keynote-leather";
+  const targetDuration = Math.min(Math.max(input.duration ?? (isKeynote ? 8 : 6), 1), 30);
+  const params: Record<string, unknown> | undefined = input.template
+    ? { ...input.template.params, theme: input.theme ?? input.template.params.theme }
+    : undefined;
+  if (isKeynote && params) {
+    // 场景呼吸循环轮数按 params.duration 计算,必须与渲染目标时长一致
+    params.duration = targetDuration;
+    // 数字人源片中转(2026-08-24):revideo 渲染器只认 vite public 下的 URL 形式
+    // src("/xxx.mp4"),本地绝对路径会被当相对 URL → MEDIA_ERR_SRC_NOT_SUPPORTED 挂死。
+    // 渲染前复制进 public/staged/,渲染结束(成败)即清理。
+    const videoSrc = params.videoSrc;
+    if (typeof videoSrc === "string" && videoSrc && !videoSrc.startsWith("/") && !/^https?:\/\//.test(videoSrc)) {
+      const staged = await stageDigitalHumanAsset(jobId, videoSrc);
+      if (!staged) {
+        return { success: false, error: `数字人源片不存在或不可读: ${videoSrc}`, code: "INVALID_PARAMS" };
+      }
+      params.videoSrc = staged.url;
+      stagedCleanup = staged.cleanup;
+      // 源片宽高比自动探测(默认 720/1280 竖屏,非竖屏源片须给真实比例,否则 cover 构图错位)
+      if (params.videoRatio === undefined && staged.ratio) params.videoRatio = staged.ratio;
+    }
+  }
+
   const spec = {
     jobId,
     scene: input.template ? input.template.name : "custom",
-    params: input.template ? { ...input.template.params, theme: input.theme ?? input.template.params.theme } : undefined,
+    params,
     customCode: input.customScene,
-    duration: input.duration ?? 6,
-    width: input.size?.w ?? 1080,
-    height: input.size?.h ?? 1920,
+    duration: targetDuration,
+    // keynote-leather 是横屏整片模板,默认 1920×1080;其余模板默认竖屏 1080×1920
+    width: input.size?.w ?? (isKeynote ? 1920 : 1080),
+    height: input.size?.h ?? (isKeynote ? 1080 : 1920),
     outFile,
     outDir: outDirAbs,
   };
@@ -171,7 +217,6 @@ async function doRender(input: CodeSceneInput): Promise<CodeSceneResult> {
   let info = await probeMedia(outputPath);
   // duration 参数生效化(2026-08-19 根因修复):场景自然时长与 spec.duration 无关,
   // 不足目标时长时 tpad 克隆末帧补齐(详见 decidePadSeconds 注释)
-  const targetDuration = Math.min(Math.max(input.duration ?? 6, 1), 30);
   const pad = decidePadSeconds(info.duration, targetDuration);
   if (pad > 0) {
     await padWithLastFrame(outputPath, pad);
@@ -205,7 +250,38 @@ async function doRender(input: CodeSceneInput): Promise<CodeSceneResult> {
   return { success: true, path: outputPath, url: `/api/works/${input.workId}/assets/${rel}`, duration: info.duration };
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : String(err), code: "RENDER_FAILED" };
+  } finally {
+    if (stagedCleanup) await stagedCleanup();
   }
+}
+
+/**
+ * 数字人源片中转:把本地文件复制进 code-scene 的 vite public/staged/,
+ * 返回渲染可用的 URL 与源片宽高比;cleanup 在渲染结束后删除中转文件。
+ * 源片不存在时返回 null(调用方按参数错误处理)。
+ */
+async function stageDigitalHumanAsset(
+  jobId: string,
+  videoSrc: string,
+): Promise<{ url: string; ratio?: number; cleanup: () => Promise<void> } | null> {
+  if (!existsSync(videoSrc)) return null;
+  const ext = (videoSrc.match(/\.\w+$/)?.[0] ?? ".mp4").toLowerCase();
+  const stagedName = `${jobId}${ext}`;
+  const stagedDir = join(WORKER_DIR, "public", "staged");
+  const stagedPath = join(stagedDir, stagedName);
+  await mkdir(stagedDir, { recursive: true });
+  const { copyFile } = await import("node:fs/promises");
+  await copyFile(videoSrc, stagedPath);
+  let ratio: number | undefined;
+  try {
+    const info = await probeMedia(stagedPath);
+    if (info.width && info.height) ratio = info.width / info.height;
+  } catch { /* 探测失败用模板默认比例 */ }
+  return {
+    url: `/staged/${stagedName}`,
+    ratio,
+    cleanup: async () => { await rm(stagedPath, { force: true }).catch(() => {}); },
+  };
 }
 
 class WorkerTimeout extends Error { constructor() { super("渲染超时(180s)"); } }
