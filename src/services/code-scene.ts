@@ -219,7 +219,7 @@ async function doRender(input: CodeSceneInput): Promise<CodeSceneResult> {
     // 渲染前清掉同名旧产物:渲染器对已有 outFile 可能跳过重渲染(实测 18:24 旧 3.8s
     // 产物原地复用),残留旧文件会污染补时判定与"成功但产物陈旧"的假象
     await rm(outputPath, { force: true });
-    await runWorker(specPath, renderTimeoutMs(targetDuration));
+    await runWorkerWithRetry(specPath, renderTimeoutMs(targetDuration));
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : String(err), code: err instanceof WorkerTimeout ? "TIMEOUT" : "RENDER_FAILED" };
   } finally {
@@ -332,6 +332,23 @@ export async function padWithLastFrame(outputPath: string, padSeconds: number): 
   ]);
   const { rename } = await import("node:fs/promises");
   await rename(tmp, outputPath);
+}
+
+/**
+ * 导航超时自动重试一次(2026-08-24 端口竞态根治的兜底):
+ * worker 每任务已随机 vite 端口,但 Edge/系统资源未释放仍可能偶发
+ * "Navigation timeout"——这是瞬时故障,重试(新进程+新端口)即可恢复;
+ * 其他错误(参数/代码问题)重试无意义,直接抛出。
+ */
+async function runWorkerWithRetry(specPath: string, timeoutMs: number): Promise<void> {
+  try {
+    await runWorker(specPath, timeoutMs);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (err instanceof WorkerTimeout || !/navigation timeout/i.test(msg)) throw err;
+    console.warn("[code-scene] navigation timeout,重试一次(新端口)");
+    await runWorker(specPath, timeoutMs);
+  }
 }
 
 function runWorker(specPath: string, timeoutMs: number): Promise<void> {
