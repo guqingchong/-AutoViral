@@ -248,9 +248,11 @@ export function getRenderStatus(jobId: string): DbRenderJob | undefined {
 /**
  * code 模板整片渲染(2026-08-24 kind="code" 集成)。
  *
- * 约定:layers[0] 存场景配置 { scene: "keynote-leather", params?: {...} };
+ * 约定:layers[0] 存场景配置,两种形态——
+ *   内置模板:{ scene: "keynote-leather", params?: {...} }
+ *   LLM 生成:{ scene: "custom", customCode: "<TSX 源码>", params?: {...} }
  * 参数来源优先级:req.variables(每次渲染覆盖)> layers[0].params(模板默认)> 作品字段。
- * host_video(数字人源片)映射为场景 videoSrc,时长取源片实际时长(封顶 30s,
+ * host_video(数字人源片)映射为场景 videoSrc,时长取源片实际时长(封顶 600s,
  * revideo worker 渲染窗口上限);产物复制到 outputPath 保持下游(资产登记/门禁)一致。
  */
 async function renderCodeTemplate(
@@ -259,9 +261,10 @@ async function renderCodeTemplate(
   req: RenderRequest,
   outputPath: string,
 ): Promise<number | undefined> {
-  const cfg = (template.layers?.[0] ?? {}) as { scene?: string; params?: Record<string, unknown> };
-  if (typeof cfg.scene !== "string" || !cfg.scene) {
-    throw new Error(`code 模板 ${template.id} 缺少场景配置(layers[0].scene)`);
+  const cfg = (template.layers?.[0] ?? {}) as { scene?: string; customCode?: string; params?: Record<string, unknown> };
+  const isCustom = typeof cfg.customCode === "string" && cfg.customCode.trim().length > 0;
+  if (!isCustom && (typeof cfg.scene !== "string" || !cfg.scene)) {
+    throw new Error(`code 模板 ${template.id} 缺少场景配置(layers[0].scene 或 layers[0].customCode)`);
   }
   const work = await getWork(req.workId);
 
@@ -293,7 +296,9 @@ async function renderCodeTemplate(
   const r = await renderCodeScene({
     workId: req.workId,
     filename: `${jobId}_code`,
-    template: { name: cfg.scene, params },
+    ...(isCustom
+      ? { customScene: cfg.customCode, params }
+      : { template: { name: cfg.scene!, params } }),
     duration,
     size: template.canvas ? { w: template.canvas.width, h: template.canvas.height } : undefined,
   });

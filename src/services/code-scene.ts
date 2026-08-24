@@ -38,6 +38,8 @@ export interface CodeSceneInput {
   filename: string;
   template?: { name: string; params: Record<string, unknown> };
   customScene?: string;
+  /** customScene 形态的参数(2026-08-24 LLM 生成模板参数化):导出厂函数时注入 */
+  params?: Record<string, unknown>;
   duration?: number;
   size?: { w: number; h: number };
   theme?: string;
@@ -176,11 +178,12 @@ async function doRender(input: CodeSceneInput): Promise<CodeSceneResult> {
   const outFile = `${input.filename}.mp4`;
 
   const isKeynote = input.template?.name === "keynote-leather";
-  const targetDuration = Math.min(Math.max(input.duration ?? (isKeynote ? 8 : 6), 1), durationMaxFor(input.template?.name));
+  const isCustom = !!input.customScene;
+  const targetDuration = Math.min(Math.max(input.duration ?? (isKeynote ? 8 : 6), 1), durationMaxFor(input.template?.name ?? (isCustom ? "keynote-leather" : undefined)));
   const params: Record<string, unknown> | undefined = input.template
     ? { ...input.template.params, theme: input.theme ?? input.template.params.theme }
-    : undefined;
-  if (isKeynote && params) {
+    : input.params ? { ...input.params } : undefined;
+  if ((isKeynote || isCustom) && params) {
     // 场景呼吸循环轮数按 params.duration 计算,必须与渲染目标时长一致
     params.duration = targetDuration;
     // 数字人源片中转(2026-08-24):revideo 渲染器只认 vite public 下的 URL 形式

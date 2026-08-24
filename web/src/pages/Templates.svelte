@@ -20,6 +20,10 @@
   let genJobId = $state<string | null>(null);
   let genPollTimer: ReturnType<typeof setInterval> | null = null;
   let genMessage = $state("");
+  // ── 代码渲染模板生成(2026-08-24 Revideo 支路) ──
+  let codeGenStyle = $state("");
+  let codeGenOrientation = $state<"portrait" | "landscape">("portrait");
+  let codeGenWithDh = $state(false);
 
   // ── 模板要素（2026-08-03 要素化生成）──
   let elLayout = $state<string>("");
@@ -244,6 +248,36 @@
         return;
       }
       genJobId = data.jobId;
+      startPolling(data.jobId);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
+      generating = false;
+    }
+  }
+
+  /** 生成代码渲染模板:LLM 产 Revideo TSX → 真实渲染验证 → kind=code 入库(2026-08-24) */
+  async function generateCodeTemplates() {
+    if (!codeGenStyle.trim()) {
+      alert("请先描述风格,如「赛博朋克霓虹、深色底、青色辉光」");
+      return;
+    }
+    generating = true;
+    genMessage = "代码模板生成中(LLM 设计 + Revideo 渲染验证,约 2-4 分钟)... 可以切换页面";
+    try {
+      const res = await fetch("/api/templates/generate-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ style: codeGenStyle, orientation: codeGenOrientation, withDigitalHuman: codeGenWithDh }),
+      });
+      const data = await res.json();
+      if (!data.jobId) {
+        alert(data.error ?? "生成失败");
+        generating = false;
+        return;
+      }
+      genJobId = data.jobId;
+      // 生成完成后切到代码渲染分类,直接看到新模板(带视频预览)
+      kindFilter = "code";
       startPolling(data.jobId);
     } catch (err) {
       alert(err instanceof Error ? err.message : String(err));
@@ -574,6 +608,20 @@
           </button>
           <button class="btn-research" disabled={researching} onclick={researchTemplates} title="按当前要素选择调研全网优秀模板，沉淀为设计技能，之后生成自动吸收">
             {researching ? "调研中..." : `🔍 调研学习${skillCount > 0 ? `（已存 ${skillCount} 技能）` : ""}`}
+          </button>
+        </div>
+        <!-- 代码渲染模板生成(2026-08-24 Revideo 支路):圆角/辉光/弹簧动效代码直出,突破 ffmpeg 图层天花板 -->
+        <div class="gen-row">
+          <input type="text" bind:value={codeGenStyle} placeholder="代码渲染模板:描述风格,如「赛博朋克霓虹、深色底、青色辉光、圆角面板」" class="gen-input" />
+          <select bind:value={codeGenOrientation} class="codegen-orient" title="画幅">
+            <option value="portrait">竖屏 1080×1920</option>
+            <option value="landscape">横屏 1920×1080</option>
+          </select>
+          <label class="codegen-dh" title="模板包含数字人视频窗口(渲染时可传数字人源片,缺省占位)">
+            <input type="checkbox" bind:checked={codeGenWithDh} /> 数字人窗口
+          </label>
+          <button class="btn-primary gen-btn" disabled={generating} onclick={generateCodeTemplates} title="LLM 生成 Revideo TSX 场景代码,真实渲染验证后入库(约 2-4 分钟)">
+            {generating ? "生成中..." : "⚡ 生成代码模板"}
           </button>
         </div>
         <!-- 克隆优秀作品模板(2026-08-13 二期) -->
