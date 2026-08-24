@@ -57,6 +57,11 @@ const edgeCandidates = [
 ];
 const edge = edgeCandidates.find(existsSync);
 
+// 每任务随机 vite 端口(2026-08-24 端口竞态根治):固定 9000 时,上一任务的 vite/Edge
+// 未完全释放会导致本次渲染 navigation timeout(连续渲染偶发失败的根因);
+// 9100-9900 随机取基址,碰撞概率可忽略,vite 遇到占用还会自动顺延
+const viteBasePort = 9100 + Math.floor(Math.random() * 800);
+
 try {
   const out = await renderVideo({
     projectFile: `/${projectFile}`,
@@ -65,6 +70,7 @@ try {
       outDir: spec.outDir ?? "./out",
       logProgress: false,
       workers: 1,
+      viteBasePort,
       puppeteer: edge ? { executablePath: edge, headless: true } : undefined,
       projectSettings: {
         size: { x: W, y: H },
