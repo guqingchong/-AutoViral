@@ -27,6 +27,12 @@ describe("validateCodeSceneInput", () => {
   it("duration 超出 1-30 报错", () => {
     expect(validateCodeSceneInput({ ...base, duration: 60 } as any).join()).toContain("duration");
   });
+  it("keynote-leather 长口播 duration 上限 600s(2026-08-24)", () => {
+    const ok = { workId: "w", filename: "f", duration: 300, template: { name: "keynote-leather", params: { title: "t" } } };
+    expect(validateCodeSceneInput(ok as any)).toEqual([]);
+    const tooLong = { ...ok, duration: 601 };
+    expect(validateCodeSceneInput(tooLong as any).join()).toContain("1-600");
+  });
   it("非法主题报错", () => {
     expect(validateCodeSceneInput({ ...base, theme: "neon" } as any).join()).toContain("theme");
   });
@@ -154,6 +160,7 @@ describe.skipIf(!workerReady)("video-factory code 模板端到端", () => {
       await new Promise((r) => setTimeout(r, 2000));
       status = getRenderStatus(job.jobId);
     }
+    expect(status?.error).toBeUndefined();
     expect(status?.status).toBe("completed");
     expect(existsSync(job.outputPath)).toBe(true);
     const info = await probeMedia(job.outputPath);

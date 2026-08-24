@@ -210,7 +210,9 @@ export default function makeKeynoteLeather(params: KeynoteLeatherParams) {
       ),
     );
 
-    // 0.5s 数字人窗口弹簧入场(带回弹)+ 辉光同步亮起
+    // 0.5s 数字人窗口弹簧入场(带回弹)+ 辉光同步亮起;
+    // 字幕条不再等窗口完全落定,提前 0.6s 并行入场(2026-08-24 时序修复:
+    // 串行时中文字幕 ~4.1s 才稳定、英文 ~4.3s,5s 短片英文刚出现就结束)
     yield* all(
       spring(PlopSpring, 0, 1, 0.01, (v) => {
         winFrame().opacity(Math.min(1, v * 1.6));
@@ -219,27 +221,27 @@ export default function makeKeynoteLeather(params: KeynoteLeatherParams) {
         winClip().scale(0.92 + 0.08 * v);
       }),
       winGlow().opacity(0.16, 1.0, easeInOutCubic),
-    );
-
-    // 1.5s 字幕条升起:底条淡入 → 中文 → 英文(错峰 0.15s)
-    yield* chain(
-      subBar().opacity(0.38, 0.4),
-      all(
-        spring(SmoothSpring, 0, 1, 0.01, (v) => {
-          subCnRef().opacity(v);
-          subCnRef().position.y(H / 2 - 128 + 22 * (1 - v));
-        }),
-        chain(
-          waitFor(0.15),
+      // 字幕条升起:底条淡入 → 中文 → 英文(错峰 0.15s),与窗口入场尾部并行
+      chain(
+        waitFor(0.6),
+        subBar().opacity(0.38, 0.4),
+        all(
           spring(SmoothSpring, 0, 1, 0.01, (v) => {
-            subEnRef().opacity(v);
-            subEnRef().position.y(H / 2 - 62 + 16 * (1 - v));
+            subCnRef().opacity(v);
+            subCnRef().position.y(H / 2 - 128 + 22 * (1 - v));
           }),
+          chain(
+            waitFor(0.15),
+            spring(SmoothSpring, 0, 1, 0.01, (v) => {
+              subEnRef().opacity(v);
+              subEnRef().position.y(H / 2 - 62 + 16 * (1 - v));
+            }),
+          ),
         ),
       ),
     );
 
-    // 2.0s 后:辉光呼吸(光泽缓慢起伏,苹果式"活着的静帧")
+    // 入场落定后:辉光呼吸(光泽缓慢起伏,苹果式"活着的静帧")
     // 注意:revideo ffmpeg 渲染器在装载阶段会跑完整个生成器 —— 禁止 while(true)
     // 无限循环(2026-08-21 实测 navigation timeout 根因),呼吸轮数按时长封顶。
     const total = params.duration ?? 5;
