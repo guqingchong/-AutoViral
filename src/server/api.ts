@@ -4370,6 +4370,91 @@ apiRoutes.post("/api/templates/generate", async (c) => {
   return c.json({ jobId, status: "running", message: "模板生成已启动，可切换页面，稍后回来查看结果" });
 });
 
+// ── DesignBrief 意图稿(2026-08-25):描述 → 意图稿 → 多轮微调 → 按稿生成 ──
+// 同步返回(brief 生成/微调秒级~几十秒,前端带 loading 等待);仅最终生成走 job
+const BRIEF_IMAGE_TYPES: Record<string, string> = { "image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp" };
+
+apiRoutes.post("/api/templates/brief", async (c) => {
+  const body = await c.req.json<{
+    style?: string;
+    orientation?: "portrait" | "landscape";
+    withDigitalHuman?: boolean;
+    referenceImage?: { data: string; mediaType: string };
+  }>().catch(() => ({} as { style?: string; orientation?: "portrait" | "landscape"; withDigitalHuman?: boolean; referenceImage?: { data: string; mediaType: string } }));
+  if (!body.style?.trim()) return c.json({ error: "style 必填(风格描述,如:赛博朋克霓虹、深色底、青色辉光)" }, 400);
+
+  // 参考图落盘(chatVisionJson 只收文件路径):≤5MB,png/jpeg/webp
+  let referenceImagePath: string | undefined;
+  if (body.referenceImage?.data) {
+    const ext = BRIEF_IMAGE_TYPES[body.referenceImage.mediaType];
+    if (!ext) return c.json({ error: "参考图仅支持 png/jpeg/webp" }, 400);
+    const buf = Buffer.from(body.referenceImage.data, "base64");
+    if (buf.length > 5 * 1024 * 1024) return c.json({ error: "参考图超过 5MB 上限" }, 400);
+    const dir = join(dataDir, "brief-sessions", "uploads");
+    await mkdir(dir, { recursive: true });
+    referenceImagePath = join(dir, `ref_${randomUUID().slice(0, 8)}${ext}`);
+    await writeFile(referenceImagePath, buf);
+  }
+
+  try {
+    const { generateBrief } = await import("../services/design-brief.js");
+    const { sessionId, brief } = await generateBrief(
+      { style: body.style!, orientation: body.orientation ?? "portrait", withDigitalHuman: body.withDigitalHuman },
+      referenceImagePath,
+    );
+    return c.json({ briefId: sessionId, brief });
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : "意图稿生成失败" }, 500);
+  }
+});
+
+apiRoutes.post("/api/templates/brief/:id/chat", async (c) => {
+  const id = c.req.param("id");
+  if (!/^brief_[a-zA-Z0-9_-]+$/.test(id)) return c.json({ error: "Invalid brief id" }, 400);
+  const body = await c.req.json<{ message?: string }>().catch(() => ({} as { message?: string }));
+  if (!body.message?.trim()) return c.json({ error: "message 必填" }, 400);
+  try {
+    const { reviseBrief } = await import("../services/design-brief.js");
+    const { brief, diffSummary } = await reviseBrief(id, body.message!);
+    return c.json({ brief, diffSummary });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return c.json({ error: msg }, msg.includes("不存在") ? 404 : 500);
+  }
+});
+
+apiRoutes.post("/api/templates/brief/:id/generate", async (c) => {
+  const id = c.req.param("id");
+  if (!/^brief_[a-zA-Z0-9_-]+$/.test(id)) return c.json({ error: "Invalid brief id" }, 400);
+  const { loadBriefSession } = await import("../services/design-brief.js");
+  const session = await loadBriefSession(id);
+  if (!session) return c.json({ error: "brief 会话不存在或已过期" }, 404);
+
+  const jobId = "tplcode_" + Date.now();
+  try {
+    const db = getDb();
+    db.prepare("INSERT INTO template_gen_jobs (id, status, count, generated, kind) VALUES (?, 'running', 1, 0, 'generate-code')").run(jobId);
+  } catch { /* 表不存在时退化为仅内存态 */ }
+
+  const { generateCodeTemplate } = await import("../services/code-template-generator.js");
+  generateCodeTemplate({ ...session.input, brief: session.brief })
+    .then((tpl) => {
+      try {
+        const db = getDb();
+        db.prepare("UPDATE template_gen_jobs SET status = 'done', generated = 1, updated_at = datetime('now') WHERE id = ?").run(jobId);
+        console.log(`[brief-gen] 「${tpl.name}」(${tpl.id}) 按稿生成完成`);
+      } catch {}
+    })
+    .catch((err) => {
+      try {
+        const db = getDb();
+        db.prepare("UPDATE template_gen_jobs SET status = 'error', error = ?, updated_at = datetime('now') WHERE id = ?").run(err instanceof Error ? err.message : String(err), jobId);
+      } catch {}
+    });
+
+  return c.json({ jobId, status: "running", message: "按设计稿生成中(LLM 设计 + Revideo 渲染验证,约 2-4 分钟),可切换页面" });
+});
+
 // POST /api/templates/generate-code - LLM 生成代码渲染模板(Revideo TSX,2026-08-24)
 // 与 JSON 时间线生成平行:LLM 产 TSX 场景 → 真实渲染 5s 预览验证 → 存 kind=code
 apiRoutes.post("/api/templates/generate-code", async (c) => {
