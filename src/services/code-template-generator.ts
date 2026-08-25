@@ -16,6 +16,7 @@ import { runJsonPrompt } from "./llm-json.js";
 import { renderCodeScene } from "./code-scene.js";
 import { createTemplate } from "../db/templates-repo.js";
 import type { DbTemplate } from "../db/templates-repo.js";
+import type { DesignBrief } from "./design-brief.js";
 
 export interface GenerateCodeTemplateInput {
   /** 风格自由描述,如 "赛博朋克霓虹、深色底、青色辉光" */
@@ -24,6 +25,8 @@ export interface GenerateCodeTemplateInput {
   orientation?: "portrait" | "landscape";
   /** 数字人窗口:声明后场景须处理 params.videoSrc(缺省渲染占位) */
   withDigitalHuman?: boolean;
+  /** 已确认的设计意图稿(2026-08-25):存在时代码生成从自由创作变为按稿施工 */
+  brief?: DesignBrief;
 }
 
 interface LlmCodeTemplateResponse {
@@ -89,7 +92,14 @@ export function buildCodeTemplatePrompt(input: GenerateCodeTemplateInput): strin
   const H = input.orientation === "landscape" ? 1080 : 1920;
   return [
     "你是顶级动态视觉设计师 + Revideo 工程师,为短视频设计「代码渲染整片模板」。",
-    `设计需求:${input.style}`,
+    input.brief
+      ? [
+          "你必须严格实现以下已确认设计稿(DesignBrief)——palette 逐色落实 hex 与用途、",
+          "layout 逐区落实内容与位置、motion 逐条落实入场错峰与循环;",
+          "elements 是装饰白名单:只允许出现清单内的装饰,禁止添加稿外元素。",
+          `设计稿 JSON:\n${JSON.stringify(input.brief, null, 2)}`,
+        ].join("\n")
+      : `设计需求:${input.style}`,
     "",
     `## 画布:${W}×${H}(设计空间常量 W/H,居中坐标系,原点在画面中心)`,
     "",

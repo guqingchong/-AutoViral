@@ -52,3 +52,29 @@ export default function(params: any) {
     expect(staticCheckTsx(good + "\nMath.random()").join()).toContain("确定可重现");
   });
 });
+
+describe("buildCodeTemplatePrompt(brief 注入)", () => {
+  const brief = {
+    styleSummary: "深色底赛博霓虹",
+    palette: [{ hex: "#0a0e17", role: "背景" }, { hex: "#00e5ff", role: "强调" }],
+    layout: [{ region: "标题区", content: "title", position: "居中偏上" }],
+    elements: ["青色辉光", "品红网格"],
+    motion: { entrance: "标题 0s → 主视觉 0.24s", loop: "辉光 3s 呼吸" },
+    sourceText: "赛博朋克",
+  };
+  it("有 brief 时:按稿施工措辞 + 白名单 + brief 内容注入", () => {
+    const p = buildCodeTemplatePrompt({ style: "赛博朋克", orientation: "portrait", brief });
+    expect(p).toContain("严格实现以下已确认设计稿");
+    expect(p).toContain("禁止添加稿外元素");
+    expect(p).toContain("#00e5ff");
+    expect(p).toContain("品红网格");
+    // 既有纪律不丢失
+    expect(p).toContain("export default function");
+    expect(p).toContain("while(true)");
+  });
+  it("无 brief 时保持原样(向后兼容)", () => {
+    const p = buildCodeTemplatePrompt({ style: "赛博朋克", orientation: "portrait" });
+    expect(p).toContain("设计需求:赛博朋克");
+    expect(p).not.toContain("严格实现以下已确认设计稿");
+  });
+});
