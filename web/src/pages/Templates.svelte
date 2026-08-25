@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { deleteTemplateApi, renderPreview, updateTemplateApi, type Template } from "../lib/api.js";
+  import { deleteTemplateApi, renderPreview, updateTemplateApi, createBrief, chatBrief, generateFromBrief, type Template, type DesignBrief } from "../lib/api.js";
   import { t } from "../lib/i18n.js";
   import TemplateEditor from "./TemplateEditor.svelte";
 
@@ -24,6 +24,13 @@
   let codeGenStyle = $state("");
   let codeGenOrientation = $state<"portrait" | "landscape">("portrait");
   let codeGenWithDh = $state(false);
+  // ── 意图稿两步向导(2026-08-25) ──
+  let briefId = $state("");
+  let brief = $state<DesignBrief | null>(null);
+  let briefChatInput = $state("");
+  let briefLoading = $state(false);
+  let briefDiff = $state("");
+  let briefImageData = $state<{ data: string; mediaType: string; name: string } | null>(null);
 
   // ── 模板要素（2026-08-03 要素化生成）──
   let elLayout = $state<string>("");
@@ -255,34 +262,87 @@
     }
   }
 
-  /** 生成代码渲染模板:LLM 产 Revideo TSX → 真实渲染验证 → kind=code 入库(2026-08-24) */
-  async function generateCodeTemplates() {
+  /** 第一步:描述(+参考图) → 生成设计意图稿(不渲染,秒级~1分钟) */
+  async function startBrief() {
     if (!codeGenStyle.trim()) {
       alert("请先描述风格,如「赛博朋克霓虹、深色底、青色辉光」");
       return;
     }
-    generating = true;
-    genMessage = "代码模板生成中(LLM 设计 + Revideo 渲染验证,约 2-4 分钟)... 可以切换页面";
+    briefLoading = true;
+    briefDiff = "";
     try {
-      const res = await fetch("/api/templates/generate-code", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ style: codeGenStyle, orientation: codeGenOrientation, withDigitalHuman: codeGenWithDh }),
+      const res = await createBrief({
+        style: codeGenStyle,
+        orientation: codeGenOrientation,
+        withDigitalHuman: codeGenWithDh,
+        ...(briefImageData ? { referenceImage: { data: briefImageData.data, mediaType: briefImageData.mediaType } } : {}),
       });
-      const data = await res.json();
-      if (!data.jobId) {
-        alert(data.error ?? "生成失败");
+      briefId = res.briefId;
+      brief = res.brief;
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "意图稿生成失败");
+    } finally {
+      briefLoading = false;
+    }
+  }
+
+  /** 多轮微调:只改用户点名部分 */
+  async function sendBriefChat() {
+    if (!briefChatInput.trim() || !briefId) return;
+    briefLoading = true;
+    try {
+      const res = await chatBrief(briefId, briefChatInput.trim());
+      brief = res.brief;
+      briefDiff = res.diffSummary;
+      briefChatInput = "";
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "微调失败");
+    } finally {
+      briefLoading = false;
+    }
+  }
+
+  /** 第二步:确认按稿生成(走现有 2-4 分钟 job 轮询) */
+  async function confirmBriefAndGenerate() {
+    if (!briefId) return;
+    generating = true;
+    genMessage = "按设计稿生成中(LLM 设计 + Revideo 渲染验证,约 2-4 分钟)... 可以切换页面";
+    try {
+      const res = await generateFromBrief(briefId);
+      if (!res.jobId) {
+        alert("生成失败");
         generating = false;
         return;
       }
-      genJobId = data.jobId;
-      // 生成完成后切到代码渲染分类,直接看到新模板(带视频预览)
+      genJobId = res.jobId;
       kindFilter = "code";
-      startPolling(data.jobId);
+      brief = null;
+      briefId = "";
+      startPolling(res.jobId);
     } catch (err) {
       alert(err instanceof Error ? err.message : String(err));
       generating = false;
     }
+  }
+
+  /** 参考图选择:读为 base64(≤5MB) */
+  function pickBriefImage(e: Event) {
+    const file = (e.target as HTMLInputElement).files?.[0];
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) {
+      alert("参考图超过 5MB 上限");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = String(reader.result);
+      briefImageData = {
+        data: dataUrl.slice(dataUrl.indexOf(",") + 1),
+        mediaType: file.type,
+        name: file.name,
+      };
+    };
+    reader.readAsDataURL(file);
   }
 
   async function load() {
@@ -610,7 +670,7 @@
             {researching ? "调研中..." : `🔍 调研学习${skillCount > 0 ? `（已存 ${skillCount} 技能）` : ""}`}
           </button>
         </div>
-        <!-- 代码渲染模板生成(2026-08-24 Revideo 支路):圆角/辉光/弹簧动效代码直出,突破 ffmpeg 图层天花板 -->
+        <!-- 代码渲染模板:两阶段意图稿向导(2026-08-25)——先确认设计稿再生成,精准落实意图 -->
         <div class="gen-row">
           <input type="text" bind:value={codeGenStyle} placeholder="代码渲染模板:描述风格,如「赛博朋克霓虹、深色底、青色辉光、圆角面板」" class="gen-input" />
           <select bind:value={codeGenOrientation} class="codegen-orient" title="画幅">
@@ -620,10 +680,47 @@
           <label class="codegen-dh" title="模板包含数字人视频窗口(渲染时可传数字人源片,缺省占位)">
             <input type="checkbox" bind:checked={codeGenWithDh} /> 数字人窗口
           </label>
-          <button class="btn-primary gen-btn" disabled={generating} onclick={generateCodeTemplates} title="LLM 生成 Revideo TSX 场景代码,真实渲染验证后入库(约 2-4 分钟)">
-            {generating ? "生成中..." : "⚡ 生成代码模板"}
+          <label class="btn-research brief-upload" title="上传参考截图,AI 拆解其风格并入设计稿">
+            {briefImageData ? `📎 ${briefImageData.name}` : "📎 参考图"}
+            <input type="file" accept="image/png,image/jpeg,image/webp" style="display:none" onchange={pickBriefImage} />
+          </label>
+          <button class="btn-primary gen-btn" disabled={briefLoading || generating} onclick={startBrief} title="先生成结构化设计意图稿,确认后再生成代码模板">
+            {briefLoading && !brief ? "生成设计稿中..." : "📝 生成设计稿"}
           </button>
         </div>
+        {#if brief}
+          <div class="brief-card">
+            <h4>设计意图稿 —— {brief.styleSummary}</h4>
+            <div class="brief-section">
+              <span class="brief-label">配色</span>
+              {#each brief.palette as p}
+                <span class="brief-swatch" style="background:{p.hex}" title="{p.hex}"></span>
+                <span class="brief-swatch-role">{p.role}{p.note ? ` · ${p.note}` : ""}</span>
+              {/each}
+            </div>
+            <div class="brief-section">
+              <span class="brief-label">布局</span>
+              <ul>{#each brief.layout as l}<li><b>{l.region}</b>:{l.content}({l.position})</li>{/each}</ul>
+            </div>
+            <div class="brief-section">
+              <span class="brief-label">元素</span>
+              {#each brief.elements as el}<span class="deco-chip active">{el}</span>{/each}
+            </div>
+            <div class="brief-section">
+              <span class="brief-label">动效</span>
+              <span>入场:{brief.motion.entrance};循环:{brief.motion.loop}</span>
+            </div>
+            {#if briefDiff}<div class="brief-diff">已调整:{briefDiff}</div>{/if}
+            <div class="brief-actions">
+              <input type="text" bind:value={briefChatInput} placeholder="想调整什么?如「标题再大点」「去掉网格」「换成青色」"
+                class="gen-input" onkeydown={(e) => e.key === "Enter" && sendBriefChat()} />
+              <button class="btn-research" disabled={briefLoading} onclick={sendBriefChat}>{briefLoading ? "调整中..." : "微调"}</button>
+              <button class="btn-primary gen-btn" disabled={briefLoading || generating} onclick={confirmBriefAndGenerate} title="按此设计稿生成代码模板(约 2-4 分钟)">
+                {generating ? "生成中..." : "⚡ 按此稿生成"}
+              </button>
+            </div>
+          </div>
+        {/if}
         <!-- 克隆优秀作品模板(2026-08-13 二期) -->
         <div class="gen-row clone-row">
           <input type="text" bind:value={cloneUrl} placeholder="粘贴优秀作品链接克隆模板:小红书图文笔记 / 抖音视频" class="gen-input" />
@@ -752,4 +849,14 @@
   .lightbox-img { max-width: 82vw; max-height: 80vh; object-fit: contain; border-radius: 4px; background: #111; }
   .lightbox-nav { border: none; border-radius: 50%; width: 2.4rem; height: 2.4rem; font-size: 1.4rem; line-height: 1; cursor: pointer; background: var(--bg-inset); color: var(--text); flex-shrink: 0; }
   .lightbox-nav:hover { background: var(--accent); color: var(--accent-text); }
+  .brief-card { border: 1px solid var(--card-border); border-radius: var(--card-radius); background: var(--card-bg); padding: 1rem; margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.6rem; }
+  .brief-card h4 { margin: 0; font-size: var(--size-sm); }
+  .brief-section { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; font-size: var(--size-xs); color: var(--text-muted); }
+  .brief-section ul { margin: 0; padding-left: 1.2rem; }
+  .brief-label { font-weight: 600; color: var(--text); min-width: 2.5rem; }
+  .brief-swatch { width: 18px; height: 18px; border-radius: 4px; border: 1px solid var(--card-border); }
+  .brief-swatch-role { margin-right: 0.6rem; }
+  .brief-diff { font-size: var(--size-xs); color: var(--accent); }
+  .brief-actions { display: flex; gap: 0.5rem; }
+  .brief-upload { cursor: pointer; }
 </style>
