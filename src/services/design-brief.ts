@@ -130,6 +130,33 @@ async function analyzeReferenceImage(imagePath: string): Promise<string> {
   return r.notes ?? "";
 }
 
+/** 防御性形状校验:LLM 只保证 JSON 可解析不保证形状,畸形值在此收敛为安全默认,防止前端 each/属性访问 TypeError */
+export function normalizeBrief(raw: unknown): DesignBrief {
+  const obj = (raw ?? {}) as Record<string, unknown>;
+  const asStr = (v: unknown): string => (typeof v === "string" ? v : "");
+  const asArr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+  const palette = asArr(obj.palette).map((p) => {
+    const item = (p ?? {}) as Record<string, unknown>;
+    return { hex: asStr(item.hex), role: asStr(item.role), ...(typeof item.note === "string" ? { note: item.note } : {}) };
+  });
+  const layout = asArr(obj.layout).map((l) => {
+    const item = (l ?? {}) as Record<string, unknown>;
+    return { region: asStr(item.region), content: asStr(item.content), position: asStr(item.position) };
+  });
+  const elements = asArr(obj.elements).map((e) => asStr(e));
+  const motionRaw = obj.motion && typeof obj.motion === "object" ? (obj.motion as Record<string, unknown>) : {};
+  const motion = { entrance: asStr(motionRaw.entrance), loop: asStr(motionRaw.loop) };
+  return {
+    styleSummary: asStr(obj.styleSummary),
+    palette,
+    layout,
+    elements,
+    motion,
+    ...(typeof obj.referenceNotes === "string" ? { referenceNotes: obj.referenceNotes } : {}),
+    sourceText: asStr(obj.sourceText),
+  };
+}
+
 /** 生成 brief v1 并建会话 */
 export async function generateBrief(
   input: BriefInput,
@@ -141,7 +168,8 @@ export async function generateBrief(
     timeoutMs: 180_000,
     maxAttempts: 2,
   });
-  const brief: DesignBrief = { ...draft, ...(referenceNotes ? { referenceNotes } : {}), sourceText: input.style };
+  const normalized = normalizeBrief(draft);
+  const brief: DesignBrief = { ...normalized, ...(referenceNotes ? { referenceNotes } : {}), sourceText: input.style };
   const session: BriefSession = {
     id: `brief_${randomUUID().slice(0, 8)}`,
     input,
@@ -165,7 +193,7 @@ export async function reviseBrief(
     buildBriefRevisePrompt(session.brief, message, session.history),
     { stage: "plan", timeoutMs: 180_000, maxAttempts: 2 },
   );
-  const brief: DesignBrief = { ...r.brief, sourceText: session.brief.sourceText };
+  const brief: DesignBrief = { ...normalizeBrief(r.brief), sourceText: session.brief.sourceText };
   session.brief = brief;
   session.history.push({ message, diffSummary: r.diffSummary ?? "" });
   await persistSession(session);

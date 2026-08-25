@@ -318,6 +318,9 @@
       kindFilter = "code";
       brief = null;
       briefId = "";
+      briefImageData = null;
+      briefChatInput = "";
+      briefDiff = "";
       startPolling(res.jobId);
     } catch (err) {
       alert(err instanceof Error ? err.message : String(err));
@@ -343,6 +346,8 @@
       };
     };
     reader.readAsDataURL(file);
+    // 清空 input value:同一文件可二次选择(change 事件才会再次触发)
+    (e.target as HTMLInputElement).value = "";
   }
 
   async function load() {
@@ -684,6 +689,9 @@
             {briefImageData ? `📎 ${briefImageData.name}` : "📎 参考图"}
             <input type="file" accept="image/png,image/jpeg,image/webp" style="display:none" onchange={pickBriefImage} />
           </label>
+          {#if briefImageData}
+            <button class="brief-image-clear" title="清除参考图" onclick={() => (briefImageData = null)}>✕</button>
+          {/if}
           <button class="btn-primary gen-btn" disabled={briefLoading || generating} onclick={startBrief} title="先生成结构化设计意图稿,确认后再生成代码模板">
             {briefLoading && !brief ? "生成设计稿中..." : "📝 生成设计稿"}
           </button>
@@ -859,4 +867,14 @@
   .brief-diff { font-size: var(--size-xs); color: var(--accent); }
   .brief-actions { display: flex; gap: 0.5rem; }
   .brief-upload { cursor: pointer; }
+  .brief-image-clear {
+    padding: 2px 6px;
+    font-size: 12px;
+    line-height: 1;
+    border: 1px solid var(--border, #444);
+    border-radius: 6px;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+  }
 </style>
