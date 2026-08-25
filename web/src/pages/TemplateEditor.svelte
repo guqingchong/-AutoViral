@@ -163,15 +163,19 @@
     }
     rendering = true;
     try {
-      // Try poster endpoint first (fast, no host_video needed)
-      const posterRes = await fetch(`/api/templates/${template.id}/poster`);
-      if (posterRes.ok) {
-        const posterData = await posterRes.json();
-        if (posterData.posterUrl) {
-          template.previewUrl = posterData.posterUrl;
-          message = "预览图已生成";
-          rendering = false;
-          return;
+      // 代码模板(kind=code):poster 抽自生成时的旧预览 mp4,反映不了编辑/再加工后的
+      // TSX,必须直接走 renderPreview 重渲染;其余模板先走 poster 快捷路径
+      if ((template as { kind?: string }).kind !== "code") {
+        // Try poster endpoint first (fast, no host_video needed)
+        const posterRes = await fetch(`/api/templates/${template.id}/poster`);
+        if (posterRes.ok) {
+          const posterData = await posterRes.json();
+          if (posterData.posterUrl) {
+            template.previewUrl = posterData.posterUrl;
+            message = "预览图已生成";
+            rendering = false;
+            return;
+          }
         }
       }
       // Fallback: try full video preview (will also fall back to poster internally)
@@ -179,6 +183,7 @@
       for (const v of template.variables ?? []) defaults[v.name] = v.default ?? (v.type === "number" ? 0 : "预览");
       const result = await renderPreview(template.id, defaults);
       template.previewUrl = result.previewUrl;
+      if (result.posterUrl) template.posterUrl = result.posterUrl;
       message = t("previewReady");
     } catch (err) {
       message = err instanceof Error ? err.message : "Preview failed";
@@ -233,8 +238,9 @@
       </label>
       {#if template.previewUrl}
         <div class="preview-box">
-          {#if template.previewUrl.endsWith(".mp4")}
-            <video src={template.previewUrl} controls muted loop playsinline></video>
+          {#if template.previewUrl.endsWith(".mp4") || template.previewUrl.includes("preview-file")}
+            <!-- preview-file 是代码模板的 mp4 流端点(无 .mp4 后缀);poster 属性遮住 revideo 入场动画前的首帧黑场 -->
+            <video src={template.previewUrl} poster={template.posterUrl} controls muted loop playsinline></video>
           {:else}
             <img src={template.previewUrl} alt="preview" style="width: 100%; height: 100%; object-fit: cover;" />
           {/if}

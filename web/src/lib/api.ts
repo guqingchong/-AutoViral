@@ -920,8 +920,8 @@ export async function deleteTemplateApi(id: string): Promise<void> {
   await request(`/api/templates/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
-export async function renderPreview(id: string, variables?: Record<string, string | number>): Promise<{ previewUrl: string }> {
-  return post<{ previewUrl: string }>(`/api/templates/${encodeURIComponent(id)}/preview`, { variables });
+export async function renderPreview(id: string, variables?: Record<string, string | number>): Promise<{ previewUrl: string; posterUrl?: string }> {
+  return post<{ previewUrl: string; posterUrl?: string }>(`/api/templates/${encodeURIComponent(id)}/preview`, { variables });
 }
 
 export async function fetchRenderJobs(status?: string): Promise<RenderJob[]> {
