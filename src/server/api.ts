@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { readFile, writeFile, appendFile, mkdir, readdir, rm, rename, unlink, stat } from "node:fs/promises";
+import { readFile, writeFile, appendFile, mkdir, readdir, rm, rename, unlink, stat, copyFile } from "node:fs/promises";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { join, extname, basename, resolve, sep } from "node:path";
@@ -4880,6 +4880,24 @@ apiRoutes.get("/api/templates/:id/poster", async (c) => {
       return c.json({ posterUrl: `/api/shared-assets/templates/${id}/poster.png`, frameUrls: storyboardFrameUrls(id) });
     } catch {}
   }
+  // 代码模板(kind=code):layers 只有 custom scene,故事板/ffmpeg 管线渲染不了,
+  // 会产出纯黑 poster(2026-08-25 黑屏根因)。直接从已渲染的预览 mp4 抽中帧——
+  // revideo 场景首帧在入场动画之前是纯黑的,取 2.5s 处。
+  // 放在缓存分支之前:已有的黑色 poster.png 会被自动覆盖自愈。
+  if (template.kind === "code") {
+    const previewMp4 = join(dataDir, "templates", `${id}-preview.mp4`);
+    if (!existsSync(previewMp4)) return c.json({ error: "代码模板预览尚未渲染" }, 404);
+    try {
+      await execFileAsync("ffmpeg", ["-ss", "2.5", "-i", previewMp4, "-frames:v", "1", "-y", posterPath], { timeout: 10000 });
+      // poster.png 文件名不变而内容会重生成,shared-assets 静态路由带 1 小时缓存,
+      // 必须带 mtime 版本号否则浏览器继续展示旧黑图(2026-08-25 编辑器黑屏根因)
+      const posterMtime = (await stat(posterPath)).mtimeMs;
+      return c.json({ posterUrl: `/api/shared-assets/templates/${id}/poster.png?v=${posterMtime}` });
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : "代码模板 poster 抽帧失败" }, 500);
+    }
+  }
+
   // If poster exists AND is newer than template's last update, serve cached version
   if (existsSync(posterPath)) {
     try {
@@ -5052,6 +5070,45 @@ apiRoutes.post("/api/templates/:id/preview", async (c) => {
 
   try {
     const variableValues = { ...fillDefaults(template.variables), ...(body.variables ?? {}) };
+
+    // 代码模板(kind=code):layers 是 custom TSX 场景,renderTimeline/ffmpeg 管线渲染不了,
+    // 旧逻辑会落到兜底分支生成纯黑 poster 并覆盖 preview_url(2026-08-25 编辑器/再加工
+    // 预览黑屏根因)。走 revideo 代码渲染,产物回写 preview-file 源并同步刷新 poster,
+    // 编辑器 <video poster> 与卡片都指向最新中帧。
+    if (template.kind === "code") {
+      const customLayer = (template.layers as Array<{ scene?: string; customCode?: string }> | undefined)?.find(
+        (l) => l && l.scene === "custom" && typeof l.customCode === "string" && l.customCode.trim(),
+      );
+      if (!customLayer?.customCode) return c.json({ error: "代码模板缺少 customCode 场景" }, 400);
+      const { renderCodeScene } = await import("../services/code-scene.js");
+      const result = await renderCodeScene({
+        workId: "tpl_preview",
+        filename: `preview_${randomUUID().slice(0, 8)}`,
+        customScene: customLayer.customCode,
+        params: {
+          title: variableValues.title ?? "预览标题示例",
+          kicker: variableValues.kicker ?? "PREVIEW",
+          subtitleCn: variableValues.subtitleCn ?? "中文字幕预览效果",
+          subtitleEn: variableValues.subtitleEn ?? "English subtitle preview",
+        },
+        duration: 5,
+        size: { w: (template.canvas as { width?: number })?.width ?? 1080, h: (template.canvas as { height?: number })?.height ?? 1920 },
+      });
+      if (!result.success || !result.path) return c.json({ error: result.error ?? "代码场景渲染失败" }, 500);
+      await mkdir(join(dataDir, "templates"), { recursive: true });
+      const previewDest = join(dataDir, "templates", `${id}-preview.mp4`);
+      await copyFile(result.path, previewDest);
+      updateTemplate(id, { preview_url: `/api/templates/${id}/preview-file` });
+      // 同步抽中帧刷新 poster(首帧在入场动画前是纯黑的,取 2.5s)
+      const codePosterPath = join(previewDir, "poster.png");
+      let codePosterUrl: string | undefined;
+      try {
+        await execFileAsync("ffmpeg", ["-ss", "2.5", "-i", previewDest, "-frames:v", "1", "-y", codePosterPath], { timeout: 10000 });
+        codePosterUrl = `/api/shared-assets/templates/${id}/poster.png?v=${(await stat(codePosterPath)).mtimeMs}`;
+      } catch {}
+      return c.json({ previewUrl: `/api/templates/${id}/preview-file?t=${Date.now()}`, posterUrl: codePosterUrl });
+    }
+
     const defaultHostVideo = join(previewDir, "host.mp4");
     const defaultVoiceAudio = join(previewDir, "voice.wav");
     const hostVideo = variableValues.host_video ?? defaultHostVideo;
