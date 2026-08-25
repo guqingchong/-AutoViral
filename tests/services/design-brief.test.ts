@@ -3,6 +3,7 @@ import {
   buildBriefPrompt,
   buildBriefRevisePrompt,
   getBriefSession,
+  normalizeBrief,
   type DesignBrief,
 } from "../../src/services/design-brief.js";
 
@@ -54,5 +55,28 @@ describe("buildBriefRevisePrompt(微调纪律)", () => {
 describe("brief 会话存取", () => {
   it("未存在的 sessionId 返回 undefined", () => {
     expect(getBriefSession("brief_不存在")).toBeUndefined();
+  });
+});
+
+describe("normalizeBrief(形状防御)", () => {
+  it("缺 palette/motion 的畸形对象被收敛为完整形状", () => {
+    const out = normalizeBrief({ styleSummary: "极简", motion: "淡入" });
+    expect(Array.isArray(out.palette)).toBe(true);
+    expect(Array.isArray(out.layout)).toBe(true);
+    expect(Array.isArray(out.elements)).toBe(true);
+    expect(typeof out.motion.entrance).toBe("string");
+    expect(typeof out.motion.loop).toBe("string");
+    expect(out.styleSummary).toBe("极简");
+    expect(out.sourceText).toBe("");
+  });
+  it("数组项缺字段/元素非字符串时补空串", () => {
+    const out = normalizeBrief({ palette: [{ hex: "#fff" }], layout: [{}], elements: [1, "辉光"] });
+    expect(out.palette[0]).toEqual({ hex: "#fff", role: "" });
+    expect(out.layout[0]).toEqual({ region: "", content: "", position: "" });
+    expect(out.elements).toEqual(["", "辉光"]);
+  });
+  it("完全合法的 brief 字段原样保留", () => {
+    const out = normalizeBrief(sampleBrief);
+    expect(out).toEqual(sampleBrief);
   });
 });
