@@ -924,6 +924,34 @@ export async function renderPreview(id: string, variables?: Record<string, strin
   return post<{ previewUrl: string; posterUrl?: string }>(`/api/templates/${encodeURIComponent(id)}/preview`, { variables });
 }
 
+// ── DesignBrief 意图稿(2026-08-25) ──
+export interface DesignBrief {
+  styleSummary: string;
+  palette: Array<{ hex: string; role: string; note?: string }>;
+  layout: Array<{ region: string; content: string; position: string }>;
+  elements: string[];
+  motion: { entrance: string; loop: string };
+  referenceNotes?: string;
+  sourceText: string;
+}
+
+export async function createBrief(input: {
+  style: string;
+  orientation?: "portrait" | "landscape";
+  withDigitalHuman?: boolean;
+  referenceImage?: { data: string; mediaType: string };
+}): Promise<{ briefId: string; brief: DesignBrief }> {
+  return post<{ briefId: string; brief: DesignBrief }>("/api/templates/brief", input);
+}
+
+export async function chatBrief(briefId: string, message: string): Promise<{ brief: DesignBrief; diffSummary: string }> {
+  return post<{ brief: DesignBrief; diffSummary: string }>(`/api/templates/brief/${encodeURIComponent(briefId)}/chat`, { message });
+}
+
+export async function generateFromBrief(briefId: string): Promise<{ jobId: string; message?: string }> {
+  return post<{ jobId: string; message?: string }>(`/api/templates/brief/${encodeURIComponent(briefId)}/generate`, {});
+}
+
 export async function fetchRenderJobs(status?: string): Promise<RenderJob[]> {
   const qs = status ? `?status=${encodeURIComponent(status)}` : "";
   const data = await request<{ jobs: RenderJob[] }>(`/api/render-jobs${qs}`);
