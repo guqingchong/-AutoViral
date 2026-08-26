@@ -34,8 +34,9 @@ export function* stagger<T>(items: T[], step: number, fn: (item: T, i: number) =
   yield* all(...items.map((item, i) => chain(waitFor(i * step), fn(item, i))));
 }
 
-/** 数字滚动（0 → target,前快后慢;format 自定义如千分位/百分号/小数位） */
-export function* countUpText(target: number, duration: number, format: (v: number) => string, onText: (s: string) => void): ThreadGenerator {
+/** 数字滚动（0 → target,前快后慢;format 自定义如千分位/百分号/小数位;
+ *  startFrac: 起始进度(短镜头用,如 0.6 表示从 60% 起滚,压缩中间值窗口)） */
+export function* countUpText(target: number, duration: number, format: (v: number) => string, onText: (s: string) => void, startFrac = 0): ThreadGenerator {
   // 渲染固定 30fps(worker.mjs 未覆盖 revideo 默认值):步数必须按 30fps 换算——
   // 曾按 60fps 换算(2026-08-26 实测),计数动画实际耗时翻倍,挤压后续动画时序,
   // 场景自然时长超出 range 窗口被截断(big-number caption 因此丢帧)
@@ -43,7 +44,7 @@ export function* countUpText(target: number, duration: number, format: (v: numbe
   for (let i = 0; i <= steps; i++) {
     const t = i / steps;
     const eased = 1 - Math.pow(1 - t, 3);
-    onText(format(target * eased));
+    onText(format(target * (startFrac + (1 - startFrac) * eased)));
     yield;
   }
 }

@@ -14,6 +14,7 @@ export interface BigNumberParams {
   caption?: string;                 // 数字下方解读,≤20 字
   source?: string;                  // 来源标注
   theme?: string;
+  duration?: number;                // 目标片长(服务层按渲染时长注入),短镜头自动压缩动画
 }
 
 function fmt(v: number, format: string, unit: string): string {
@@ -56,10 +57,28 @@ export default function makeBigNumber(params: BigNumberParams) {
 
     if (params.source) addSourceNote(root(), theme, `来源:${params.source}`);
 
+    // 短镜头自适应(2026-08-26 评审实证):Hook 镜头常 ≤4s,完整版动画
+    // (标题0.5+弹簧1+计数1.4+脉冲1+解读0.5)要 4s+ 才出最终值,评审抽帧全程
+    // 只见中间值(3.1万/5.1万)判"核心数据错误"。短镜头压缩为:标题0.25+淡入0.25
+    // +计数0.7(从60%起滚,压缩中间值窗口),约 1.2s 出最终值,余量全是正确画面。
+    const shortMode = (params.duration ?? 6) <= 4.5;
+    const fmtFn = (v: number) => fmt(v, params.format ?? "plain", params.unit ?? "");
+    if (shortMode) {
+      yield* title().opacity(1, 0.25);
+      yield* num().opacity(1, 0.25);
+      yield* chain(
+        countUpText(params.value, 0.7, fmtFn, (s) => num().text(s), 0.6),
+        underline().width(360, 0.4),
+      );
+      yield* cap().opacity(1, 0.3);
+      yield* waitFor(0.3);
+      return;
+    }
+
     yield* title().opacity(1, 0.5);
     yield* springIn(num() as unknown as Node, 1);
     yield* chain(
-      countUpText(params.value, 1.4, (v) => fmt(v, params.format ?? "plain", params.unit ?? ""), (s) => num().text(s)),
+      countUpText(params.value, 1.4, fmtFn, (s) => num().text(s)),
       underline().width(360, 0.8),
     );
     yield* pulse(num() as unknown as Node, 1.05);
