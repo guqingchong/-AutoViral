@@ -127,7 +127,9 @@ export const PURPOSE_PRESETS: PurposePreset[] = [
     goal: "行业认可",
     strategy: "深度解读+数据支撑，回形针式'材料可查'原则",
     forms: ["policy", "industry", "knowledge"],
-    defaults: { duration: 300, assetForm: "video-mix", assetSource: "smart", assetBudget: "eco" },
+    // 2026-08-26:300→180——plan 评审标准将"总时长超过3分钟"列为 Critical(短视频
+    // 平台限制),300s 默认导致每个 authority 作品的 plan 评审首轮必挂(实测两连中)
+    defaults: { duration: 180, assetForm: "video-mix", assetSource: "smart", assetBudget: "eco" },
     promptBlock: [
       "用途约束（专业影响力）：",
       "- 来源引用规范：关键数据/政策条文必须标注可查来源（文件名/发布时间/条款号），"

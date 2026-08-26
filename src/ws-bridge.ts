@@ -294,7 +294,7 @@ export class WsBridge {
   · flow-steps(流程步骤): {"title":"≤12字","steps":[{"title":"≤8字","desc":"≤16字,可省"}] ×2-5}
   · structure-growth(中心辐射): {"title":"≤12字","center":"≤6字","branches":[{"text":"≤6字","label":"≤8字"}] ×2-4}
   · logic-chain(逻辑链条): {"title":"≤12字","chain":["每节≤10字"] ×2-4}
-  · big-number(大数字冲击): {"title":"≤12字","value":数字,"format":"plain|percent|wan|yi","caption":"≤20字,可省","source":"可省"}
+  · big-number(大数字冲击): {"title":"≤12字","value":原始数值(54000,也可传已换算的5.4——模板自动归一,禁止自行二次换算),"format":"plain|percent|wan|yi","caption":"≤20字,可省","source":"可省"}
   · compare-split(左右对比): {"title":"≤12字","left":{"label":"≤6字","points":["≤14字"]×2-4},"right":{同左},"verdict":"≤24字,可省"}
   · timeline(时间轴): {"title":"≤12字","events":[{"time":"≤8字","label":"≤16字"}] ×2-5}
   · pyramid(金字塔层级): {"title":"≤12字","levels":["≤12字,自下而上塔底在前"] ×2-5}
@@ -305,6 +305,9 @@ export class WsBridge {
 - assembly 阶段的 advance 有机器门禁,以下缺一即被 400 拦截(提前备齐):
   ① output/ 下文件名含 final 的成片视频 ② output/publish-text.md(发布文案)
   ③ output/quality-report.json——对当前成片跑质量门禁生成,videoPath 指向该片且生成时间不早于成片 ④ output/ 下 .ass 字幕(单可视行 ≤15 字、CPS ≤8)
+- plan 阶段的 advance 有机器预检,命中即被 400 拦截(提交前逐项自检):
+  ① 分镜表时长合计 ≤180s ② 旁白单句 ≤20 字 ③ 不得引用 material-candidates.md 剔除区素材
+  ④ 标题/封面极限词(最/第一/唯一/首个)必须加「之一」限定
 - 环境: Windows + Git Bash;python 用 \`py -3\`(不要用 python3);ffmpeg/ffprobe 可用`;
 
     return `## 系统第一原则：质量优先
@@ -541,8 +544,22 @@ ${unattended
       data: { workId, cliSessionId: session.agentSessionId },
     });
 
-    // 首回合消息：新会话带完整任务说明；还原会话只发新指令
-    const firstMessage = initialPrompt; // systemPrompt 已独立携带全量上下文，无需拼进 user 消息
+    // 首回合消息：新会话带完整任务说明(systemPrompt 已独立携带全量上下文,无需拼进 user 消息);
+    // 还原会话(messages 非空)不得重发完整 initialPrompt——初始任务说明重复注入会让模型
+    // 误以为任务重启(2026-08-26 实测:work2 重启恢复后模型重复执行已完成动作,
+    // 随后退化为 Bash(":") 空操作循环直至 LoopGuard 杀回合)。
+    // 恢复指令必须显式点名当前阶段:agent 的消息历史停留在被杀死回合之前(持久化只在
+    // 回合结束发生),不点名阶段它会沿旧上下文重做已完成阶段(同日实测:对已 done 的
+    // material-search 再次 advance 白跑一轮评审)
+    const restoredHasHistory = (restored?.messages?.length ?? 0) > 0;
+    let firstMessage = initialPrompt;
+    if (restoredHasHistory) {
+      const currentEntry = Object.entries(work.pipeline).find(([, s]) => s.status !== "done" && s.status !== "skipped");
+      const stageDesc = Object.entries(work.pipeline).map(([k, s]) => `${s.name ?? k}:${s.status}`).join(" → ");
+      firstMessage = currentEntry
+        ? `会话已从断点恢复。当前流水线状态:${stageDesc}。请直接继续「${currentEntry[1].name ?? currentEntry[0]}」阶段的工作;该阶段之前的所有阶段均已完成,禁止重做或重复推进它们。`
+        : "会话已从断点恢复。流水线全部阶段已完成,无需再执行任何创作动作。";
+    }
     session.loopState = "running";
     session.loopTurnPromise = routed
       .runTurn(firstMessage)

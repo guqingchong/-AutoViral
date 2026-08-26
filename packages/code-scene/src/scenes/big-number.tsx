@@ -17,10 +17,14 @@ export interface BigNumberParams {
 }
 
 function fmt(v: number, format: string, unit: string): string {
+  // 防御性归一(2026-08-26 评审实证):agent 把"5.4万"传成 value=5.4+format=wan,
+  // 二次换算渲染出"0.0万"。wan/yi 格式下 |v|<1000 视为已按万/亿换算过的值,直接采用;
+  // ≥1000 才按原始数值换算。两类调用方("54000"与"5.4")都得到正确显示。
+  const abs = Math.abs(v);
   const core =
     format === "percent" ? `${v.toFixed(1)}%`
-    : format === "wan" ? `${(v / 10000).toFixed(1)}万`
-    : format === "yi" ? `${(v / 100000000).toFixed(2)}亿`
+    : format === "wan" ? `${(abs < 1000 ? v : v / 10000).toFixed(1)}万`
+    : format === "yi" ? `${(abs < 1000 ? v : v / 100000000).toFixed(2)}亿`
     : v >= 10000 ? Math.round(v).toLocaleString("en-US").replaceAll(",", " ") : String(Math.round(v));
   return core + unit;
 }
@@ -44,7 +48,7 @@ export default function makeBigNumber(params: BigNumberParams) {
     const cap = createRef<Txt>();
     root().add(
       <Txt ref={cap} fontFamily={FONT} text={params.caption ?? ""} fontSize={40} fill={theme.subTextColor}
-        y={180} opacity={0} textAlign={"center"} width={DESIGN_W - 240} />,
+        y={180} opacity={0} textAlign={"center"} width={DESIGN_W - 240} textWrap={true} />,
     );
     // 数字下方装饰基线
     const underline = createRef<Rect>();

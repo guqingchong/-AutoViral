@@ -21,7 +21,7 @@ import {
   updateWork as storeUpdateWork, deleteWork as storeDeleteWork,
   listAssets, getAssetPath, saveStepHistory, loadStepHistory,
   saveWorkChat, saveEvalResult, loadAllEvalResults,
-  deriveStatusFromPipeline,
+  deriveStatusFromPipeline, resolveEffectiveNextStep,
   type Work, type PipelineStep, type EvalResult,
 } from "../work-store.js";
 import { MemoryClient } from "../memory.js";
@@ -2638,9 +2638,13 @@ export async function runEvaluation(workId: string, completedStep: string, nextS
       delete cleanedEvalSessionIds[completedStep];
 
       const freshWork = await getWork(workId);
+      // nextStep 可能已被批量转换等路径预先标 done——直接激活会造成状态回归,
+      // 顺移到第一个未完成阶段(全部完成时为 null,不激活任何阶段)
+      let effectiveNextStep: string | null = null;
       if (freshWork) {
         freshWork.pipeline[completedStep].status = "done";
         freshWork.pipeline[completedStep].completedAt = new Date().toISOString();
+        effectiveNextStep = resolveEffectiveNextStep(freshWork.pipeline, nextStep);
         // 与 advance 普通路径一致：自动补齐 pending 的前序阶段(可选步骤跳过场景)。
         // active/evaluating 的前序阶段不可能出现——advance 入口守卫已拦截越级推进
         const keys = Object.keys(freshWork.pipeline);
@@ -2653,9 +2657,9 @@ export async function runEvaluation(workId: string, completedStep: string, nextS
             log("info", "api", "pipeline_auto_complete_skipped", workId, { step: keys[i], via: "eval-pass" });
           }
         }
-        if (nextStep && freshWork.pipeline[nextStep]) {
-          freshWork.pipeline[nextStep].status = "active";
-          freshWork.pipeline[nextStep].startedAt = new Date().toISOString();
+        if (effectiveNextStep) {
+          freshWork.pipeline[effectiveNextStep].status = "active";
+          freshWork.pipeline[effectiveNextStep].startedAt = new Date().toISOString();
         }
         // 评审通过即该步 done：派生状态（最后一步过审时进入 reviewing），
         // 与 pipeline/advance 非评审路径的状态同步逻辑保持一致
@@ -2681,8 +2685,10 @@ export async function runEvaluation(workId: string, completedStep: string, nextS
       saveWorkChat(workId, { blocks: session.messageHistory }).catch(() => {});
 
       // Auto-resume creator agent to continue with next step
-      if (nextStep) {
-        const continuePrompt = `评审已通过，pipeline 已自动推进到「${freshWork?.pipeline[nextStep]?.name ?? nextStep}」阶段。请继续执行该阶段的工作。`;
+      // (用顺移后的实际目标阶段命名,避免 agent 重做已完成阶段)
+      if (effectiveNextStep) {
+        const stepLabel = freshWork?.pipeline[effectiveNextStep]?.name ?? effectiveNextStep;
+        const continuePrompt = `评审已通过，pipeline 已自动推进到「${stepLabel}」阶段。请继续执行该阶段的工作。`;
         await wsBridge.sendMessage(workId, continuePrompt);
       }
     } else {
@@ -2898,6 +2904,12 @@ apiRoutes.post("/api/works/:id/pipeline/advance", async (c) => {
     if (work.pipeline[completedStep].status === "evaluating") {
       return c.json({ error: `阶段「${work.pipeline[completedStep].name}」评审进行中，重复推进将绕过评审。请等待评审结果（通过后会自动推进）。` }, 409);
     }
+    // 守卫1b:已完成阶段禁止重复推进(2026-08-26 实测:断点恢复后 agent 上下文滞后,
+    // 对已 done 的 material-search 再次 advance,白白重跑一轮评审)。打回重做路径
+    // (reject/eval-fail)会先把阶段置回 active,不在此拦截范围。
+    if (work.pipeline[completedStep].status === "done") {
+      return c.json({ error: `阶段「${work.pipeline[completedStep].name}」已完成，无需重复推进。请查询当前 pipeline 状态，从第一个未完成阶段继续。` }, 409);
+    }
     // 守卫2:越级推进禁令。前序阶段处于 active/evaluating(进行中)时不允许推进
     // 后续阶段——f2c 曾在 assets=active 时推进 assembly 并过审,造成
     // assets=active + assembly=done + status=reviewing 的三视图不一致。
@@ -2930,6 +2942,21 @@ apiRoutes.post("/api/works/:id/pipeline/advance", async (c) => {
       }
     }
 
+    // ── plan 机器预检(2026-08-26):机械可校验项(时长/旁白字数/剔除素材引用/极限词)
+    // 拦截在评审之前——两项作品共 5 轮 plan 评审失败的失分点全部落在这四类,
+    // 机器预检零成本,LLM 评审专注结构性判断。响应附 issues 清单,agent 可直接修复重提。
+    if (completedStep === "plan" && work.type !== "image-text") {
+      const { assertPlanDeliverables } = await import("../services/quality-gate.js");
+      const gateIssues = assertPlanDeliverables(join(dataDir, "works", id));
+      if (gateIssues.length) {
+        log("info", "api", "plan_gate_blocked", id, { count: gateIssues.length });
+        return c.json({
+          error: `分镜机器预检未通过(${gateIssues.length} 项),请逐项修复后重新调用 advance`,
+          issues: gateIssues.map((i) => i.detail),
+        }, 400);
+      }
+    }
+
     // ── Evaluation gate ─────────────────────────────────────────────────
     // (evaluating 态的重入已被上方守卫1拦截,此处恒为非评审中)
     if (work.evaluationMode) {
@@ -2945,11 +2972,33 @@ apiRoutes.post("/api/works/:id/pipeline/advance", async (c) => {
       if (session?.loop && session.loopState === "running") {
         session.pendingEval = { step: completedStep, nextStep };
         log("info", "api", "eval_deferred_to_turn_end", id, { step: completedStep });
-      } else {
-        runEvaluation(id, completedStep, nextStep).catch((err) => {
-          log("error", "api", "eval_failed", id, { error: (err as Error).message });
+        // 兜底超时(2026-08-26 死锁实证):agent 在回合内 sleep+轮询评审结果时回合
+        // 永不结束,pendingEval 永远点不燃。8 分钟后强制点火——评审与回合内编辑
+        // 并发的小代价,远好于作品卡死 evaluating 无人发现
+        setTimeout(() => {
+          const s = wsBridge?.getSession(id);
+          if (s && s.pendingEval?.step === completedStep) {
+            s.pendingEval = undefined;
+            log("warn", "api", "eval_force_fire_timeout", id, { step: completedStep });
+            runEvaluation(id, completedStep, nextStep).catch((err) =>
+              log("error", "api", "eval_failed", id, { error: (err as Error).message }));
+          }
+        }, 8 * 60_000).unref?.();
+        // 2026-08-26 实测死锁:agent 不知道评审被挂起,在回合内 sleep+curl 轮询评审
+        // 结果——回合不结束评审永远不触发(pendingEval 只在 turn end 点燃),空转 15 次
+        // 后 auto_continue 放弃,作品卡在 evaluating。必须在响应里显式指令 agent
+        // 立即结束回合。
+        return c.json({
+          ok: true,
+          evaluating: true,
+          deferred: true,
+          pipeline: work.pipeline,
+          hint: "评审已挂起，将在你结束当前回合后自动开始。请立即停止调用任何工具（禁止 sleep/轮询等待评审结果），用一段文本总结本阶段产出并结束回合——评审结果会以新消息送达。",
         });
       }
+      runEvaluation(id, completedStep, nextStep).catch((err) => {
+        log("error", "api", "eval_failed", id, { error: (err as Error).message });
+      });
 
       return c.json({ ok: true, evaluating: true, pipeline: work.pipeline });
     }
@@ -2972,12 +3021,15 @@ apiRoutes.post("/api/works/:id/pipeline/advance", async (c) => {
       }
     }
 
-    if (nextStep && work.pipeline[nextStep]) {
-      work.pipeline[nextStep].status = "active";
-      work.pipeline[nextStep].startedAt = new Date().toISOString();
+    // nextStep 可能已被批量转换等路径预先标 done——直接激活会把已完成阶段
+    // 回退为 active(状态回归,agent 续命后会重做该阶段),顺移到第一个未完成阶段
+    const effectiveNextStep = resolveEffectiveNextStep(work.pipeline, nextStep);
+    if (effectiveNextStep) {
+      work.pipeline[effectiveNextStep].status = "active";
+      work.pipeline[effectiveNextStep].startedAt = new Date().toISOString();
 
       // Persist step_divider to chat.jsonl so it appears when reloading
-      const stepName = work.pipeline[nextStep].name ?? nextStep;
+      const stepName = work.pipeline[effectiveNextStep].name ?? effectiveNextStep;
       const dividerBlock = { type: "step_divider", text: stepName, timestamp: new Date().toISOString() };
       const chatFile = join(dataDir, "works", id, "chat.jsonl");
       appendFile(chatFile, JSON.stringify(dividerBlock) + "\n", "utf-8").catch(() => {});
@@ -3007,8 +3059,8 @@ apiRoutes.post("/api/works/:id/pipeline/advance", async (c) => {
               id,
               [
                 `Pipeline 已推进到「${stepNameForPrompt}」阶段。请继续执行该阶段的工作，完成后再次调用 pipeline/advance 推进到下一阶段。`,
-                nextStep === "material-search" ? buildMaterialSearchInstruction(work, !!work.autoMode) : "",
-                buildStepContractSection(nextStep, work),
+                effectiveNextStep === "material-search" ? buildMaterialSearchInstruction(work, !!work.autoMode) : "",
+                buildStepContractSection(effectiveNextStep, work),
               ].filter(Boolean).join("\n\n"),
             );
           }
@@ -3085,9 +3137,11 @@ apiRoutes.post("/api/works/:id/eval/force-pass", async (c) => {
   }
   work.pipeline[step].status = "done";
   work.pipeline[step].completedAt = new Date().toISOString();
-  if (nextStep && work.pipeline[nextStep]) {
-    work.pipeline[nextStep].status = "active";
-    work.pipeline[nextStep].startedAt = new Date().toISOString();
+  // 同 advance:不直接激活 nextStep,顺移到第一个未完成阶段,避免状态回归
+  const forceNextStep = resolveEffectiveNextStep(work.pipeline, nextStep);
+  if (forceNextStep) {
+    work.pipeline[forceNextStep].status = "active";
+    work.pipeline[forceNextStep].startedAt = new Date().toISOString();
   }
   await storeUpdateWork(id, { pipeline: work.pipeline, status: deriveStatusFromPipeline(work.pipeline, work.status) });
   broadcastPipelineUpdate(id, work.pipeline);
@@ -3710,11 +3764,19 @@ async function runBatchConvert(
           pipeline["research"].status = "done";
           pipeline["research"].completedAt = new Date().toISOString();
           pipeline["research"].note = "Auto-generated from batch conversion";
-          if (pipeline["plan"] && pipeline["plan"].status === "pending") {
+          // 仅当前序阶段(如 material-search)未在进行中时才激活 plan,保持
+          // "同时只有一个 active 阶段"的不变式;否则由 pipeline/advance 的
+          // effectiveNextStep 顺移机制在前序完成后激活,避免双 active 显示混乱
+          const stepKeys = Object.keys(pipeline);
+          const hasActivePredecessor = stepKeys
+            .slice(0, stepKeys.indexOf("plan"))
+            .some((k) => pipeline[k].status === "active" || pipeline[k].status === "evaluating");
+          if (pipeline["plan"] && pipeline["plan"].status === "pending" && !hasActivePredecessor) {
             pipeline["plan"].status = "active";
             pipeline["plan"].startedAt = new Date().toISOString();
           }
-          await storeUpdateWork(workId, { status: "planning", pipeline });
+          // 状态用派生而非硬编码 planning:素材搜索仍在跑时应显示 researching
+          await storeUpdateWork(workId, { status: deriveStatusFromPipeline(pipeline, workObj.status), pipeline });
         }
       } catch (err) {
         console.error(`[batch-convert] Failed to auto-start pipeline for topic ${item.topicId}:`, err);

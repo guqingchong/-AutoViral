@@ -482,8 +482,20 @@ export interface EvalResult {
 export async function saveEvalResult(id: string, step: string, attempt: number, result: EvalResult): Promise<void> {
   const dir = workDir(id);
   await mkdir(dir, { recursive: true });
-  const filePath = join(dir, `eval-${step}-${attempt}.json`);
-  await writeFile(filePath, JSON.stringify(result, null, 2), "utf-8");
+  // 防覆盖(2026-08-26):评审通过后 evalAttempts 清零,阶段若被重新打开再评审,
+  // attempt 从 1 重新计数会覆盖历史结果文件(实测 eval-material-search-1.json
+  // 被新一轮 fail 覆盖,前三轮评审历史丢失)。文件已存在则顺延到下一个空号。
+  let n = attempt;
+  for (;;) {
+    try {
+      await readFile(join(dir, `eval-${step}-${n}.json`), "utf-8");
+      n++;
+    } catch {
+      break; // 文件不存在,可用
+    }
+  }
+  result.attempt = n;
+  await writeFile(join(dir, `eval-${step}-${n}.json`), JSON.stringify(result, null, 2), "utf-8");
 }
 
 export async function loadEvalResult(id: string, step: string, attempt: number): Promise<EvalResult | null> {
@@ -498,7 +510,7 @@ export async function loadEvalResult(id: string, step: string, attempt: number):
 
 export async function loadAllEvalResults(id: string, step: string): Promise<EvalResult[]> {
   const results: EvalResult[] = [];
-  for (let i = 1; i <= 10; i++) {
+  for (let i = 1; i <= 50; i++) {
     const r = await loadEvalResult(id, step, i);
     if (r) results.push(r);
     else break;
@@ -563,5 +575,27 @@ export function deriveStatusFromPipeline(
   if (activeEntry) return STEP_TO_STATUS[activeEntry[0]] ?? current;
 
   return current;
+}
+
+/**
+ * 解析推进目标阶段：若 nextStep 已完成（批量转换预生成 research、
+ * 可选步骤被跳过等场景），顺移到其后第一个未完成阶段。
+ * 调用方必须用它替代直接激活 nextStep——否则会把 done 阶段回退为
+ * active（状态回归），agent 收到续命指令后会重做已完成阶段。
+ * 全部后续阶段都已完成时返回 null（流水线实际已走到终态）。
+ */
+export function resolveEffectiveNextStep(
+  pipeline: Record<string, PipelineStep>,
+  nextStep: string | undefined,
+): string | null {
+  if (!nextStep) return null;
+  const keys = Object.keys(pipeline);
+  const startIdx = keys.indexOf(nextStep);
+  if (startIdx < 0) return null;
+  for (let i = startIdx; i < keys.length; i++) {
+    const s = pipeline[keys[i]].status;
+    if (s !== "done" && s !== "skipped") return keys[i];
+  }
+  return null;
 }
 

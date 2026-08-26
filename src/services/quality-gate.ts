@@ -167,6 +167,144 @@ export interface DeliverableIssue {
   detail: string;
 }
 
+// ── plan 机器预检(2026-08-26)─────────────────────────────────────────────────
+// 背景:w_20260826_1647_05d plan 三轮评审全挂、w_20260826_1652_224 plan 前两轮挂,
+// 失分点高度重复且全部机械可校验(时长超限/旁白超20字/引用已剔除素材/极限词)。
+// 机器能查的不烧 LLM 评审轮次——以下四项在 advance(plan) 前置拦截,
+// 与 assembly 门禁同构;LLM 评审专注 Hook/叙事/视觉等真正需要判断力的维度。
+//
+// 设计原则:宁漏勿错。plan.md 是 LLM 自由格式 markdown,解析必须保守——
+// 只在格式可明确识别时出具问题,拿不准的一律放行交 LLM 评审判断。
+
+/** 旁白计字:所有非空白字符(与评审口径一致——实测评审把 "再叠加三维 GIS 和 BIM，每块砖都有数字坐标。" 计为 23 字) */
+function countNarrationChars(s: string): number {
+  const m = s.match(/\S/g);
+  return m ? m.length : 0;
+}
+
+/** 视觉标注识别:画面大字/花字/字幕等括号注释是屏幕文字而非口播,不适用 20 字铁律 */
+function isVisualNote(sentence: string): boolean {
+  return /^["'“”]*[(（]/.test(sentence) && /画面|大字|花字|字幕|标题卡|角标/.test(sentence);
+}
+
+/** 从 markdown 表格行切分单元格(容错:首尾竖线可有可无) */
+function splitMdRow(line: string): string[] {
+  return line.replace(/^\s*\|/, "").replace(/\|\s*$/, "").split("|").map((c) => c.trim());
+}
+
+/** 解析时长单元格:"4s"/"4秒"/"4-6s"取上限;无法解析返回 null */
+function parseDurationCell(cell: string): number | null {
+  const m = cell.match(/(\d+(?:\.\d+)?)(?:\s*[-–~]\s*(\d+(?:\.\d+)?))?\s*(?:s|秒)?/i);
+  if (!m) return null;
+  const hi = m[2] ? parseFloat(m[2]) : parseFloat(m[1]);
+  return Number.isFinite(hi) ? hi : null;
+}
+
+/**
+ * plan 推进前置校验:返回问题清单(空数组=通过)。
+ * ① 分镜表时长合计 ≤180s(短视频平台硬上限,容差 5s)
+ * ② 显式旁白行(旁白:/口播: 前缀或分镜表旁白列)单句 ≤20 字
+ * ③ 不得引用 material-candidates.md 剔除区的素材文件
+ * ④ 标题/封面行极限词(最/第一/唯一/首个)须有"之一"限定
+ */
+export function assertPlanDeliverables(workDir: string): DeliverableIssue[] {
+  const issues: DeliverableIssue[] = [];
+
+  // 定位分镜文档:根目录 plan.md 优先,其次 assets/plan-storyboard.md
+  const planCandidates = [join(workDir, "plan.md"), join(workDir, "assets", "plan-storyboard.md")];
+  const planPath = planCandidates.find((p) => existsSync(p));
+  if (!planPath) {
+    return [{ key: "plan_doc", detail: "分镜文档缺失(plan.md 或 assets/plan-storyboard.md 均不存在)" }];
+  }
+  const lines = readFileSync(planPath, "utf-8").split("\n");
+
+  // ── ①② 分镜表:表头含"镜号"且含"时长"的 markdown 表 ──
+  let totalDuration = 0;
+  let durationParsed = 0;
+  let narrationCol = -1;
+  let durationCol = -1;
+  let inShotTable = false;
+  for (const line of lines) {
+    if (!line.includes("|")) { inShotTable = false; continue; }
+    const cells = splitMdRow(line);
+    const isHeader = cells.some((c) => /镜号|^镜$|shot/i.test(c)) && cells.some((c) => /时长/.test(c));
+    if (isHeader) {
+      inShotTable = true;
+      narrationCol = cells.findIndex((c) => /旁白|口播|narration/i.test(c));
+      // 时长列从表头定位——逐行猜列会把镜号列("01"=1s)当时长累加(实测 25 镜累加成 325s)
+      durationCol = cells.findIndex((c) => /时长/.test(c));
+      continue;
+    }
+    if (!inShotTable) continue;
+    if (/^[-:\s|]+$/.test(line)) continue; // 分隔行
+    if (durationCol >= 0 && cells[durationCol]) {
+      const d = parseDurationCell(cells[durationCol]);
+      if (d !== null && d <= 60) { totalDuration += d; durationParsed++; }
+    }
+    if (narrationCol >= 0 && cells[narrationCol]) {
+      for (const sentence of cells[narrationCol].split(/[。!?;；]/).map((s) => s.trim()).filter(Boolean)) {
+        if (isVisualNote(sentence)) continue;
+        const n = countNarrationChars(sentence);
+        if (n > 20 && issues.filter((i) => i.key === "narration_len").length < 5) {
+          issues.push({ key: "narration_len", detail: `旁白超 20 字(${n}字):「${sentence.slice(0, 30)}」` });
+        }
+      }
+    }
+  }
+  // 解析到 ≥5 个镜头时长才出具合计结论(拿不准不放行交给 LLM)
+  if (durationParsed >= 5 && totalDuration > 185) {
+    issues.push({ key: "duration_total", detail: `分镜表时长合计 ${Math.round(totalDuration)}s,超过短视频平台 180s 硬上限(评审 Critical 项)` });
+  }
+
+  // ── ②b 显式旁白全文行(旁白:/口播: 前缀,分镜表之外的口播稿)──
+  for (const line of lines) {
+    const m = line.match(/^\s*(?:[-*]\s*)?(?:旁白|口播)\s*[:：]\s*(.+)$/);
+    if (!m) continue;
+    for (const sentence of m[1].split(/[。!?;；]/).map((s) => s.trim()).filter(Boolean)) {
+      if (isVisualNote(sentence)) continue;
+      const n = countNarrationChars(sentence);
+      if (n > 20 && issues.filter((i) => i.key === "narration_len").length < 8) {
+        issues.push({ key: "narration_len", detail: `旁白超 20 字(${n}字):「${sentence.slice(0, 30)}」` });
+      }
+    }
+  }
+
+  // ── ③ 剔除素材交叉核对:material-candidates.md 剔除区出现的文件名,plan 不得引用 ──
+  const candidatesPath = join(workDir, "assets", "material-candidates.md");
+  if (existsSync(candidatesPath)) {
+    const candLines = readFileSync(candidatesPath, "utf-8").split("\n");
+    const eliminated = new Set<string>();
+    let inElimSection = false;
+    for (const l of candLines) {
+      if (/^#{1,4}\s/.test(l)) inElimSection = /剔除|淘汰|不可用|废弃/.test(l);
+      // 剔除区整段 + 任意行内显式标"剔除"的文件名都计入
+      const files = l.match(/[\w-]+\.(?:mp4|mov|webm|jpg|jpeg|png)/gi) ?? [];
+      if (inElimSection || /剔除|淘汰/.test(l)) files.forEach((f) => eliminated.add(f.toLowerCase()));
+    }
+    if (eliminated.size > 0) {
+      const planText = lines.join("\n").toLowerCase();
+      for (const f of eliminated) {
+        if (planText.includes(f)) {
+          issues.push({ key: "eliminated_ref", detail: `引用了已被剔除的素材「${f}」——请从 material-candidates.md 保留清单中选替换项` });
+        }
+      }
+    }
+  }
+
+  // ── ④ 极限词:标题/封面行出现 最/第一/唯一/首个 且无"之一"限定 ──
+  for (const line of lines) {
+    if (!/标题|封面|title|cover/i.test(line)) continue;
+    if (/之一/.test(line)) continue;
+    const m = line.match(/[一-鿿]*(?:最大|最全|首个|第一|唯一|国家级|世界级)[一-鿿]*/);
+    if (m && issues.filter((i) => i.key === "superlative").length < 3) {
+      issues.push({ key: "superlative", detail: `标题/封面疑似极限词缺「之一」限定:「${m[0]}」(行:${line.trim().slice(0, 40)})` });
+    }
+  }
+
+  return issues;
+}
+
+
 /** ass Dialogue 单可视行 ≤15 字、CPS ≤8 校验;返回违规描述列表 */
 export function checkAssSubtitles(assContent: string): string[] {
   const violations: string[] = [];

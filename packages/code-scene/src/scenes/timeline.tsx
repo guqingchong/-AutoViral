@@ -47,7 +47,7 @@ export default function makeTimeline(params: TimelineParams) {
       );
       root().add(
         <Txt ref={labels[i]} fontFamily={FONT} text={ev.label} fontSize={34} fill={theme.textColor}
-          x={axisX + 50 + (DESIGN_W - 330) / 2} y={y + 18} textAlign={"left"} width={DESIGN_W - 330} opacity={0} />,
+          x={axisX + 50 + (DESIGN_W - 330) / 2} y={y + 18} textAlign={"left"} width={DESIGN_W - 330} opacity={0} textWrap={true} />,
       );
     });
 

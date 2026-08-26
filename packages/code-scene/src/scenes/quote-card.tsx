@@ -31,7 +31,7 @@ export default function makeQuoteCard(params: QuoteCardParams) {
     const quote = createRef<Txt>();
     root().add(
       <Txt ref={quote} fontFamily={FONT} text={""} fontSize={56} fontWeight={700} fill={theme.textColor}
-        y={-40} textAlign={"left"} width={DESIGN_W - 260} lineHeight={88} />,
+        y={-40} textAlign={"left"} width={DESIGN_W - 260} lineHeight={88} textWrap={true} />,
     );
     const author = createRef<Txt>();
     root().add(

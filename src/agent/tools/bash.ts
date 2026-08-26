@@ -65,6 +65,14 @@ export function bashExecutor(blocklist?: string[]): ToolExecutor {
     async execute(input: Record<string, unknown>, ctx: ToolContext): Promise<string> {
       const command = String(input.command ?? "");
       if (!command) throw new Error("Bash: command 必填");
+      // 空操作守卫(2026-08-26 kimi-for-coding 实测):模型上下文受损(会话恢复/配对修复)
+      // 后会退化为反复输出 Bash(":") 这类 no-op 占位——空输出反过来加剧迷茫,形成
+      // 死循环直到 LoopGuard 杀回合。直接在工具层拦截并给出可执行的纠偏提示。
+      if (/^\s*(:|true|echo\s*)\s*$/.test(command)) {
+        return "检测到空操作命令(无实际效果)。如果你不确定下一步,请回顾当前阶段指令;" +
+          "如需推进流水线,执行 curl -X POST http://localhost:3271/api/works/<作品ID>/pipeline/advance " +
+          "(body: {\"completedStep\":\"当前阶段\",\"nextStep\":\"下一阶段\"});如需联网搜索,调用 $web_search。禁止再用空命令占位。";
+      }
       for (const rule of rules) {
         if (rule.test(command)) throw new Error(`Bash: 命令被安全策略拦截: ${command.slice(0, 80)}`);
       }
