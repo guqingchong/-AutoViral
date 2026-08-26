@@ -71,6 +71,13 @@ export interface WsSession {
   /** 待触发评审(2026-08-19):agent 在回合中调 advance 时挂上,回合真正结束时由
    *  onLoopTurnEnd 触发——取代 waitForCreatorIdle 固定 120s 白等(每轮评审 2min×N 纯损耗) */
   pendingEval?: { step: string; nextStep?: string };
+  /** 上一回合的失败原因(2026-08-26):auto_continue 据此给出针对性续跑指令——
+   *  回合超时被杀与主动结束需要完全不同的恢复策略(前者要防"从头重做") */
+  lastTurnFailure?: string;
+  /** 会话持久化钩子(createSessionApi 注入):每个回合结束都必须调用——
+   *  此前只在首回合 finally 持久化,后续回合上下文全在内存,服务重启即丢失
+   *  (2026-08-26 实测:work1 装配 3.2 小时上下文险遭回滚) */
+  persist?: () => void;
 }
 
 interface NdjsonMessage {
@@ -308,7 +315,14 @@ export class WsBridge {
 - plan 阶段的 advance 有机器预检,命中即被 400 拦截(提交前逐项自检):
   ① 分镜表时长合计 ≤180s ② 旁白单句 ≤20 字 ③ 不得引用 material-candidates.md 剔除区素材
   ④ 标题/封面极限词(最/第一/唯一/首个)必须加「之一」限定
-- 环境: Windows + Git Bash;python 用 \`py -3\`(不要用 python3);ffmpeg/ffprobe 可用`;
+- 模版卡渲染铁律(code-scene customScene):渲染前必须 GET /api/templates/{templateId} 查看
+  variables 中的媒体槽位(videoSrc/imageSrc),并传入真实素材路径——槽位留空会渲染出
+  灰色占位框,评审按"假窗口"直接打回(2026-08-26 实测三张模版卡全军覆没)
+- 环境: Windows + Git Bash;python 用 \`py -3\`(不要用 python3);ffmpeg/ffprobe 可用
+- 长耗时命令铁律: 单回合有 30 分钟上限,超时被杀则全回合作废。whisper 转写/批量渲染/批量生成
+  这类长任务:① 单条 Bash 不超过 3 分钟,长任务拆段分批 ② 输出重定向到文件(防孤儿进程
+  持有管道挂死回合) ③ 验证性 ASR 用 small 模型,禁止 medium/large(CPU 上 3 分钟音频
+  medium 要 15-30 分钟,必超回合上限) ④ timeout 参数单位是毫秒(600 秒 = 600000)`;
 
     return `## 系统第一原则：质量优先
 
@@ -537,6 +551,7 @@ ${unattended
         updatedAt: new Date().toISOString(),
       }).catch(() => {});
     };
+    session.persist = persist;
 
     session.cliSessionId = session.agentSessionId; // 前端透传展示用
     this.broadcastToBrowsers(workId, {
@@ -564,6 +579,7 @@ ${unattended
     session.loopTurnPromise = routed
       .runTurn(firstMessage)
       .catch((err) => {
+        session.lastTurnFailure = err instanceof Error ? err.message : String(err);
         console.error(`[agent-loop] turn failed for ${workId}:`, err);
       })
       .finally(() => {
@@ -701,9 +717,16 @@ ${unattended
             return;
           }
           logBridge("auto_continue", session.workId, { step: stepKey, stall: session.autoContinueCount });
+          // 回合超时被杀 vs 主动收工:恢复策略完全不同(2026-08-26 实证——超时被杀后
+          // agent 从头重做,whisper 验证跑三轮烧掉 40 分钟)。被杀的要点名断点续作,
+          // 并给长耗时命令规范,防止下一个回合再被 30min 上限杀掉
+          const timeoutKilled = (session.lastTurnFailure ?? "").includes("回合超时");
+          session.lastTurnFailure = undefined;
           await this.sendMessage(
             session.workId,
-            "继续执行当前阶段任务,不要中途停下等确认——一口气把本阶段做完。若本阶段产出已全部完成,请立即调用 pipeline/advance 推进流水线。",
+            timeoutKilled
+              ? "上一回合因单回合时长上限被系统终止。请从中断点继续，不要从头重做：先检查半成品文件（已生成的音频/视频/脚本）是否已落盘，已完成的直接复用。长耗时命令（whisper 转写/渲染/批量生成）必须拆小步执行：单个 Bash 命令控制在 3 分钟内，长任务输出重定向到文件并分片处理，禁止一条命令跑 10 分钟以上。"
+              : "继续执行当前阶段任务,不要中途停下等确认——一口气把本阶段做完。若本阶段产出已全部完成,请立即调用 pipeline/advance 推进流水线。",
           );
         } catch { /* 续跑失败不阻断主流程 */ }
       })();
@@ -857,10 +880,14 @@ ${unattended
       session.idle = false;
       session.loopTurnPromise = session.loop
         .runTurn(text)
-        .catch((err) => console.error(`[agent-loop] follow-up turn failed for ${workId}:`, err))
+        .catch((err) => {
+          session.lastTurnFailure = err instanceof Error ? err.message : String(err);
+          console.error(`[agent-loop] follow-up turn failed for ${workId}:`, err);
+        })
         .finally(() => {
           session.loopState = "idle";
           session.idle = true;
+          session.persist?.();
           this.onLoopTurnEnd?.(workId);
           this.scheduleAutoContinue(session);
         });

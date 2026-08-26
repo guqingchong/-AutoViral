@@ -75,6 +75,20 @@ export class LoopGuardError extends Error {}
  * 提前 return 都可能制造孤儿 tool_calls,OpenAI 兼容端点对孤儿一律 400。
  */
 export function ensureToolPairing(messages: AgentMessage[]): void {
+  // 前置清洗(2026-08-26 实证):回合被杀死在"只有 thinking 尚未产出 text/tool_use"
+  // 的时点,留下纯 thinking 的 assistant 消息——OpenAI 协议序列化后
+  // content/tool_calls 全空,每次请求都 400(Invalid assistant message),
+  // auto_continue 15 次全灭。这类消息是被截断的残片,直接剔除。
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role !== "assistant") continue;
+    const hasPayload = m.content.some((b) =>
+      (b.type === "text" && b.text.trim().length > 0) || b.type === "tool_use");
+    if (!hasPayload) {
+      console.warn(`[agent-loop] 清洗剔除:msg[${i}] 纯 thinking/空 assistant 消息(回合截断残片)`);
+      messages.splice(i, 1);
+    }
+  }
   for (let i = 0; i < messages.length; i++) {
     const m = messages[i];
     if (m.role !== "assistant") continue;
