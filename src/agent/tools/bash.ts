@@ -57,7 +57,7 @@ export function bashExecutor(blocklist?: string[]): ToolExecutor {
         type: "object",
         properties: {
           command: { type: "string", description: "要执行的 shell 命令" },
-          timeout: { type: "number", description: "超时毫秒数（默认 120000）" },
+          timeout: { type: "number", description: "超时毫秒数（默认 120000；传小于 1000 的值会被当作秒处理，如 600 = 600 秒）" },
         },
         required: ["command"],
       },
@@ -76,7 +76,11 @@ export function bashExecutor(blocklist?: string[]): ToolExecutor {
       for (const rule of rules) {
         if (rule.test(command)) throw new Error(`Bash: 命令被安全策略拦截: ${command.slice(0, 80)}`);
       }
-      const timeout = Math.min(Number(input.timeout) || 120_000, 600_000);
+      // 单位容错(2026-08-26 实证):agent 习惯按秒传值(timeout:600 想要 10 分钟),
+      // 按毫秒解释会在 0.6s 误杀长任务。小于 1000 的值一律按秒换算。
+      let timeoutMs = Number(input.timeout) || 120_000;
+      if (timeoutMs < 1000) timeoutMs *= 1000;
+      const timeout = Math.min(timeoutMs, 600_000);
       const bash = await detectBash();
       const [cmd, args] = bash ? [bash, ["-lc", command]] : ["cmd", ["/c", command]];
       return new Promise((resolvePromise) => {
@@ -91,24 +95,44 @@ export function bashExecutor(blocklist?: string[]): ToolExecutor {
           const s = typeof d === "string" ? d : d.toString("utf8");
           if (head.length < HALF) head += s.slice(0, HALF - head.length);
           tail = tail.length + s.length <= HALF ? tail + s : (tail + s).slice(-HALF);
-        };        const killTimer = setTimeout(() => {
+        };
+        // 进程树杀(2026-08-26 死锁实证):Windows 下 p.kill 只杀直接子进程(bash 壳),
+        // bash→py→python 的孙进程变孤儿继续跑,其继承的 stdout 管道不关,
+        // Node 的 close 事件(等全部 stdio 关闭)永不触发 → 工具 Promise 永久挂起
+        // → agent loop 整体冻结(whisper ASR 20 分钟静默事故)。taskkill /T 杀整棵树。
+        const killTree = () => {
+          if (process.platform === "win32") {
+            spawn("taskkill", ["/pid", String(p.pid), "/T", "/F"], { windowsHide: true }).unref();
+          } else {
+            try { process.kill(-p.pid!, "SIGKILL"); } catch { p.kill("SIGKILL"); }
+          }
+        };
+        const killTimer = setTimeout(() => {
           p.kill("SIGTERM");
-          setTimeout(() => p.kill("SIGKILL"), 3000);
+          setTimeout(killTree, 3000);
         }, timeout);
         p.stdout.on("data", pushOut);
         p.stderr.on("data", pushOut);
-        ctx.signal?.addEventListener("abort", () => p.kill("SIGTERM"), { once: true });
-        p.on("close", (code) => {
+        ctx.signal?.addEventListener("abort", () => { p.kill("SIGTERM"); setTimeout(killTree, 2000); }, { once: true });
+        // 双通道兜底:exit(进程退出)先到 → 给 5s 让 stdio 冲刷后强制收尾,
+        // 不等 close(孤儿进程持管道时 close 永不到来)
+        let settled = false;
+        const finish = (code: number | null, note = "") => {
+          if (settled) return;
+          settled = true;
           clearTimeout(killTimer);
           const truncated = head.length >= HALF || tail.length >= HALF;
           const out = truncated
             ? `${head}\n…[输出过大,中段截断(头尾各保留 512KB)]…\n${tail}`
             : head;
           const result = truncateMiddle(out.trim());
-          resolvePromise(code === 0 ? result || "（无输出）" : `Exit code ${code}\n${result}`);
-        });
+          resolvePromise(code === 0 ? result || "（无输出）" : `Exit code ${code}${note}\n${result}`);
+        };
+        p.on("close", (code) => finish(code));
+        p.on("exit", (code) => setTimeout(() => finish(code, " (exit 先于 close 收尾:可能有孤儿进程持有输出管道)"), 5000));
         p.on("error", (err) => {
           clearTimeout(killTimer);
+          settled = true;
           resolvePromise(`执行失败: ${err.message}`);
         });
       });

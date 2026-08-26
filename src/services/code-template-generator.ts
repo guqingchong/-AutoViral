@@ -258,6 +258,16 @@ async function saveCodeTemplate(
       ...(input.withDigitalHuman
         ? [{ name: "host_video", type: "video" as const, label: "数字人口播视频(可选,缺省占位)" }]
         : []),
+      // 媒体槽位元数据补齐(2026-08-26 assembly 评审实证):LLM 生成代码用了
+      // params.videoSrc 做视频窗口,但 variables 未声明——agent 渲染时不知道要传,
+      // 模板全部渲染成灰色占位框被判"假窗口"。扫描代码中的媒体参数自动补齐声明,
+      // 让槽位对渲染方(agent/UI)可见
+      ...(!input.withDigitalHuman && /params\.videoSrc/.test(tsx)
+        ? [{ name: "videoSrc", type: "video" as const, label: "视频窗口素材(必须填充真实素材,禁止占位)" }]
+        : []),
+      ...(/params\.imageSrc/.test(tsx)
+        ? [{ name: "imageSrc", type: "image" as const, label: "图片窗口素材(必须填充真实素材,禁止占位)" }]
+        : []),
     ],
     // kind=code 约定:layers[0] 场景配置;customCode 为 LLM 生成的 TSX 源码
     layers: [{ scene: "custom", customCode: tsx, params: {} }],
