@@ -68,6 +68,7 @@ export function addSourceNote(root: Node, theme: SceneTheme, text: string): void
       y={y}
       textAlign={"left"}
       width={DESIGN_W - 192}
+      textWrap={true}
     />,
   );
 }
@@ -107,12 +108,12 @@ export function addTitleBlock(
   if (kicker) {
     root.add(
       <Txt fontFamily={FONT} text={kicker} fontSize={28} fontWeight={500} fill={theme.palette[0]}
-        x={-DESIGN_W / 2 + 170 + (DESIGN_W - 260) / 2} y={topY - 26} textAlign={"left"} width={DESIGN_W - 260} />,
+        x={-DESIGN_W / 2 + 170 + (DESIGN_W - 260) / 2} y={topY - 26} textAlign={"left"} width={DESIGN_W - 260} textWrap={true} />,
     );
   }
   root.add(
     <Txt ref={titleRef} fontFamily={FONT} text={title} fontSize={64} fontWeight={700} fill={theme.textColor}
-      x={-DESIGN_W / 2 + 96 + (DESIGN_W - 192) / 2} y={topY + 36} textAlign={"left"} width={DESIGN_W - 192} opacity={0} />,
+      x={-DESIGN_W / 2 + 96 + (DESIGN_W - 192) / 2} y={topY + 36} textAlign={"left"} width={DESIGN_W - 192} opacity={0} textWrap={true} />,
   );
   return { title: titleRef };
 }

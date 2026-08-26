@@ -74,7 +74,7 @@ export default function makeCompareSplit(params: CompareSplitParams) {
     if (params.verdict) {
       root().add(
         <Txt ref={verdict} fontFamily={FONT} text={params.verdict} fontSize={38} fontWeight={700}
-          fill={theme.textColor} y={colTop + colH + 90} opacity={0} textAlign={"center"} width={DESIGN_W - 200} />,
+          fill={theme.textColor} y={colTop + colH + 90} opacity={0} textAlign={"center"} width={DESIGN_W - 200} textWrap={true} />,
       );
     }
     if (params.source) addSourceNote(root(), theme, `来源:${params.source}`);

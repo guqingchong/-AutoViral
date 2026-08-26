@@ -36,7 +36,10 @@ export function* stagger<T>(items: T[], step: number, fn: (item: T, i: number) =
 
 /** 数字滚动（0 → target,前快后慢;format 自定义如千分位/百分号/小数位） */
 export function* countUpText(target: number, duration: number, format: (v: number) => string, onText: (s: string) => void): ThreadGenerator {
-  const steps = Math.max(2, Math.round(duration * 60));
+  // 渲染固定 30fps(worker.mjs 未覆盖 revideo 默认值):步数必须按 30fps 换算——
+  // 曾按 60fps 换算(2026-08-26 实测),计数动画实际耗时翻倍,挤压后续动画时序,
+  // 场景自然时长超出 range 窗口被截断(big-number caption 因此丢帧)
+  const steps = Math.max(2, Math.round(duration * 30));
   for (let i = 0; i <= steps; i++) {
     const t = i / steps;
     const eased = 1 - Math.pow(1 - t, 3);
