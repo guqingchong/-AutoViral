@@ -111,6 +111,7 @@ export async function submitAndPoll(
   accessKey: string,
   secretKey: string,
   submitPayload: Record<string, unknown>,
+  onProgress?: (text: string) => void,
 ): Promise<{ data: any }> {
   const submitBody = JSON.stringify(submitPayload)
   const submitReq = signRequest(accessKey, secretKey, SUBMIT_ACTION, submitBody)
@@ -131,8 +132,12 @@ export async function submitAndPoll(
   }
 
   const deadline = Date.now() + POLL_TIMEOUT_MS
+  let polls = 0
   while (Date.now() < deadline) {
     await new Promise(r => setTimeout(r, POLL_INTERVAL_MS))
+    polls++
+    // 批次4.3:轮询活性透出(此前 10 分钟零事件,UI 黑窗)
+    onProgress?.(`云端生成中(已轮询 ${polls} 次,task ${taskId.slice(0, 12)}…)`)
 
     const queryPayload = JSON.stringify({ req_key: submitPayload.req_key, task_id: taskId })
     const queryReq = signRequest(accessKey, secretKey, QUERY_ACTION, queryPayload)

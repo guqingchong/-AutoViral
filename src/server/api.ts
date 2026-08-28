@@ -26,6 +26,7 @@ import {
 } from "../work-store.js";
 import { MemoryClient } from "../memory.js";
 import { EvalTimeoutError, EvalParseError } from "../agent/evaluator.js";
+import { registerProgressBroadcaster } from "../services/progress-events.js";
 import type { WsBridge } from "../ws-bridge.js";
 import { getProvider, getDefaultProvider, listProviders } from "../providers/registry.js";
 import { listSharedAssetsWithMeta, getSharedAssetPath, validateCategory, sanitizeFilename, saveSharedAsset, deleteSharedAsset, moveSharedAsset } from "../shared-assets.js";
@@ -186,6 +187,18 @@ let wsBridge: WsBridge | null = null;
 
 export function setWsBridge(bridge: WsBridge): void {
   wsBridge = bridge;
+  // 批次4.3:进度事件总线接入 WS 广播(渲染/云端生成/发布等管道外耗时环节不再黑窗)
+  registerProgressBroadcaster((ev) => {
+    if (ev.workId) {
+      bridge.broadcastToBrowsers(ev.workId, {
+        event: "tool_progress",
+        data: { workId: ev.workId, toolName: ev.kind, text: ev.text, source: "creator" },
+      });
+    } else {
+      // 无归属作品的系统事件(配额冷却/队列级故障)→ 全局通知通道
+      bridge.broadcastGlobal("notify", { level: "warn", kind: ev.kind, text: ev.text });
+    }
+  });
 }
 
 // ── Status & Config ─────────────────────────────────────────────────────────
@@ -2591,6 +2604,12 @@ async function markEvalBlocked(workId: string, completedStep: string, broadcastD
   wsBridge.broadcastToBrowsers(workId, {
     event: "eval_blocked",
     data: { workId, step: completedStep, ...broadcastData },
+  });
+  // 批次4.6:全局通知(不再只覆盖正盯着该作品页的用户)
+  wsBridge.broadcastGlobal("notify", {
+    level: "error", kind: "eval_blocked",
+    text: `作品 ${workId} 评审受阻(${completedStep}),需人工处置`,
+    workId,
   });
   const session = wsBridge.getSession(workId);
   if (session) saveWorkChat(workId, { blocks: session.messageHistory }).catch(() => {});

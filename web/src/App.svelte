@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { createWsConnection } from "./lib/ws";
   import Explore from "./pages/Explore.svelte";
   import Analytics from "./pages/Analytics.svelte";
   import Comments from "./pages/Comments.svelte";
@@ -373,13 +374,28 @@
     } catch {}
   }
 
+  // 批次4.6:全局通知中心雏形——/ws 通道的 notify 事件 → 右上角 toast
+  interface Toast { id: number; level: string; text: string }
+  let toasts = $state<Toast[]>([]);
+  let toastSeq = 0;
+  function pushToast(level: string, text: string) {
+    const id = ++toastSeq;
+    toasts = [...toasts, { id, level, text }];
+    setTimeout(() => { toasts = toasts.filter((t) => t.id !== id); }, 12000);
+  }
+
   onMount(async () => {
     const current = document.documentElement.getAttribute("data-theme") as "light" | "dark" | null;
     theme = current ?? "dark";
     const unsub = subscribe(() => { lang = getLanguage(); });
     await loadSettings();
+    // 批次4.6:全局通知通道(配额冷却/评审受阻/作品失败,不再依赖"正盯着该作品页")
+    const globalWs = createWsConnection((event, data) => {
+      if (event === "notify") pushToast(data?.level ?? "info", data?.text ?? "");
+    });
     return () => {
       unsub();
+      globalWs.close();
     };
   });
 
@@ -408,6 +424,14 @@
 </script>
 
 <div class="shell" data-lang={lang}>
+  <!-- 批次4.6:全局通知 toast 堆栈 -->
+  {#if toasts.length}
+    <div class="toast-stack">
+      {#each toasts as t (t.id)}
+        <div class="toast toast-{t.level}">{t.text}</div>
+      {/each}
+    </div>
+  {/if}
   <header class="topbar">
     <div class="topbar-left">
       <a class="logo-mark" href="#" onclick={(e) => { e.preventDefault(); $activeTab = "works"; showStudio = false; currentWorkId = null; }}>
@@ -1251,4 +1275,13 @@
     .nav-link { padding: 0.3rem 0.6rem; font-size: 0.78rem; }
     .main { padding: 1rem 1rem 3rem; }
   }
+  /* 批次4.6 全局通知 toast */
+  .toast-stack { position: fixed; top: 3.2rem; right: 1rem; z-index: 9999; display: flex; flex-direction: column; gap: 0.5rem; max-width: 22rem; }
+  .toast { padding: 0.6rem 0.9rem; border-radius: 8px; font-size: 0.82rem; line-height: 1.5;
+    background: var(--card-bg, #1e1e2e); border: 1px solid var(--border, #333); box-shadow: 0 4px 16px rgba(0,0,0,0.35);
+    animation: toast-in 0.25s ease-out; }
+  .toast-error { border-color: #e5534b; color: #ff9b94; }
+  .toast-warn { border-color: #d4a72c; color: #f0c75e; }
+  .toast-info { border-color: #388bfd; color: #79c0ff; }
+  @keyframes toast-in { from { opacity: 0; transform: translateX(1rem); } to { opacity: 1; transform: none; } }
 </style>

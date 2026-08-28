@@ -533,6 +533,19 @@
           scrollToBottom();
         }
         break;
+      case "tool_progress":
+        // 批次4.1:长工具心跳——续命活性指示器 + 更新活动工具提示,不写消息流(防刷屏)
+        streaming = true;
+        resetInactivityTimer();
+        if (data.toolName) activeToolName = data.toolName;
+        break;
+      case "session_beat":
+        // 批次4.4:服务端心跳——loop/评审在跑即视为"慢"而非"停",续命流式指示器
+        if (data.loopState === "running" || data.evalLoopRunning) {
+          streaming = true;
+          resetInactivityTimer();
+        }
+        break;
       case "tool_result":
         streaming = true;
         activeToolName = "";

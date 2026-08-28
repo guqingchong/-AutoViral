@@ -64,16 +64,23 @@
 - [x] 3.5 自我赦免修复(ws-bridge):被杀回合历史增长不再算"有进展";进展判定升级
   为作品目录实质写入快照(workProgressStamp,排除 chat.jsonl/eval-*.json 系统自写)
 
-## 批次 4:可观测性与诚实状态 【⬜】
+## 批次 4:可观测性与诚实状态 【✅ 完成 2026-08-28】
 
-顺序纪律:bash 心跳 → 活性阈值收紧 → beat 协议 → 假状态文案。beat 绝不更新 lastActivityAt。
+顺序纪律已守:bash 心跳 → 活性阈值收紧 → beat → 假状态文案。beat 未触碰 lastActivityAt。
+验证:tsc + vite + 全量 1058 测试通过。
 
-- [ ] 4.1 bash 心跳:ToolContext 加 onProgress,LoopEvent 加 tool_progress,stdout 周期 tail 广播
-- [ ] 4.2 活性判定:loopState=running + lastActivityAt >12-15min 判挂死;evalLoopRunning+evalStartedAt>15min 判死
-- [ ] 4.3 渲染/轮询接事件:renderer onProgress 广播;生视频轮询事件;配额冷却事件
-- [ ] 4.4 beat 协议:15s session_beat;前端以 beat 判活,废 60s 启发式
-- [ ] 4.5 假状态修复:"停滞·自动恢复中"只在恢复机制真实存在时显示
-- [ ] 4.6 全局通知中心雏形:eval_blocked/配额冷却/作品失败全局可见
+- [x] 4.1 bash 心跳:ToolContext.onProgress + LoopEvent tool_progress + bash 每 12s 回传输出尾部;
+  ws-compat 广播不落 chat.jsonl;Studio 心跳续命活性指示器
+- [x] 4.2 活性判定修复("挂死=永活"悖论):loopState=running 需 12min 活性窗
+  (bash 心跳续活动,正常长命令不误杀);evalLoopRunning 需 16min 窗(评审硬超时 15min 主防线外兜底)
+- [x] 4.3 渲染/轮询接事件:progress-events.ts 总线(services 层免 import 环);
+  成片渲染进度广播(video-factory);即梦/Seedance 轮询逐次透出(jimeng 4 处+seedance 1 处)
+- [x] 4.4 beat 协议:ws-bridge 15s session_beat(只读状态快照);Studio 以 beat 判活,
+  60s 启发式被心跳接管
+- [x] 4.5 假状态修复:"停滞·自动恢复中"仅当队列项 running(看门狗确实接管)时显示,
+  否则如实显示"停滞·需人工查看"
+- [x] 4.6 全局通知中心雏形:/ws 全局通道 + broadcastGlobal;eval_blocked 与配额冷却接入;
+  App.svelte toast 堆栈(12s 自动消失)
 
 ## 批次 5:v2 P0 三件套 【⬜】
 

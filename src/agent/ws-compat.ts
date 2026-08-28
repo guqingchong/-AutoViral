@@ -104,6 +104,13 @@ export function createLoopEventSink(session: WsSession, bridge: WsBridge, opts: 
           { workId: session.workId, content: ev.toolResult ?? "", source },
         );
         break;
+      case "tool_progress":
+        // 批次4.1:长工具心跳——只广播不落 chat.jsonl(避免心跳刷屏作品聊天记录)
+        bridge.broadcastToBrowsers(session.workId, {
+          event: "tool_progress",
+          data: { workId: session.workId, toolName: ev.toolName, text: ev.text ?? "", source },
+        });
+        break;
       case "turn_complete":
         flushThink();
         flushText();

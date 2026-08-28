@@ -113,6 +113,9 @@ export class WsBridge {
    *  必须互斥,否则并发触发会产生脱离跟踪的孤儿 CLI 进程(2026-08-06 根因) */
   private spawnChains: Map<string, Promise<void>> = new Map();
   private browserWss: WebSocketServer;
+  /** 全局通知通道(批次4.6):/ws 连接池,广播 eval_blocked/配额冷却/作品失败等全局事件 */
+  private globalWss!: WebSocketServer;
+  private globalSockets: Set<WebSocket> = new Set();
 
   /** 回合结束钩子(2026-08-19):api 层注入,用于 pendingEval 的事件驱动评审触发 */
   onLoopTurnEnd?: (workId: string) => void;
@@ -133,13 +136,27 @@ export class WsBridge {
 
   /** 作品是否活跃:有存活进程/运行中的 loop,或最近 ACTIVITY_GRACE_MS 内有活动。
    *  queue runner / watchdog 的存活判定必须用这个,而不是只看 cliProcess —
-   *  -p 单回合模式下进程每回合退出是常态,纯内存判定会误判假死(2026-08-06 根因) */
+   *  -p 单回合模式下进程每回合退出是常态,纯内存判定会误判假死(2026-08-06 根因)
+   *
+   *  2026-08-28 批次4.2:"挂死=永活"悖论修复——loopState/evalLoopRunning 不再是无条件
+   *  免死金牌:SSE 停滞/评审挂起时它们恒 true 导致 watchdog 永不介入(5e3 僵死 14h)。
+   *  现在 running 状态必须配合活性时间窗:超窗即判死(阈值 > bash 工具 600s 上限 +
+   *  bash 心跳 12s 续活动,正常长命令不会误判)。 */
   isWorkActive(workId: string): boolean {
     const s = this.sessions.get(workId);
     if (!s) return false;
     if (s.cliProcess || s.evalProcess) return true;
-    if (s.loopState === "running" || s.evalLoopRunning) return true;
-    return Date.now() - (s.lastActivityAt ?? 0) < ACTIVITY_GRACE_MS;
+    const now = Date.now();
+    const lastActivity = s.lastActivityAt ?? 0;
+    // 评审维度:评审硬超时 15min(批次1.2)是主防线,这里 16min 兜底
+    if (s.evalLoopRunning) {
+      return now - (s.evalStartedAt ?? lastActivity) < 16 * 60_000;
+    }
+    if (s.loopState === "running") {
+      // bash 心跳每 12s 续 lastActivityAt;12min 无任何 loop 事件 = 挂死
+      return now - lastActivity < 12 * 60_000;
+    }
+    return now - lastActivity < ACTIVITY_GRACE_MS;
   }
 
   constructor(_serverPort: number) {
@@ -148,6 +165,28 @@ export class WsBridge {
       const workId = this.extractWorkId(req.url ?? "");
       if (workId) this.handleBrowserConnection(workId, ws);
     });
+    // 批次4.6:全局通知通道(/ws)——eval_blocked/配额冷却/作品失败等事件推给所有页面,
+    // 不再只覆盖"正盯着该作品 Studio 页"的用户
+    this.globalWss = new WebSocketServer({ noServer: true });
+    this.globalWss.on("connection", (ws) => {
+      this.globalSockets.add(ws);
+      ws.on("close", () => this.globalSockets.delete(ws));
+      ws.on("error", () => this.globalSockets.delete(ws));
+    });
+    // 批次4.4 session_beat:每 15s 向有活会话的浏览器发心跳(loopState/evalLoopRunning 快照),
+    // 前端据此区分"慢(还在跑)"与"停(连接断/真死)",替代 60s 无事件即误判完成的启发式。
+    // 纪律:beat 只读状态、绝不更新 lastActivityAt(传输层活性 ≠ loop 进展,灌活会让 watchdog 全盲)。
+    const beat = setInterval(() => {
+      for (const s of this.sessions.values()) {
+        if (s.loopState !== "running" && !s.evalLoopRunning) continue;
+        if (!s.browserSockets.size) continue;
+        this.broadcastToBrowsers(s.workId, {
+          event: "session_beat",
+          data: { workId: s.workId, loopState: s.loopState ?? "idle", evalLoopRunning: !!s.evalLoopRunning, evalStep: s.evalStep },
+        });
+      }
+    }, 15_000);
+    beat.unref?.();
   }
 
   // ── Upgrade handler ──────────────────────────────────────────────────────
@@ -160,7 +199,22 @@ export class WsBridge {
       });
       return true;
     }
+    // 批次4.6:全局通知通道
+    if (url === "/ws" || url.startsWith("/ws?")) {
+      this.globalWss.handleUpgrade(req, socket, head, (ws) => {
+        this.globalWss.emit("connection", ws, req);
+      });
+      return true;
+    }
     return false;
+  }
+
+  /** 全局广播(批次4.6 通知中心):发给所有已连接页面 */
+  broadcastGlobal(event: string, data: unknown): void {
+    const msg = JSON.stringify({ event, data });
+    for (const ws of this.globalSockets) {
+      try { ws.send(msg); } catch { /* 单连接失败忽略 */ }
+    }
   }
 
   // ── Session management ───────────────────────────────────────────────────

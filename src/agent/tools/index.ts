@@ -18,6 +18,8 @@ import { askUserQuestionExecutor } from "./ask-user.js";
 export interface ToolContext {
   workDir: string;
   signal?: AbortSignal;
+  /** 长任务进度心跳(2026-08-28 批次4.1):工具执行期间周期性回传输出尾部,UI 据此区分"慢"与"死" */
+  onProgress?: (text: string) => void;
 }
 
 export interface ToolExecutor {

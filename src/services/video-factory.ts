@@ -8,6 +8,7 @@ import { renderTimeline } from "../video/renderer.js";
 import { applyVariables, validateVariableValues } from "../video/variables.js";
 import { brandingToImageLayer } from "../video/branding.js";
 import { dataDir } from "../config.js";
+import { broadcastProgress } from "./progress-events.js";
 import type { Timeline } from "../video/types.js";
 import type { DbTemplate } from "../db/templates-repo.js";
 import type { DbRenderJob } from "../db/render-jobs-repo.js";
@@ -111,6 +112,8 @@ async function runRenderLoop(jobId: string, template: DbTemplate, req: RenderReq
       progress: p.percent ?? 0,
       current_time: p.time,
     });
+    // 批次4.3:渲染进度同时广播(此前只落库,Studio 对话栏全程无感知)
+    broadcastProgress({ workId: req.workId, kind: "render", text: `成片渲染中 ${Math.round(p.percent ?? 0)}%`, percent: p.percent ?? 0 });
   }, 1000);
 
   try {
