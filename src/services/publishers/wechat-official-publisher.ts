@@ -141,6 +141,7 @@ export class WechatOfficialPublisher implements Publisher {
       const form = new FormData();
       form.append("media", new Blob([imgBuffer]), "cover.jpg");
       const res = await fetch(`${BASE}/material/add_material?access_token=${encodeURIComponent(token)}&type=image`, {
+      signal: AbortSignal.timeout(60_000), // 批次10.3
         method: "POST",
         body: form,
       });
@@ -162,6 +163,7 @@ export class WechatOfficialPublisher implements Publisher {
       const form = new FormData();
       form.append("media", new Blob([imgBuffer]), basename(imagePath) || "image.jpg");
       const res = await fetch(`${BASE}/media/uploadimg?access_token=${encodeURIComponent(token)}`, {
+      signal: AbortSignal.timeout(60_000), // 批次10.3
         method: "POST",
         body: form,
       });
@@ -217,6 +219,7 @@ export class WechatOfficialPublisher implements Publisher {
 
       // 3. Create a draft article
       const draftRes = await fetch(`${BASE}/draft/add?access_token=${encodeURIComponent(token)}`, {
+      signal: AbortSignal.timeout(60_000), // 批次10.3
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -240,6 +243,7 @@ export class WechatOfficialPublisher implements Publisher {
 
       // 3. Submit the draft for publish
       const pubRes = await fetch(`${BASE}/freepublish/submit?access_token=${encodeURIComponent(token)}`, {
+      signal: AbortSignal.timeout(60_000), // 批次10.3
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ media_id: draftJson.media_id }),

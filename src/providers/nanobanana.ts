@@ -52,7 +52,8 @@ export class NanoBananaProvider implements GenerateProvider {
       if (seed !== undefined) payload.seed = seed
       if (temperature !== undefined) payload.temperature = temperature
 
-      const res = await fetch(OPENROUTER_URL, {
+      const res = await fetch(OPENROUTER_URL, { signal: AbortSignal.timeout(120_000), // 批次10.3
+
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${this.apiKey}`,

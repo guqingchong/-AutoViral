@@ -630,6 +630,7 @@ apiRoutes.post("/api/works", async (c) => {
       templateId: body.templateId,
       digitalHumanId: body.digitalHumanId,
       explicitParams: Object.keys(explicitParams).length ? explicitParams : undefined,
+      evalMode: (body as any).evalMode === "express" ? "express" : undefined,
     });
     return c.json(work, 201);
   } catch (err) {
@@ -2633,6 +2634,18 @@ async function markEvalBlocked(workId: string, completedStep: string, broadcastD
     await storeUpdateWork(workId, { pipeline: freshWork.pipeline, status: "failed" });
     broadcastPipelineUpdate(workId, freshWork.pipeline);
   }
+  // 批次10.3(M14):失败写事故卡——消灭"失败即换皮重跑、零教训传递"
+  const resultForCard = broadcastData.result as EvalResult | undefined;
+  void import("../services/incidents.js").then((m) =>
+    m.recordIncident(
+      workId,
+      completedStep,
+      `评审熔断(${String(broadcastData.reason ?? `第 ${broadcastData.attempt ?? "?"} 轮后`)})。` +
+      (resultForCard?.issues?.length
+        ? `遗留问题:\n${resultForCard.issues.map((i) => `- [${i.severity}] ${i.description}`).join("\n")}`
+        : ""),
+    ),
+  ).catch(() => {});
   // 队列闭环：评审 3 轮不过即卡死，显式出队标 failed 交人工处置 ——
   // 否则队列项停在 running，runner 健康检查会反复恢复（且 startWorkSession
   // 只认 pending/active 步骤，恢复后会跳过被卡的 eval_blocked 步骤）。
@@ -3257,7 +3270,9 @@ apiRoutes.post("/api/works/:id/pipeline/advance", async (c) => {
 
     // ── Evaluation gate ─────────────────────────────────────────────────
     // (evaluating 态的重入已被上方守卫1拦截,此处恒为非评审中)
-    if (work.evaluationMode) {
+    // 批次10.2 评审分级:express 模式只保留 assembly 终审,其余阶段机器门禁过后直接推进
+    const skipEval = work.evaluationMode && work.evalMode === "express" && completedStep !== "assembly";
+    if (work.evaluationMode && !skipEval) {
       work.pipeline[completedStep].status = "evaluating" as any;
       await storeUpdateWork(id, { pipeline: work.pipeline, status: deriveStatusFromPipeline(work.pipeline, work.status) });
       broadcastPipelineUpdate(id, work.pipeline);
@@ -3902,6 +3917,8 @@ interface BatchConvertOptions {
   assetBudget?: string;
   /** 质量评审闸门：默认开（true），显式传 false 关闭 */
   evaluationMode?: boolean;
+  /** 批次10.2:评审分级 standard|express(默认 standard) */
+  evalMode?: "standard" | "express";
   /** 用途（04 方案）：六用途之一；决定默认参数/技能包注入/评审关注点 */
   purpose?: string;
 }
@@ -4066,6 +4083,7 @@ async function runBatchConvert(
           purpose: purposePreset?.key,
           // 批次5.8:用户在批量弹窗显式给的时长 = 最高优先级事实源(评审与门禁豁免依据)
           explicitParams: body.duration && body.duration > 0 ? { duration: body.duration } : undefined,
+          evalMode: body.evalMode === "express" ? "express" : undefined,
         });
         item.workId = work.id;
       }

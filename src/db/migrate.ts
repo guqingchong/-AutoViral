@@ -855,6 +855,15 @@ CREATE TABLE IF NOT EXISTS long_tasks (
 CREATE INDEX IF NOT EXISTS idx_long_tasks_work ON long_tasks(work_id);
 `,
   },
+  {
+    version: 33,
+    name: "work_eval_mode",
+    sql: `
+-- 2026-08-28 批次10.2(v2-M8 评审分级):standard(机器门禁+全阶段 LLM 评审)/
+-- express(机器门禁+assembly 单轮 LLM 终审,30-45min 目标)。
+ALTER TABLE works ADD COLUMN eval_mode TEXT;
+`,
+  },
 ];
 
 export function migrate(): void {

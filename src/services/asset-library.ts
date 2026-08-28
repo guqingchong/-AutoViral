@@ -89,7 +89,7 @@ export async function importAssetFromUrl(input: {
 }): Promise<DbAsset> {
   validateCategory(input.category);
   validateExternalUrl(input.url);
-  const res = await fetch(input.url);
+  const res = await fetch(input.url, { signal: AbortSignal.timeout(120_000) }); // 批次10.3
   if (!res.ok) throw new Error(`Download failed: ${res.status}`);
   const data = Buffer.from(await res.arrayBuffer());
   const name = input.name ?? `download_${Date.now()}.bin`;

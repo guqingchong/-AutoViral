@@ -70,7 +70,7 @@ export class MemoryClient {
 
   private async fetch(path: string, options: RequestInit = {}): Promise<Response> {
     const url = `${API_BASE}${path}`;
-    return globalThis.fetch(url, {
+    return globalThis.fetch(url, { signal: AbortSignal.timeout(30_000), // 批次10.3
       ...options,
       headers: {
         "Content-Type": "application/json",

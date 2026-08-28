@@ -169,6 +169,9 @@ async function runRenderLoop(jobId: string, template: DbTemplate, req: RenderReq
     }
 
     renderFinished = true;
+    // 批次10.3(M17 决策事件化):时长是"素材驱动、渲染时刻才定"的关键决策——
+    // 此前用户拿到成片才知道(病根 14),现在渲染完成即广播
+    broadcastProgress({ workId: req.workId, kind: "render", text: `✅ 成片渲染完成,时长确定为 ${renderedDuration ?? "?"}s(素材驱动)`, percent: 100 });
     updateRenderJob(jobId, {
       status: "completed",
       progress: 100,

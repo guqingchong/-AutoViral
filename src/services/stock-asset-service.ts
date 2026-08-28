@@ -327,7 +327,7 @@ export async function downloadStockAsset(input: StockDownloadInput) {
   const ext = urlExt ?? (mediaType === "video" ? "mp4" : "jpg");
   const asset = await uploadAsset({
     name: input.name ?? `stock_${input.provider}_${Date.now()}.${ext}`,
-    data: Buffer.from(await (await fetch(input.url)).arrayBuffer()),
+    data: Buffer.from(await (await fetch(input.url, { signal: AbortSignal.timeout(120_000) })).arrayBuffer()), // 批次10.3
     category,
     type: mediaType,
     source: input.provider as "pexels" | "pixabay" | "unsplash",

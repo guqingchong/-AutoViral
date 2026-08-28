@@ -329,6 +329,13 @@ export class WsBridge {
       memoryContext = "";
     }
 
+    // 批次10.3(M14):前作失败教训注入(最近事故卡)——失败不再是零教训换皮重跑
+    let incidentContext = "";
+    try {
+      const { recentIncidentDigest } = await import("./services/incidents.js");
+      incidentContext = await recentIncidentDigest(3);
+    } catch { incidentContext = ""; }
+
     const platforms = work.platforms.join(", ");
 
     // 无人值守判定(2026-08-16 用户决策)：autoMode(批量按钮创建) = 全自动,
@@ -501,6 +508,7 @@ ${sharedAssetsInfo}
 
 ## 记忆上下文（如有）
 ${memoryContext}
+${incidentContext ? `\n## 前作失败教训(近期事故卡——这些坑别的作品刚踩过,不要重蹈)\n${incidentContext}\n` : ""}
 
 ${apiContract}
 

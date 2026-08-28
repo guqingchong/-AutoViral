@@ -108,7 +108,7 @@ async function fetchNoteImages(url: string, workDir: string): Promise<string[]> 
       const uniq = [...new Set(imgUrls.map((u) => u.split("?")[0]))].slice(0, 6);
       for (const [i, u] of uniq.entries()) {
         try {
-          const res = await fetch(u);
+          const res = await fetch(u, { signal: AbortSignal.timeout(30_000) }); // 批次10.3
           if (!res.ok) continue;
           const buf = Buffer.from(await res.arrayBuffer());
           if (buf.length < 10_000) continue; // 太小大概是图标
@@ -227,7 +227,7 @@ async function downloadDouyinViaPlaywright(url: string, workDir: string): Promis
       const out: string[] = [];
       for (const u of urls.slice(0, 4)) {
         try {
-          const res = await fetch(u);
+          const res = await fetch(u, { signal: AbortSignal.timeout(30_000) }); // 批次10.3
           if (!res.ok) continue;
           const buf = new Uint8Array(await res.arrayBuffer());
           let bin = "";

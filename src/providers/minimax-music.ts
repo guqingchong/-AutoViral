@@ -51,7 +51,8 @@ export class MiniMaxMusicProvider implements GenerateProvider {
         },
       }
 
-      const res = await fetch(MINIMAX_MUSIC_URL, {
+      const res = await fetch(MINIMAX_MUSIC_URL, { signal: AbortSignal.timeout(180_000), // 批次10.3
+
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${this.apiKey}`,

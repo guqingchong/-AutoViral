@@ -39,6 +39,7 @@ export class ZhihuOfficialPublisher implements Publisher {
         input.title;
 
       const res = await fetch(`${BASE}/articles`, {
+      signal: AbortSignal.timeout(60_000), // 批次10.3
         method: "POST",
         headers: {
           Authorization: `Bearer ${accessToken}`,
