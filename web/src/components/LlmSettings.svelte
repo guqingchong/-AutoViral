@@ -24,7 +24,7 @@
   }: Props = $props();
 
   const PROVIDER_META = [
-    { key: "deepseek", name: "DeepSeek", hint: "策划/合成/评审主力(无视觉能力)" },
+    { key: "deepseek", name: "DeepSeek", hint: "策划/合成/评审主力(视觉为 exp 实验模型)" },
     { key: "kimi", name: "Kimi Coding Plan", hint: "调研(联网搜索)+视觉看图" },
     { key: "glm", name: "GLM 开放平台", hint: "视觉看图(glm-4v),按量计费" },
   ];
@@ -32,8 +32,8 @@
   /** 各 provider 视觉模型建议值(空清单=该 provider 无视觉能力,字段隐藏) */
   const VISION_SUGGESTIONS: Record<string, string[]> = {
     kimi: ["kimi-for-coding"],
-    glm: ["glm-4v", "glm-4.6"],
-    deepseek: [],
+    glm: ["glm-4v", "glm-4.6", "glm-5.3-flash"],
+    deepseek: ["deepseek-v4-flash-vision-exp"],
   };
 
   const STAGE_META = [
@@ -86,8 +86,8 @@
 
 <div class="llm-settings">
   <p class="llm-hint">
-    视觉模型只需在一家配置：评审看图/模板克隆时，系统按 Kimi → GLM 顺序自动选用已配置的视觉模型。
-    DeepSeek 公开 API 无视觉能力，无需填写。三家 Key 都在此页填写，保存到本机 ~/.autoviral/config.yaml。
+    视觉模型只需在一家配置：评审看图/模板克隆时，系统按 Kimi → GLM → DeepSeek 顺序自动选用已配置的视觉模型。
+    DeepSeek 视觉为实验模型(deepseek-v4-flash-vision-exp),生产使用建议配置回退。三家 Key 都在此页填写，保存到本机 ~/.autoviral/config.yaml。
   </p>
   {#each PROVIDER_META as meta}
     {@const p = providers[meta.key]}

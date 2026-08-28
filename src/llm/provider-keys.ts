@@ -23,11 +23,11 @@ export const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
   deepseek: {
     protocol: "openai",
     baseUrl: "https://api.deepseek.com/v1",
-    visionModel: undefined,  // 公开 API 无视觉（2026-08-16 实证）；用 glm-4v
+    visionModel: undefined,  // 默认不配(2026-08-16 实证公开 API 无视觉);2026-08-21 起可选实验视觉模型 deepseek-v4-flash-vision-exp,在设置页自行配置
     // 2026-08-18 实测:deepseek-v4-pro 长链工具回合强制要求回填 reasoning_content
     // (400: The `reasoning_content` in the thinking mode must be passed back)，短链不触发
     passReasoningBack: true,
-    modelSuggestions: ["deepseek-v4-flash", "deepseek-v4-pro"],
+    modelSuggestions: ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-flash-vision-exp"],
   },
   kimi: {
     protocol: "openai",
@@ -42,6 +42,6 @@ export const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
     protocol: "openai",
     baseUrl: "https://open.bigmodel.cn/api/paas/v4",
     visionModel: "glm-4v",
-    modelSuggestions: ["glm-4v", "glm-4.6"],
+    modelSuggestions: ["glm-4v", "glm-4.6", "glm-5.3-flash"],
   },
 };
