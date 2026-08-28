@@ -3,6 +3,7 @@ import { join, extname, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 import { dataDir, getConfig } from "../config.js";
 import * as heygem from "./heygem-client.js";
+import { acquireGpuLock } from "./gpu-lock.js";
 import { assertReady, recordActivity } from "./instance-service.js";
 import * as avatarsRepo from "../db/avatars-repo.js";
 import * as jobsRepo from "../db/digital-human-jobs-repo.js";
@@ -203,11 +204,21 @@ export async function regenerateJob(jobId: string): Promise<DbDigitalHumanJob> {
 }
 
 export async function pollJob(jobId: string, intervalMs = 5000, timeoutMs = 600_000): Promise<DbDigitalHumanJob | undefined> {
+  // 批次9.1(H3-5):轮询期 = GPU 占用期,持锁与 H3 串行;finally 必释放(测试/异常安全)
+  const release = await acquireGpuLock("heygem", timeoutMs + 60_000);
+  try {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     const job = await refreshJob(jobId);
     if (job?.status === "done" || job?.status === "failed") return job;
     await new Promise((r) => setTimeout(r, intervalMs));
   }
+  // 批次9.1(DH-3):超时标记失败时 best-effort 取消 GPU 侧任务
+  void import("./heygem-client.js").then((m) => m.cancelJob(jobId)).catch(() => {});
+  // 批次9.1(DH-3):超时标记失败时 best-effort 取消 GPU 侧任务
+  void import("./heygem-client.js").then((m) => m.cancelJob(jobId)).catch(() => {});
   return jobsRepo.updateJob(jobId, { status: "failed", error: "Polling timeout" });
+  } finally {
+    release();
+  }
 }
