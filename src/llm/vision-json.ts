@@ -26,9 +26,10 @@ export async function chatVisionJson<T>(
   prompt: string,
   opts: { timeoutMs?: number } = {},
 ): Promise<T> {
-  // 视觉 provider 解析:kimi 优先(实测 glm-4v 不支持 tools 且视觉细节弱),glm 兜底
+  // 视觉 provider 解析:kimi 优先(实测 glm-4v 不支持 tools 且视觉细节弱),glm 兜底,
+  // deepseek 末位(2026-08-21 起有 exp 视觉模型,仅在设置页显式配置 visionModel 时生效)
   let provider, model: string | undefined;
-  for (const key of ["kimi", "glm"]) {
+  for (const key of ["kimi", "glm", "deepseek"]) {
     model = getVisionModel(config, key);
     if (!model) continue;
     try {
@@ -37,7 +38,7 @@ export async function chatVisionJson<T>(
     } catch { /* 未配 apiKey → 试下一家 */ }
   }
   if (!provider || !model) {
-    throw new Error("视觉分析需要看图,但未配置任何视觉模型——请在设置页「大模型直连」为 Kimi 或 GLM 配置 apiKey/visionModel");
+    throw new Error("视觉分析需要看图,但未配置任何视觉模型——请在设置页「大模型直连」为 Kimi、GLM 或 DeepSeek 配置 apiKey/visionModel");
   }
 
   const images: ImageBlock[] = [];

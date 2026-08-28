@@ -43,7 +43,7 @@ export function parseEvalResultText(resultText: string, fallbackStep: string): E
 
 /** 视觉路由解析:返回 null 表示当前配置无任何可用视觉模型 */
 export function resolveVision(config: Config, evalProviderKey: string): { provider: LlmProvider; model: string } | null {
-  for (const key of [evalProviderKey, "kimi", "glm"]) {
+  for (const key of [evalProviderKey, "kimi", "glm", "deepseek"]) {
     const model = getVisionModel(config, key);
     if (!model) continue;
     try {
