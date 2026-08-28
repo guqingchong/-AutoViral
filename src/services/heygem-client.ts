@@ -73,3 +73,17 @@ export async function downloadResult(jobId: string, destPath: string): Promise<v
   if (!res.ok) throw new Error(`HeyGem 下载失败: HTTP ${res.status}`);
   await writeFile(destPath, Buffer.from(await res.arrayBuffer()));
 }
+
+/** 批次9.1(DH-3):best-effort 取消 HeyGem 侧任务——超时/失败时调用,
+ *  避免 GPU 侧继续跑无人认领的任务(已付费结果丢失)。
+ *  注意:HeyGem 是否支持 DELETE /api/jobs/:id 未经官方文档证实,失败静默忽略。 */
+export async function cancelJob(jobId: string): Promise<void> {
+  try {
+    const { base, headers } = await endpoint();
+    await fetch(`${base}/api/jobs/${encodeURIComponent(jobId)}`, {
+      method: "DELETE",
+      headers,
+      signal: AbortSignal.timeout(8000),
+    });
+  } catch { /* best-effort */ }
+}

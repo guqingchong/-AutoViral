@@ -385,9 +385,11 @@ export class WsBridge {
   灰色占位框,评审按"假窗口"直接打回(2026-08-26 实测三张模版卡全军覆没)
 - 环境: Windows + Git Bash;python 用 \`py -3\`(不要用 python3);ffmpeg/ffprobe 可用
 - 长耗时命令铁律: 单回合有 30 分钟上限,超时被杀则全回合作废。whisper 转写/批量渲染/批量生成
-  这类长任务:① 单条 Bash 不超过 3 分钟,长任务拆段分批 ② 输出重定向到文件(防孤儿进程
-  持有管道挂死回合) ③ 验证性 ASR 用 small 模型,禁止 medium/large(CPU 上 3 分钟音频
-  medium 要 15-30 分钟,必超回合上限) ④ timeout 参数单位是毫秒(600 秒 = 600000)`;
+  这类长任务:① **ASR 转写优先走长任务 API**(不占回合上限):POST http://localhost:${port}/api/long-tasks
+  body {"kind":"asr","workId":"本作品ID","inputPath":"媒体绝对路径","outputPath":"输出 ass 绝对路径","model":"small"},
+  返回 taskId 后轮询 GET /api/long-tasks/{taskId} 直至 status=done ② 其他长任务单条 Bash 不超过 3 分钟,
+  拆段分批 ③ 输出重定向到文件(防孤儿进程持有管道挂死回合) ④ 验证性 ASR 用 small 模型,
+  禁止 medium/large(CPU 上 3 分钟音频 medium 要 15-30 分钟,必超回合上限) ⑤ timeout 参数单位是毫秒(600 秒 = 600000)`;
 
     return `## 系统第一原则：质量优先
 

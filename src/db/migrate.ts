@@ -835,6 +835,26 @@ ALTER TABLE llm_usage ADD COLUMN latency_ms INTEGER;
 ALTER TABLE llm_usage ADD COLUMN thinking_tokens INTEGER;
 `,
   },
+  {
+    version: 32,
+    name: "long_tasks",
+    sql: `
+-- 2026-08-28 批次9.5(v2-M3 长任务作业化):提交-轮询模式的长任务(ASR 等),
+-- 不再占 agent 回合/bash 600s 上限。
+CREATE TABLE IF NOT EXISTS long_tasks (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  work_id TEXT,
+  status TEXT NOT NULL DEFAULT 'running',
+  input_json TEXT,
+  output_json TEXT,
+  error TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_long_tasks_work ON long_tasks(work_id);
+`,
+  },
 ];
 
 export function migrate(): void {

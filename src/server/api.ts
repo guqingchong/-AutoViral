@@ -3509,6 +3509,30 @@ apiRoutes.get("/api/works/:id/timing", async (c) => {
 });
 
 // ---------------------------------------------------------------------------
+// 长任务作业化(批次9.5):ASR 等长任务提交-轮询,不占 agent 回合/bash 上限
+// ---------------------------------------------------------------------------
+
+// POST /api/long-tasks { kind: "asr", workId, inputPath, outputPath, model?, style? }
+apiRoutes.post("/api/long-tasks", async (c) => {
+  const body = await c.req.json<{ kind?: string; workId?: string; inputPath?: string; outputPath?: string; model?: string; style?: string }>().catch(() => ({} as any));
+  if (body.kind !== "asr") return c.json({ error: "目前仅支持 kind=asr" }, 400);
+  if (!body.workId || !body.inputPath || !body.outputPath) {
+    return c.json({ error: "workId/inputPath/outputPath 必填" }, 400);
+  }
+  const { submitAsrTask } = await import("../services/long-tasks.js");
+  const task = await submitAsrTask({ workId: body.workId, inputPath: body.inputPath, outputPath: body.outputPath, model: body.model, style: body.style });
+  return c.json(task, 202);
+});
+
+// GET /api/long-tasks/:id
+apiRoutes.get("/api/long-tasks/:id", async (c) => {
+  const { getLongTask } = await import("../services/long-tasks.js");
+  const task = getLongTask(c.req.param("id"));
+  if (!task) return c.json({ error: "Task not found" }, 404);
+  return c.json(task);
+});
+
+// ---------------------------------------------------------------------------
 // Step History API (persistent execution logs per pipeline step)
 // ---------------------------------------------------------------------------
 

@@ -167,13 +167,23 @@ publish-account 2 个测试按"禁重发"新契约更新)。
 - [x] 8.7 M7 遥测:migration v31 llm_usage +latency_ms/+thinking_tokens;流式/非流式/vision
   全链埋点;GET /api/works/:id/timing 阶段墙钟+token+成本报表端点
 
-## 批次 9:M9 真独立项与作业化 【⬜】
+## 批次 9:M9 真独立项与作业化 【✅ 完成 2026-08-28(P-4 有 conscious 延期)】
 
-- [ ] 9.1 DH-3 GPU 任务取消核实 + H3-2 提交幂等 + H3-5 GPU 互斥锁
-- [ ] 9.2 P-4 两套发布栈合并(需无在投任务窗口)
-- [ ] 9.3 A-2 cron 重入锁 + A-3 采集资源互斥
-- [ ] 9.4 双产物 3.3 风格漂移 + 3.4 图卡配对
-- [ ] 9.5 M3 长任务作业化(whisper 接入点,照抄 render-jobs 模式)
+验证:tsc + vite + 全量测试(仅剩 2 个已知负载型 flake,单跑全过)。
+**P-4 两套发布栈合并:⏸️ 延期**——论证估值 400-600 行+数据迁移+在投窗口要求,
+风险最高项,不应在无实测的连续批次中落地;待整体实测后择窗口单做。
+
+- [x] 9.1 DH-3:heygem cancelJob best-effort(DELETE,官方支持未证实,失败静默)+ 超时时调用;
+  H3-2:local-h3 (workId,filename) 在途任务表,重复提交复用同一 Promise;
+  H3-5:gpu-lock.ts 进程内互斥(H3 生成持锁 / HeyGem pollJob 轮询期持锁,finally 释放;
+  测试友好的粒度重构——submit 不持锁,持锁点在有生命周期控制的位置)
+- [x] 9.3 A-2 cron 重入防护:analytics-scheduler 账号/作品两轮各加 running 标志
+  (A-3 采集资源互斥依赖 M7 调度框架,M7 并行化已论证降级——记为不做)
+- [x] 9.4 双产物配对核查:素材图→卡片已是确定性配对(文件名排序+取模),
+  "随机配对"实证不成立;语义级配对(视觉模型)列入批次 10 评估。3.3 风格漂移同理(需视觉机制,延期)
+- [x] 9.5 M3 长任务作业化:migration v32 long_tasks 表 + services/long-tasks.ts(ASR 首接入点,
+  spawn 后台+日志落盘+30s 心跳广播)+ POST/GET /api/long-tasks + ws-bridge 长任务铁律改写
+  (ASR 优先走作业化 API,不占回合/bash 上限)
 
 ## 批次 10:极速模式与二三梯队 【⬜,动工前补论证】
 

@@ -35,6 +35,10 @@ let accountJob: cron.ScheduledTask | null = null;
 let metricsJob: cron.ScheduledTask | null = null;
 let baselineJob: cron.ScheduledTask | null = null;
 
+// 批次9.3(A-2):cron 重入防护——上一轮没跑完(慢账号/慢网络)时跳过本轮,不叠加
+let accountRunning = false;
+let metricsRunning = false;
+
 /**
  * Start the analytics scheduler.
  * @param accountCron - Cron expression for account metric collection (default: daily at 3am)
@@ -52,6 +56,9 @@ export function startScheduler(
 
   // Account metrics: daily —— 遍历活跃账号(Task 8),单账号失败跳过不拖死整轮
   accountJob = cron.schedule(accountCron, async () => {
+    if (accountRunning) { console.warn("[analytics-scheduler] 上一轮账号采集未完成,跳过本轮(重入防护)"); return; }
+    accountRunning = true;
+    try {
     console.log("[analytics-scheduler] collecting account metrics...");
     const accounts = listAccounts().filter((a) => !a.status || a.status === "active");
     for (const account of accounts) {
@@ -86,10 +93,14 @@ export function startScheduler(
     } catch (e) {
       console.error("[analytics-scheduler] 数据回流失败:", e);
     }
+    } finally { accountRunning = false; }
   });
 
   // Post metrics: every 6 hours
   metricsJob = cron.schedule(metricsCron, async () => {
+    if (metricsRunning) { console.warn("[analytics-scheduler] 上一轮作品采集未完成,跳过本轮(重入防护)"); return; }
+    metricsRunning = true;
+    try {
     console.log("[analytics-scheduler] collecting post metrics...");
 
     // 2026-08-19 P2 审核对账:reviewing 记录(平台审核中)用 post_id 探测转正/转拒。
@@ -183,6 +194,7 @@ export function startScheduler(
         );
       }
     }
+    } finally { metricsRunning = false; }
   });
 
   // Baseline computation: weekly

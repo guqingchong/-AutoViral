@@ -12,6 +12,7 @@ import { dataDir, getConfig } from '../config.js'
 import { downloadFile } from './_volcengine-cv.js'
 import { checkH3Health, recordH3Activity } from '../services/h3-instance-service.js'
 import { ensureH3Tunnel } from '../services/h3-tunnel-service.js'
+import { acquireGpuLock } from '../services/gpu-lock.js'
 import type { GenerateProvider, ImageOpts, VideoOpts, GenerateResult } from './base.js'
 
 /** 批次6.4:H3 全部 fetch 带超时(此前 4 处裸奔,SSH 隧道半开=无限挂起的机理)。
@@ -126,6 +127,9 @@ export class LocalH3Provider implements GenerateProvider {
   readonly name = 'local-h3'
   readonly supportsImage = false
   readonly supportsVideo = true
+
+  /** 批次9.1(H3-2):(workId,filename) 级在途任务表,重复提交复用同一 Promise */
+  private static inflight = new Map<string, Promise<GenerateResult>>()
 
   private baseUrl: string
   private pollIntervalMs: number
@@ -262,32 +266,48 @@ export class LocalH3Provider implements GenerateProvider {
         uploadedFirstFrame = await this.uploadFirstFrame(opts.firstFrame)
       }
 
-      let lastErr: unknown
-      for (let attempt = 1; attempt <= MAX_GENERATE_ATTEMPTS; attempt++) {
+      // 批次9.1:H3-2 幂等——同作品同文件名已有在途任务时复用,禁止重复提交烧 GPU;
+      // H3-5 GPU 互斥——与 HeyGem 数字人渲染共用同一 AutoDL 实例,串行化
+      const inflightKey = `${workId}:${filename}`
+      const existing = LocalH3Provider.inflight.get(inflightKey)
+      if (existing) return existing
+
+      const task = (async (): Promise<GenerateResult> => {
+        const release = await acquireGpuLock('h3')
         try {
-          const graph = buildWorkflow({
-            prompt: applyShotTypePrompt(prompt, opts.shotType),
-            width,
-            height,
-            length,
-            seed: Math.floor(Math.random() * Number.MAX_SAFE_INTEGER),
-            filenamePrefix,
-            uploadedFirstFrame,
-          })
-          const output = await this.submitAndPoll(graph)
-          const assetPath = join(dataDir, 'works', workId, 'assets', filename)
-          await this.downloadOutput(output, assetPath)
-          recordH3Activity()
-          return {
-            success: true,
-            assetPath,
-            previewUrl: `/api/works/${workId}/assets/${filename}`,
+          let lastErr: unknown
+          for (let attempt = 1; attempt <= MAX_GENERATE_ATTEMPTS; attempt++) {
+            try {
+              const graph = buildWorkflow({
+                prompt: applyShotTypePrompt(prompt, opts.shotType),
+                width,
+                height,
+                length,
+                seed: Math.floor(Math.random() * Number.MAX_SAFE_INTEGER),
+                filenamePrefix,
+                uploadedFirstFrame,
+              })
+              const output = await this.submitAndPoll(graph)
+              const assetPath = join(dataDir, 'works', workId, 'assets', filename)
+              await this.downloadOutput(output, assetPath)
+              recordH3Activity()
+              return {
+                success: true,
+                assetPath,
+                previewUrl: `/api/works/${workId}/assets/${filename}`,
+              }
+            } catch (err) {
+              lastErr = err
+            }
           }
-        } catch (err) {
-          lastErr = err
+          throw lastErr
+        } finally {
+          release()
+          LocalH3Provider.inflight.delete(inflightKey)
         }
-      }
-      throw lastErr
+      })()
+      LocalH3Provider.inflight.set(inflightKey, task)
+      return await task // await 让拒绝进入外层 catch 的错误映射(而非把 rejected promise 直接还给调用方)
     } catch (err: any) {
       const message: string = err?.message ?? String(err)
       if (message.includes('timed out')) {
