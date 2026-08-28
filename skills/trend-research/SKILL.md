@@ -270,9 +270,9 @@ curl http://localhost:3271/api/memory/profile
 研究完成后，将报告保存为资产：
 ```bash
 # 将研究报告保存到作品的资产中
-curl -X POST http://localhost:3271/api/works/{workId} \
+curl -X POST http://localhost:3271/api/works/{workId}/pipeline/advance \
   -H "Content-Type: application/json" \
-  -d '{"pipeline": {"research": {"status": "done"}}}'
+  -d '{"completedStep":"research","nextStep":"plan"}'
 ```
 
 ## 垂类专项指南

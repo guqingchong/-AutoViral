@@ -13,6 +13,7 @@ import { editExecutor } from "./edit.js";
 import { globExecutor } from "./glob.js";
 import { grepExecutor } from "./grep.js";
 import { bashExecutor } from "./bash.js";
+import { askUserQuestionExecutor } from "./ask-user.js";
 
 export interface ToolContext {
   workDir: string;
@@ -42,6 +43,8 @@ export function buildCreatorTools(opts: ToolBuildOptions = {}): ToolExecutorMap 
     globExecutor,
     grepExecutor,
     bashExecutor(opts.bashBlocklist),
+    // 2026-08-28 批次2.6:激活"agent 主动问用户"通道(loop 配对回填+前端渲染早已就位)
+    askUserQuestionExecutor,
   ];
   const map: ToolExecutorMap = {};
   for (const e of list) map[e.def.name] = e;

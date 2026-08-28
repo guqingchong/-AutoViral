@@ -10,7 +10,7 @@ import { loadConfig, saveConfig, dataDir, getConfigDir, HEYGEM_TUNNEL_DEFAULTS, 
 import { PROVIDER_PRESETS } from "../llm/provider-keys.js";
 import { runJsonPrompt } from "../services/llm-json.js";
 import { PURPOSE_PRESETS, CONTENT_FORMS, getPurpose, purposeEvalFocusBlock } from "../services/purpose-presets.js";
-import { buildAssetConstraintSection, buildStepContractSection, buildMaterialSearchInstruction } from "./step-contract.js";
+import { buildAssetConstraintSection, buildStepContractSection, buildMaterialSearchInstruction, CRITERIA_DIR } from "./step-contract.js";
 import { purposeSkillsBlock, countPurposeSkills, listPurposeSkills } from "../db/purpose-skills-repo.js";
 import { researchPurposeSkills } from "../services/purpose-skills.js";
 import { getDb } from "../db/connection.js";
@@ -143,18 +143,22 @@ function looksLikeMojibake(text: string): boolean {
 
 async function runTrendScript(platform: string): Promise<string> {
   const scriptsDir = join(process.cwd(), 'skills', 'trend-research', 'scripts');
+  // 2026-08-28 批次2.3:Windows 无 python3 命令,用 py 启动器(与 trend-research.ts:23 的平台判断一致)
+  const isWin = process.platform === 'win32';
+  const pyBin = isWin ? 'py' : 'python3';
+  const pyArgs = (script: string, args: string[]) => isWin ? ['-3', script, ...args] : [script, ...args];
 
   try {
     if (platform === 'douyin') {
-      const { stdout } = await execFileAsync('python3', [
-        join(scriptsDir, 'douyin_hot_search.py'), '--top', '30'
-      ], { timeout: 30000 });
+      const { stdout } = await execFileAsync(pyBin, pyArgs(
+        join(scriptsDir, 'douyin_hot_search.py'), ['--top', '30']
+      ), { timeout: 30000 });
       return stdout;
     }
     // Other platforms via newsnow
-    const { stdout } = await execFileAsync('python3', [
-      join(scriptsDir, 'newsnow_trends.py'), platform, '--top', '20'
-    ], { timeout: 30000 });
+    const { stdout } = await execFileAsync(pyBin, pyArgs(
+      join(scriptsDir, 'newsnow_trends.py'), [platform, '--top', '20']
+    ), { timeout: 30000 });
     return stdout;
   } catch (err) {
     console.error(`[trends] Script error for ${platform}:`, err);
@@ -629,6 +633,13 @@ apiRoutes.put("/api/works/:id", async (c) => {
   const id = c.req.param("id");
   try {
     const body = await c.req.json();
+    // 2026-08-28 批次2.5:pipeline/status 是评审与门禁的单一事实源,禁止经本端点直写
+    // (此前 skills 教 agent PUT 直写 pipeline 绕开 advance 门禁/评审——机制性漏洞,不只 prompt 问题)。
+    // 合法通道:POST pipeline/advance(带门禁+评审)、eval/force-pass、eval/retry(人工)。
+    if (body && typeof body === "object" && ("pipeline" in body || "status" in body)) {
+      log("warn", "api", "put_pipeline_rejected", id, { keys: Object.keys(body) });
+      return c.json({ error: "禁止经 PUT 直写 pipeline/status——请使用 pipeline/advance(带机器门禁+评审)推进,或人工通道 eval/force-pass、eval/retry。" }, 403);
+    }
     const work = await storeUpdateWork(id, body);
     if (!work) return c.json({ error: "Work not found" }, 404);
     return c.json(work);
@@ -1877,7 +1888,7 @@ export async function startWorkSession(id: string, extraInstruction?: string): P
           // 如实声明用户预设了哪些(此前无论是否选数字人都声称"已设定好模板和数字人",
           // 导致 agent 在未选数字人时自行绑定 avatar —— 2026-08-14 bug)
           `**自动化模式（无人值守）**：用户已预先设定好${[hasTemplate ? "模板" : "", hasDigitalHuman ? "数字人" : ""].filter(Boolean).join("和")}，请直接执行当前步骤，不要询问用户确认。`,
-          `**自主拍板铁律**：本作品全程无真人在线。所有创意决策——立场角度、钩子版本(多版本自行择优落地,不要列出来让人挑)、标题与封面、素材来源、配乐——均由你按 skills 的推荐方案自行决定并立即执行。禁止向用户提问、罗列备选等用户选择、或停下来等确认;系统提示与 skill 中"请用户确认/等用户确认"类规则对本作品一律不适用。`,
+          `**自主拍板铁律**：本作品全程无真人在线。所有创意决策——立场角度、钩子版本(多版本自行择优落地,不要列出来让人挑)、标题与封面、素材来源、配乐——均由你按 skills 的推荐方案自行决定并立即执行。禁止向用户提问、罗列备选等用户选择、或停下来等确认;系统提示与 skill 中"请用户确认/等用户确认"类规则对本作品一律不适用。唯一例外:仅当遇到①素材二选一无法研判 ②降质确认 ③预算/额度超档 三类问题时,允许调用 AskUserQuestion 工具打断一次;10 分钟无答复系统将按最小降质方案自动继续。`,
           `完成当前步骤后，必须调用以下命令推进流水线（把 NEXT_STEP 替换为下一阶段 key）：`,
           `curl -X POST http://localhost:3271/api/works/${id}/pipeline/advance -H "Content-Type: application/json" -d '{"completedStep":"${currentStepKey}","nextStep":"NEXT_STEP"}'`,
           `推进后系统会自动给你发送继续指令，请接着执行下一阶段，如此循环直到最后一个阶段完成。`,
@@ -1957,6 +1968,7 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
           `## AUTOMATED MODE`,
           `This work is running in automated mode (batch auto-pipeline).`,
           `DO NOT ask the user to choose from options. Automatically select the best option and proceed.`,
+          `EXCEPTION: you may call the AskUserQuestion tool ONLY for: ①material choice you cannot judge ②quality-downgrade confirmation ③budget/quota exceeded. Unanswered questions auto-continue with the minimal-downgrade option after 10 minutes.`,
           `DO NOT wait for user confirmation between steps. Execute each step completely and move to the next one automatically.`,
           `After completing this step, automatically trigger the next pipeline step via:`,
           `\`curl -X POST http://localhost:3271/api/works/${id}/pipeline/advance -H "Content-Type: application/json" -d '{"completedStep":"${step}","nextStep":"NEXT_STEP"}'\``,
@@ -1996,15 +2008,21 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
         `在开始调研之前，先评估用户提供的信息是否足够：`,
         hasTopicHint
           ? `✅ 用户指定了创作方向："${work.topicHint}"，围绕此方向深入调研。`
-          : `⚠️ 用户未指定具体创作方向。请先向用户提 1-2 个问题确认想做什么内容，不要用默认值硬跑。`,
+          : isAutoMode
+            ? `⚠️ 用户未指定具体创作方向。无人值守模式：请根据作品标题/品类自行研判最合理的方向直接开跑,并在产出开头声明你的方向假设。`
+            : `⚠️ 用户未指定具体创作方向。请先向用户提 1-2 个问题确认想做什么内容，不要用默认值硬跑。`,
         hasTitle
           ? `✅ 作品标题："${work.title}"`
           : `⚠️ 无明确标题。`,
         isOtherCategory
-          ? `ℹ️ 用户选择了"其他"类型或未选类型，请在对话中了解用户想做什么类型的内容（叙事/知识/展示/节奏/情绪驱动等），再决定调研方向。`
+          ? isAutoMode
+            ? `ℹ️ 用户选择了"其他"类型或未选类型,无人值守模式:请根据主题自行判断内容类型(叙事/知识/展示/节奏/情绪驱动等)并继续。`
+            : `ℹ️ 用户选择了"其他"类型或未选类型，请在对话中了解用户想做什么类型的内容（叙事/知识/展示/节奏/情绪驱动等），再决定调研方向。`
           : `ℹ️ 情绪品类：${cat}`,
         ``,
-        `如果以上信息不足以开始有针对性的调研，先和用户对话确认方向，再执行下面的调研步骤。`,
+        isAutoMode
+          ? `信息不足时按上述规则自行拍板,禁止停下来等用户回答。`
+          : `如果以上信息不足以开始有针对性的调研，先和用户对话确认方向，再执行下面的调研步骤。`,
         ``,
       ].join("\n");
 
@@ -2135,7 +2153,9 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
           `5. **完整文案**：以"我"的第一人称写的完整成品文案，读起来像一个真人在倾诉自己的经历/感受`,
           `6. **标签**：5-6 个（从热搜中选）`,
           ``,
-          `请用户从 3 个中选一个。`,
+          isAutoMode
+            ? `自行评估 3 个选题并择优落地一个(不要罗列等待选择,无人值守)。`
+            : `请用户从 3 个中选一个。`,
         ].join("\n"));
       } else {
         // "other" or unknown category — generic research with topic-driven approach
@@ -2165,7 +2185,9 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
           `5. **参考案例**：调研中发现的类似优质内容`,
           `6. **标签**：5-6 个平台标签`,
           ``,
-          `请用户从 3 个中选一个。`,
+          isAutoMode
+            ? `自行评估 3 个方案并择优落地一个(不要罗列等待选择,无人值守)。`
+            : `请用户从 3 个中选一个。`,
         ].join("\n"));
       }
     } else {
@@ -2173,7 +2195,9 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
         `Execute the "${pipelineStep.name}" step of the pipeline.`,
         `Produce output appropriate for this step. Be thorough and creative.`,
       );
-      if (step === "assets" && work.type === "short-video") {
+      if (step === "assets" && work.type === "short-video" && work.assetSource !== "ai") {
+        // 2026-08-28 批次2.3:assetSource=ai 的作品跳过本段——契约段已明确"仅 AI 生成",
+        // 本段的素材库优先+禁 AI 与之同消息互斥(v3 病根16 互斥对 #8)
         promptParts.push(
           ``,
           `## Asset Acquisition Strategy（合规素材库优先，自动检索选优）`,
@@ -2352,8 +2376,8 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
               ``,
               `### Available Scripts (MUST USE, do NOT write inline code):`,
               `- **BGM search**: Read \`modules/music-search.md\` for yt-dlp search/download workflow`,
-              `- **Beat detection**: \`python3 ~/.claude/skills/content-assembly/scripts/beat-sync/detect_beats.py bgm.mp3 -o beats.json\``,
-              `- **Beat-sync editing**: \`python3 ~/.claude/skills/content-assembly/scripts/beat-sync/beat_sync_edit.py --video source.mp4 --music bgm.mp3 --output final.mp4 --style dramatic\``,
+              `- **Beat detection**: \`py -3 ~/.claude/skills/content-assembly/scripts/beat-sync/detect_beats.py bgm.mp3 -o beats.json\``,
+              `- **Beat-sync editing**: \`py -3 ~/.claude/skills/content-assembly/scripts/beat-sync/beat_sync_edit.py --video source.mp4 --music bgm.mp3 --output final.mp4 --style dramatic\``,
               `- Read \`modules/beat-sync.md\` for detailed usage of 3 styles (fast/smooth/dramatic)`,
             ].join("\n"),
           };
@@ -2437,12 +2461,12 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
           `2. **背景**：使用渐变色背景（不要纯黑/纯白），推荐配色：`,
           `   - 深蓝渐变: "linear-gradient(#1a2a6c, #b21f1f, #fdbb2d)" 效果`,
           `   - 用 ffmpeg 生成：先创建纯色背景，再用 overlay 添加文字`,
-          `3. **字体**：使用系统中文字体（SimHei 或 Microsoft YaHei），字号 48-72px`,
+          `3. **字体**：必须使用 ~/.autoviral/fonts/NotoSansCJKsc-Bold.otf（家族名 Noto Sans CJK SC），禁止使用系统字体（2026-08-28 批次2.4 口径统一）,字号 48-72px`,
           `4. **文字效果**：添加描边（borderw=2）和阴影（shadow），确保可读性`,
           `5. **布局**：文字居中，留白充足，不要堆砌`,
           `6. **命令模板**：`,
           `   ffmpeg -f lavfi -i color=c=0x1a2a6c:s=1080x1440 -vf \\`,
-          `   "drawtext=text='标题文字':fontfile='C:/Windows/Fonts/msyh.ttc':fontsize=56:fontcolor=white:`,
+          `   "drawtext=text='标题文字':fontfile='$HOME/.autoviral/fonts/NotoSansCJKsc-Bold.otf':fontsize=56:fontcolor=white:`,
           `   borderw=3:bordercolor=black@0.5:shadowx=2:shadowy=2:shadowcolor=black@0.3:`,
           `   x=(w-text_w)/2:y=(h-text_h)/2" -frames:v 1 -y cover.png`,
           ``,
@@ -2900,7 +2924,7 @@ function buildEvalPrompt(work: Work, step: string, attempt: number, historyText:
 ${work.purpose ? purposeEvalFocusBlock(work.purpose) : ""}
 
 ## 评审标准
-请阅读评审标准文件(绝对路径): ${join(homedir(), ".claude", "skills", "content-evaluator", "criteria", `${step}.md`)}。如果文件不存在，请使用通用的内容质量标准进行评审，不要花时间寻找该文件。
+请阅读评审标准文件(绝对路径): ${join(CRITERIA_DIR, `${step}.md`)}。如果文件不存在，请使用通用的内容质量标准进行评审，不要花时间寻找该文件。
 
 ## 创作产出摘要
 ${historyText.slice(0, 6000) || "(无文本产出记录)"}
@@ -5398,9 +5422,14 @@ apiRoutes.post("/api/templates/:id/preview", async (c) => {
           }
         }
       }
-      const fontPath = process.platform === "win32"
-        ? "C\:/Windows/Fonts/msyh.ttc"
-        : "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf";
+      // 2026-08-28 批次2.4:字体口径统一到 ~/.autoviral/fonts(与字幕铁律同源),
+      // 不再用系统字体(渲染机缺 msyh 时 fontselect 静默回退)
+      const notoFont = join(dataDir, "fonts", "NotoSansCJKsc-Bold.otf");
+      const fontPath = existsSync(notoFont)
+        ? notoFont.replace(/\\/g, "/").replace(/^([A-Za-z]):/, "$1\\:")  // ffmpeg filter 盘符转义
+        : process.platform === "win32"
+          ? "C\:/Windows/Fonts/msyh.ttc"
+          : "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf";
       const safeText = overlayText.replace(/'/g, "\'");
       try {
         await execFileAsync("ffmpeg", [

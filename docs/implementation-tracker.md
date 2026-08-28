@@ -27,16 +27,26 @@
 - [x] 1.5 __parseFailed 兜底改 fail(evaluator.ts)
   - 二次解析失败 → 抛 EvalParseError 进 eval_error 链;旧测试语义同步更新
 
-## 批次 2:规则速修与 autoMode 出口 【⬜】
+## 批次 2:规则速修与 autoMode 出口 【✅ 完成 2026-08-28】
 
 论证依据:v3 附录 M19。纪律:criteria 合并方向 homedir→仓库先回填;同步只管理项目 5 个 skill 子目录。
+验证:tsc + vite + 全量 1058 测试通过(2 个旧测试按 PUT 新契约更新)。
 
-- [ ] 2.1 criteria 合一:homedir assembly.md 维度 7 回填仓库 → 运行时改读仓库副本
-- [ ] 2.2 同步机制修复:index.ts rsync → Node copyDir(禁 --delete 语义)
-- [ ] 2.3 同消息互斥对速修:py -3 统一 / 禁 AI 改"用户未显式选 AI 时" / autoMode 下"3 选 1"改自行拍板
-- [ ] 2.4 音量口径收敛:loudnorm 胜,SKILL.md volume% 旧规退休;MarginV 430 统一;字体 macOS 残留删除
-- [ ] 2.5 死 API/PUT 旁路:trend-research:273 死 API 删除;content-planning:369 改 advance;PUT 端点拒绝 pipeline 字段写入
-- [ ] 2.6 autoMode 合法出口:注册 AskUserQuestion + scheduleAutoContinue 加 awaiting_user 抑制 + 提问超时兜底(N 分钟最小降质自动继续)
+- [x] 2.1 criteria 合一:homedir assembly.md 维度 7(模板还原度)已回填仓库;
+  运行时改读仓库副本(step-contract.ts CRITERIA_DIR + api.ts buildEvalPrompt,PROJECT_ROOT 上溯解析)
+- [x] 2.2 同步机制修复:index.ts rsync → Node syncSkillsDir(只增改不删除,保护 yaml/permitted_skills.md;
+  修掉 Windows 无 rsync 每次启动静默失败 + --delete 误删用户 50+ 个人 skill 的双重隐患)
+- [x] 2.3 同消息互斥对速修:python3→py -3 统一(ws-bridge 4 处+api.ts runTrendScript 平台化+api.ts 2 处);
+  assets 素材库优先段对 assetSource=ai 跳过(禁 AI 互斥消除);
+  autoMode 下"提 1-2 个问题/3 选 1/对话确认方向"全部改自行拍板(api.ts 1999/2004/2007/2138/2168)
+- [x] 2.4 音量口径收敛:loudnorm 胜(SKILL.md:136/493/500/505-507 改写,volume% 旧规废除);
+  MarginV 430 统一(pro-captions.md 抖音行);字体三套合一到 NotoSansCJKsc
+  (asset-generation macOS 残留改 $HOME 路径;api.ts 2456/2468/5424 封面字卡同源)
+- [x] 2.5 死 API/PUT 旁路:trend-research:273 死 API、content-planning:369、asset-generation:1377、
+  content-assembly:896 四处全部改 advance;**PUT /api/works/:id 机制性封堵**(pipeline/status 直写 403)
+- [x] 2.6 autoMode 合法出口:AskUserQuestion 注册(tools/ask-user.ts)+ scheduleAutoContinue
+   awaiting_user 抑制(论证新发现 #4 修复)+ 10min 无人答超时兜底(最小降质+显式声明自动继续)
+  + autoMode prompt 白名单句(中英文两处)
 
 ## 批次 3:research 确定性与护栏改造 【⬜】
 

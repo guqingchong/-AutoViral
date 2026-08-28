@@ -1,10 +1,9 @@
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { serveStatic } from "@hono/node-server/serve-static";
-import { readFile, mkdir, appendFile } from "node:fs/promises";
+import { readFile, writeFile, mkdir, appendFile, readdir } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import type { Server } from "node:http";
@@ -43,6 +42,31 @@ const __dirname = dirname(__filename);
 
 // Resolve web/dist relative to the package root (two levels up from dist/server/)
 const WEB_DIST = join(__dirname, "..", "..", "web", "dist");
+
+/** 启动时 skills 同步(批次2.2):仓库 → ~/.claude/skills,只增改不删除,
+ *  保护用户 yaml 数据与 runtime 修改文件(规则与 postinstall.ts 一致)。
+ *  返回复制文件数。 */
+async function syncSkillsDir(src: string, dest: string): Promise<number> {
+  const NEVER_OVERWRITE_EXT = [".yaml"];
+  const NEVER_OVERWRITE_FILES = ["permitted_skills.md"];
+  let copied = 0;
+  const walk = async (s: string, d: string): Promise<void> => {
+    await mkdir(d, { recursive: true });
+    for (const entry of await readdir(s, { withFileTypes: true })) {
+      const sp = join(s, entry.name);
+      const dp = join(d, entry.name);
+      if (entry.isDirectory()) { await walk(sp, dp); continue; }
+      const protectedFile =
+        (NEVER_OVERWRITE_EXT.some((ext) => entry.name.endsWith(ext)) ||
+          NEVER_OVERWRITE_FILES.includes(entry.name));
+      if (protectedFile && existsSync(dp)) continue;
+      await writeFile(dp, await readFile(sp));
+      copied++;
+    }
+  };
+  await walk(src, dest);
+  return copied;
+}
 
 function resolveBundledFfmpeg(): { ffmpeg: string; ffprobe: string } | undefined {
   const appRoot = process.env.AUTOVIRAL_APP_ROOT;
@@ -156,15 +180,21 @@ export async function startServer(port: number): Promise<{ server: Server }> {
   await mkdir(join(dataDir, "shared-assets", "templates"), { recursive: true });
 
   // 3.5. Sync skills to ~/.claude/skills/ (agent reads from there)
+  // 2026-08-28 批次2.2:rsync 在 Windows 不存在,此前每次启动静默失败(catch 只 warn),
+  // 双副本由此漂移;且 `rsync --delete` 若真生效会误删用户在 ~/.claude/skills 的
+  // 50+ 个个人 skill。改为 Node 递归 copy:仓库为唯一源、只增改不删除、
+  // 保护用户 yaml 数据与 permitted_skills.md(与 postinstall.ts 同规则)。
   if (!process.env.AUTOVIRAL_PACKAGED) {
-    const projectSkills = join(process.cwd(), "skills");
+    const projectRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+    const projectSkills = join(projectRoot, "skills");
     const installedSkills = join(homedir(), ".claude", "skills");
     if (existsSync(projectSkills)) {
       try {
-        execSync(`rsync -a --delete "${projectSkills}/" "${installedSkills}/"`, { stdio: "ignore" });
-        console.log("Skills synced to ~/.claude/skills/");
-      } catch {
-        console.warn("Warning: failed to sync skills to ~/.claude/skills/");
+        const copied = await syncSkillsDir(projectSkills, installedSkills);
+        console.log(`Skills synced to ~/.claude/skills/ (${copied} files)`);
+      } catch (err) {
+        console.warn("Warning: failed to sync skills to ~/.claude/skills/:",
+          err instanceof Error ? err.message : err);
       }
     }
   }

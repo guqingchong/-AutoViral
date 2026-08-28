@@ -768,10 +768,10 @@ dreamina multimodal2video \
 ```bash
 # 生成纯色背景文字卡片封面
 ffmpeg -f lavfi -i "color=c=0x8B7D6B:s=1080x1440:d=1" \
-  -vf "drawtext=text='封面文案第一行':fontsize=96:fontcolor=white:fontfile=/System/Library/Fonts/PingFang.ttc:x=80:y=h*0.38,\
-drawtext=text='第二行文字':fontsize=96:fontcolor=white:fontfile=/System/Library/Fonts/PingFang.ttc:x=80:y=h*0.38+120,\
-drawtext=text='第三行文字':fontsize=96:fontcolor=white:fontfile=/System/Library/Fonts/PingFang.ttc:x=80:y=h*0.38+240,\
-drawtext=text='❝':fontsize=72:fontcolor=white@0.4:fontfile=/System/Library/Fonts/PingFang.ttc:x=80:y=h*0.22" \
+  -vf "drawtext=text='封面文案第一行':fontsize=96:fontcolor=white:fontfile=$HOME/.autoviral/fonts/NotoSansCJKsc-Bold.otf:x=80:y=h*0.38,\
+drawtext=text='第二行文字':fontsize=96:fontcolor=white:fontfile=$HOME/.autoviral/fonts/NotoSansCJKsc-Bold.otf:x=80:y=h*0.38+120,\
+drawtext=text='第三行文字':fontsize=96:fontcolor=white:fontfile=$HOME/.autoviral/fonts/NotoSansCJKsc-Bold.otf:x=80:y=h*0.38+240,\
+drawtext=text='❝':fontsize=72:fontcolor=white@0.4:fontfile=$HOME/.autoviral/fonts/NotoSansCJKsc-Bold.otf:x=80:y=h*0.22" \
   -frames:v 1 -y {workDir}/assets/images/cover.png
 ```
 
@@ -1374,9 +1374,9 @@ ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p
 2. 列出所有已生成素材及预览链接
 3. 更新作品流水线状态：
 ```bash
-curl -X PUT http://localhost:3271/api/works/{workId} \
+curl -X POST http://localhost:3271/api/works/{workId}/pipeline/advance \
   -H "Content-Type: application/json" \
-  -d '{"pipeline": {"assets": {"status": "done"}}}'
+  -d '{"completedStep":"assets","nextStep":"assembly"}'
 ```
 4. 告知用户下一步是合成（content-assembly 技能）
 
