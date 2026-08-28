@@ -109,7 +109,7 @@ python3 skills/content-assembly/scripts/caption_generate.py \
 
 | 平台 | 危险区域 | 推荐 `--position` |
 |------|---------|------------------|
-| 抖音 | 底部 ~20% 被点赞/评论按钮遮挡 | `center`（默认，MarginV=960） |
+| 抖音 | 底部 ~20% 被点赞/评论按钮遮挡 | `bottom`（MarginV=430，与合成管线字幕带/ws 铁律统一，2026-08-28 收敛） |
 | 小红书视频 | 底部有交互栏 | `center` 或 `top` |
 | 小红书图文视频 | 偏上方更美观 | `top`（MarginV=400） |
 

@@ -74,10 +74,10 @@ describe("Integration — 跨模块工作流", () => {
       const detail = await app.request(`/api/works/${encodeURIComponent(workId)}`);
       expect(detail.status).toBe(200);
 
-      // Step 4: Update status
+      // Step 4: Update title(status/pipeline 自 2026-08-28 批次2.5 起禁止经 PUT 直写,走 pipeline/advance)
       const update = await app.request(`/api/works/${encodeURIComponent(workId)}`, {
         method: "PUT",
-        body: JSON.stringify({ status: "researching", title: "集成测试-已更新" }),
+        body: JSON.stringify({ title: "集成测试-已更新" }),
         headers: { "Content-Type": "application/json" },
       });
       expect(update.status).toBe(200);

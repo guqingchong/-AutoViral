@@ -62,6 +62,8 @@ export interface WsSession {
   evalLoopRunning?: boolean;
   /** 评审开始时间(2026-08-28 批次1.2):watchdog 据此判定评审挂死(此前 evalStep 只写不读,升级为可读信号) */
   evalStartedAt?: number;
+  /** agent 提问等待用户的起始时间(批次2.6 AskUserQuestion 激活):autoMode 超时兜底用 */
+  askPendingSince?: number;
   /** autoMode 无人值守续跑计数(P2-T2):步骤 key + 连续空转次数 + 历史长度标记 + 步骤内总次数 */
   autoContinueStep?: string;
   autoContinueCount?: number;
@@ -368,16 +370,16 @@ export class WsBridge {
     - 评审依据：各阶段评审标准见 \`content-evaluator/criteria/<step>.md\`，评审会逐条核对这些模块的执行情况
 ## 你的能力
 - 调研：使用WebSearch搜索 + 数据获取脚本（详见 trend-research skill）
-- 生图：脚本工具 python3 ~/.claude/skills/asset-generation/scripts/openrouter_generate.py 或 jimeng_generate.py（详见 asset-generation skill）
+- 生图：脚本工具 py -3 ~/.claude/skills/asset-generation/scripts/openrouter_generate.py 或 jimeng_generate.py（详见 asset-generation skill）
 - 生视频：调用 curl http://localhost:${port}/api/generate/video 或使用即梦脚本
 - 程序化动画: curl http://localhost:${port}/api/assets/code-scene(结构图/流程图/逻辑链条镜头,参数化模板渲染 mp4 段,详见 asset-generation skill 路由速查表)
 - 合成：使用ffmpeg命令剪辑视频（拼接片段+字幕+配乐+转场）
 - 字幕管线（强制）：
-  1. **生成字幕文件**：使用 python3 ~/.claude/skills/content-assembly/scripts/caption_generate.py 生成 ASS 字幕（支持 douyin-highlight/xhs-soft/funny/minimal 等预设风格 + 逐词高亮 karaoke）。如果你有手动时间戳 JSON，也可以用 --timestamps 模式；否则用 --input 自动语音识别模式
+  1. **生成字幕文件**：使用 py -3 ~/.claude/skills/content-assembly/scripts/caption_generate.py 生成 ASS 字幕（支持 douyin-highlight/xhs-soft/funny/minimal 等预设风格 + 逐词高亮 karaoke）。如果你有手动时间戳 JSON，也可以用 --timestamps 模式；否则用 --input 自动语音识别模式
   2. **烧录字幕到视频（默认路径，必须）**：使用 ffmpeg 原生 ass 滤镜烧录，单次编码、音频直拷：
      ffmpeg -i composited.mp4 -vf "ass=subs.ass:fontsdir='C\\:/Users/顾庆冲/.autoviral/fonts'" -c:v libx264 -preset veryfast -crf 20 -c:a copy -y output/final.mp4
      Windows 下盘符冒号需转义（C\\:/）；路径含中文时先 cd 到作品目录用相对路径。**禁止用 ffmpeg drawtext 或手写 Pillow 方案**
-  3. **备用路径**：仅当输入是 SRT 且不需要 karaoke、或 ffmpeg 无 libass 时，才用 python3 ~/.claude/skills/content-assembly/scripts/subtitle_burn.py（注意：它会剥掉 {\\kf} karaoke 标签并忽略 ASS MarginV，ASS+karaoke 场景禁用）
+  3. **备用路径**：仅当输入是 SRT 且不需要 karaoke、或 ffmpeg 无 libass 时，才用 py -3 ~/.claude/skills/content-assembly/scripts/subtitle_burn.py（注意：它会剥掉 {\\kf} karaoke 标签并忽略 ASS MarginV，ASS+karaoke 场景禁用）
   4. **字体**：必须使用 ~/.autoviral/fonts/ 下的高质量字体（NotoSansCJKsc-Bold.otf，家族名 Noto Sans CJK SC），禁止使用系统字体；libass 日志出现 fontselect 回退系统字体时必须停下来修正 Fontname
   5. **布局安全区（强制）**：字幕带（MarginV=430，y≈1390–1550）与数字人/字卡 overlay 坐标必须由同一份布局常量计算且断言不相交；数字人分窗固定预设 scale=420:-2,pad=428:754 + overlay=616:200；合成后在 10%/50%/90% 抽帧复核遮挡
 - BGM 配乐（强制）：
@@ -397,7 +399,7 @@ export class WsBridge {
 
 **素材生成阶段第一步**：在任何生图/生视频操作前，必须先运行环境检测：
 \`\`\`
-python3 ~/.claude/skills/asset-generation/scripts/check_environment.py --format summary
+py -3 ~/.claude/skills/asset-generation/scripts/check_environment.py --format summary
 \`\`\`
 根据检测结果选择合适的工具和降级策略。**禁止跳过此步骤**——否则会导致用不存在的工具反复尝试失败、浪费积分和时间。
 
@@ -580,6 +582,7 @@ ${unattended
     session.loopState = "running";
     session.loopTurnPromise = routed
       .runTurn(firstMessage)
+      .then((r) => this.onTurnSettled(session, r))
       .catch((err) => {
         session.lastTurnFailure = err instanceof Error ? err.message : String(err);
         console.error(`[agent-loop] turn failed for ${workId}:`, err);
@@ -691,12 +694,45 @@ ${unattended
    * 此前靠 runner resumeAttempts 恢复,计数打爆(>5)作品被判 failed。
    * 同一步骤最多续 15 次防空转;评审中(evalLoopRunning/evaluating)不干预。
    */
+  /** 回合正常结束钩子(批次2.6):awaiting_user = agent 提问等用户,记录计时并安排无人值守兜底 */
+  private onTurnSettled(session: WsSession, r?: { stopReason?: string }): void {
+    if (r?.stopReason === "awaiting_user" && session.loop?.pendingAskToolUseId) {
+      session.askPendingSince = Date.now();
+      this.scheduleAskTimeout(session);
+    }
+  }
+
+  /** autoMode 提问超时兜底(批次2.6):无人值守时问题永远没人答,
+   *  10 分钟未答则按"最小降质+显式声明"自动继续(优于永久阻塞——三难困境的合法出口) */
+  private scheduleAskTimeout(session: WsSession): void {
+    const ASK_TIMEOUT_MS = 10 * 60_000;
+    const askId = session.loop?.pendingAskToolUseId;
+    setTimeout(() => {
+      void (async () => {
+        try {
+          if (!session.loop?.pendingAskToolUseId || session.loop.pendingAskToolUseId !== askId) return; // 已作答
+          if (session.loopState === "running") return;
+          session.askPendingSince = undefined;
+          logBridge("ask_timeout_fallback", session.workId, {});
+          await this.sendMessage(
+            session.workId,
+            "用户未在 10 分钟时限内作答。请按最小降质方案自行拍板并立即继续,且在产出中显式声明该决策、理由及降质幅度。",
+          );
+        } catch { /* 兜底失败不阻断主流程 */ }
+      })();
+    }, ASK_TIMEOUT_MS);
+  }
+
   private scheduleAutoContinue(session: WsSession): void {
     if (session.workId.startsWith("trends_")) return;
     setTimeout(() => {
       void (async () => {
         try {
           if (session.loopState === "running" || session.evalLoopRunning) return;
+          // 批次2.6:agent 调用 AskUserQuestion 等待用户时禁止续跑——
+          // 此前 finally 无条件 scheduleAutoContinue,2 秒后"继续执行,不要等确认"
+          // 会当场击穿任何提问机制(论证新发现 #4)
+          if (session.loop?.pendingAskToolUseId) return;
           const work = await getWork(session.workId);
           if (!work?.autoMode) return;
           const active = Object.entries(work.pipeline).find(([, s]) => s.status === "active");
@@ -870,6 +906,7 @@ ${unattended
 
   private async sendMessageLocked(session: WsSession, text: string): Promise<boolean> {
     const workId = session.workId;
+    session.askPendingSince = undefined; // 有消息(用户作答/系统兜底)到达,提问等待结束
 
     // API loop 路径：免 resume，直接续跑;阶段已推进则先重解析路由重建 loop(P2 提速 A)
     if (session.loop) {
@@ -882,6 +919,7 @@ ${unattended
       session.idle = false;
       session.loopTurnPromise = session.loop
         .runTurn(text)
+        .then((r) => this.onTurnSettled(session, r))
         .catch((err) => {
           session.lastTurnFailure = err instanceof Error ? err.message : String(err);
           console.error(`[agent-loop] follow-up turn failed for ${workId}:`, err);

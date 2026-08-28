@@ -366,9 +366,9 @@ curl http://localhost:3271/api/shared-assets
 curl http://localhost:3271/api/memory/profile
 
 # 方案确认后，更新流水线状态
-curl -X PUT http://localhost:3271/api/works/{workId} \
+curl -X POST http://localhost:3271/api/works/{workId}/pipeline/advance \
   -H "Content-Type: application/json" \
-  -d '{"pipeline": {"plan": {"status": "done"}}}'
+  -d '{"completedStep":"plan","nextStep":"assets"}'
 ```
 
 ## 垂类专项指南

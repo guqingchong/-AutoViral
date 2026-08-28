@@ -157,10 +157,18 @@ describe("Functional — API 契约与错误处理", () => {
       // Update with valid data
       const update = await app.request(`/api/works/${encodeURIComponent(wid)}`, {
         method: "PUT",
-        body: JSON.stringify({ title: "功能测试-已更新", status: "assembling" }),
+        body: JSON.stringify({ title: "功能测试-已更新" }),
         headers: { "Content-Type": "application/json" },
       });
       expect(update.status).toBe(200);
+
+      // 2026-08-28 批次2.5:status/pipeline 禁止经 PUT 直写(评审旁路封堵)
+      const bypass = await app.request(`/api/works/${encodeURIComponent(wid)}`, {
+        method: "PUT",
+        body: JSON.stringify({ status: "assembling" }),
+        headers: { "Content-Type": "application/json" },
+      });
+      expect(bypass.status).toBe(403);
 
       // Delete
       const del = await app.request(`/api/works/${encodeURIComponent(wid)}`, { method: "DELETE" });

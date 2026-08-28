@@ -133,7 +133,7 @@ curl http://localhost:3271/api/shared-assets
 
 ### 配乐
 - 音乐: [共享素材名称或描述]
-- 音量: 背景音乐 30%, 人声/旁白 100%
+- 音量/响度: 禁止拍脑袋 volume 比例,一律响度锚定(旁白 loudnorm I=-15,BGM loudnorm I=-34 再混入;详见 modules/audio-spec.md)
 - 淡入: 0-1s
 - 淡出: 最后2s
 
@@ -490,21 +490,21 @@ ffmpeg -i song.mp3 -ss 120 -to 150 -c copy -y chorus.mp3
 ```bash
 # 简单的音乐叠加，带音量控制
 ffmpeg -i subtitled.mp4 -i music.mp3 \
-  -filter_complex "[1:a]volume=0.3,afade=t=in:st=0:d=1,afade=t=out:st=22:d=2[music];[0:a][music]amix=inputs=2:duration=first[a]" \
+  -filter_complex "[1:a]loudnorm=I=-34:TP=-3:LRA=11,afade=t=in:st=0:d=1,afade=t=out:st=22:d=2[music];[0:a][music]amix=inputs=2:duration=first[a]" \
   -map 0:v -map "[a]" -c:v copy -c:a aac -y final.mp4
 ```
 
 **如果输入视频没有音频轨：**
 ```bash
 ffmpeg -i subtitled.mp4 -i music.mp3 \
-  -filter_complex "[1:a]volume=0.3,afade=t=in:st=0:d=1,afade=t=out:st=22:d=2[a]" \
+  -filter_complex "[1:a]loudnorm=I=-34:TP=-3:LRA=11,afade=t=in:st=0:d=1,afade=t=out:st=22:d=2[a]" \
   -map 0:v -map "[a]" -c:v copy -c:a aac -shortest -y final.mp4
 ```
 
-**音乐音量参考：**
-- 仅背景音乐：`volume=0.3` 到 `volume=0.5`
-- 音乐+旁白：`volume=0.15` 到 `volume=0.25`
-- 音乐为主音频：`volume=0.7` 到 `volume=1.0`
+**音乐响度口径(2026-08-28 收敛,volume% 旧规废除——实测 volume=0.15 也盖人声)：**
+- 旁白轨: `loudnorm=I=-15:TP=-1.5:LRA=11`
+- BGM 轨: `loudnorm=I=-34:TP=-3:LRA=11`(低于旁白约 19dB)再混入;BGM 能量强时再降 3dB
+- 旁白清晰度永远优先;volume= 仅允许用于无人声的环境音垫层(如 broll volume=0.2)
 - 淡入时长：1-2 秒
 - 淡出时长：结尾 2-3 秒
 
@@ -893,9 +893,9 @@ ffprobe -v error -show_entries stream=codec_type -of csv=p=0 output.mp4 | grep a
 
 2. 更新 pipeline 状态：
 ```bash
-curl -X PUT http://localhost:3271/api/works/{workId} \
+curl -X POST http://localhost:3271/api/works/{workId}/pipeline/advance \
   -H "Content-Type: application/json" \
-  -d '{"pipeline": {"assembly": {"status": "done"}}}'
+  -d '{"completedStep":"assembly"}'
 ```
 
 ## 垂类专项指南

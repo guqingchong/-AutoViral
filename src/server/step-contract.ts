@@ -15,8 +15,14 @@
  */
 
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+/** 仓库 skills 目录(单一事实源,2026-08-28 批次2.1)——此前 criteria 运行时读
+ *  ~/.claude/skills 副本,双副本靠 rsync 同步而 Windows 无 rsync,从未生效已实测漂移。
+ *  dist/server/ 与 src/server/ 上溯两级均为项目根,dev/生产同构。 */
+const PROJECT_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+export const CRITERIA_DIR = join(PROJECT_ROOT, "skills", "content-evaluator", "criteria");
 
 const ASSET_FORM_LABELS: Record<string, string> = {
   "video-mix": "以真实视频混剪为主",
@@ -97,10 +103,7 @@ export function buildStepContractSection(
     if (assetSection) parts.push(assetSection);
   }
   try {
-    const criteria = readFileSync(
-      join(homedir(), ".claude", "skills", "content-evaluator", "criteria", `${step}.md`),
-      "utf-8",
-    ).trim();
+    const criteria = readFileSync(join(CRITERIA_DIR, `${step}.md`), "utf-8").trim();
     if (criteria) {
       parts.push(`## 本阶段验收标准(评审将逐条核对;交付前请逐条自检,目标一次通过)\n\n${criteria}`);
     }
