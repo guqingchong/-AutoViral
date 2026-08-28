@@ -10,7 +10,7 @@ import { loadConfig, saveConfig, dataDir, getConfigDir, HEYGEM_TUNNEL_DEFAULTS, 
 import { PROVIDER_PRESETS } from "../llm/provider-keys.js";
 import { runJsonPrompt } from "../services/llm-json.js";
 import { PURPOSE_PRESETS, CONTENT_FORMS, getPurpose, purposeEvalFocusBlock } from "../services/purpose-presets.js";
-import { buildAssetConstraintSection, buildStepContractSection, buildMaterialSearchInstruction, CRITERIA_DIR } from "./step-contract.js";
+import { buildAssetConstraintSection, buildStepContractSection, buildMaterialSearchInstruction, CRITERIA_DIR, SEARCH_PROTOCOL } from "./step-contract.js";
 import { purposeSkillsBlock, countPurposeSkills, listPurposeSkills } from "../db/purpose-skills-repo.js";
 import { researchPurposeSkills } from "../services/purpose-skills.js";
 import { getDb } from "../db/connection.js";
@@ -2115,18 +2115,18 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
             ? [
               `## 第一步：围绕创作方向深入搜索`,
               ``,
-              `用 WebSearch 搜索"${work.topicHint}"相关的最新动态、热门讨论、优质案例。`,
+              `用 $web_search 工具搜索"${work.topicHint}"相关的最新动态、热门讨论、优质案例(搜索规程见文末)。`,
               `深入了解这个方向的内容生态、受众偏好、爆款模式。`,
               ``,
               `## 第二步：找热门标签（仅用于蹭流量）`,
               ``,
-              `用 WebSearch 搜索"${work.topicHint} 热搜""抖音 热门标签"，找到与创作方向相关的热门标签。`,
+              `用 $web_search 工具搜索"${work.topicHint} 热搜""抖音 热门标签"，找到与创作方向相关的热门标签。`,
               `标签只是发布时的流量工具，不影响内容主题。`,
             ].join("\n")
             : [
               `## 第一步：搜索当前热门标签`,
               ``,
-              `用 WebSearch 搜索"今日热搜""微博热搜""抖音热点"，找到当前有热度的话题。`,
+              `用 $web_search 工具搜索"今日热搜""微博热搜""抖音热点"，找到当前有热度的话题。`,
               `这些话题只用来选标签（蹭流量），不是用来写内容的。`,
             ].join("\n"),
           ``,
@@ -2171,7 +2171,7 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
           competitorClause,
           `## 调研方法`,
           ``,
-          `1. 用 WebSearch 围绕用户的创作方向搜索相关热点、趋势、优质案例`,
+          `1. 用 $web_search 工具围绕用户的创作方向搜索相关热点、趋势、优质案例(搜索规程见文末)`,
           `2. 分析目标平台上同类内容的表现（标题风格、封面设计、标签策略）`,
           `3. 找到可以蹭的热门标签`,
           ``,
@@ -2190,6 +2190,8 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
             : `请用户从 3 个中选一个。`,
         ].join("\n"));
       }
+      // 批次3.1:research 确定性子契约(搜索通道/查询词/失败改写/信源/降级),两分支共用
+      promptParts.push(SEARCH_PROTOCOL);
     } else {
       promptParts.push(
         `Execute the "${pipelineStep.name}" step of the pipeline.`,

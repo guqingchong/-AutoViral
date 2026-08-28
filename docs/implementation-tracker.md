@@ -48,13 +48,21 @@
    awaiting_user 抑制(论证新发现 #4 修复)+ 10min 无人答超时兜底(最小降质+显式声明自动继续)
   + autoMode prompt 白名单句(中英文两处)
 
-## 批次 3:research 确定性与护栏改造 【⬜】
+## 批次 3:research 确定性与护栏改造 【✅ 完成 2026-08-28】
 
-- [ ] 3.1 research 阶段确定性契约(api.ts:2139-2168 改步骤清单:搜索通道路由表/查询词模板/失败改写规则/信源 URL 必填)
-- [ ] 3.2 curl 精确拦截:bashBlocklist 配置"含 curl|wget 且含 http 且不含 localhost|127.0.0.1 → 拒绝+指路 $web_search"(纪律:内部 curl 占 70-90%,严禁一刀切)
-- [ ] 3.3 kimi 不可用降级路由:本地 trends 数据+记忆搜索+显式声明"本次无联网",禁止退化自由 curl
-- [ ] 3.4 M13.3 杀改拦:同参第 2 次起软拦截+换路提示;拦后还试 ≥3 次才杀回合;命令签名归一化
-- [ ] 3.5 自我赦免修复:被杀回合不计"有进展";进展判定改作品目录实质写入(排除 chat.jsonl)
+验证:tsc + 全量 1058 测试通过(code-scene 渲染测试全量并行下偶发 195s 超时,单跑 20/20 通过,环境性 flake 与本次改动无关)。
+
+- [x] 3.1 research 确定性契约:step-contract.ts 新增 SEARCH_PROTOCOL(唯一通道 $web_search/查询词
+  构造/失败改写顺序/信源 URL 硬要求/降级路由),research 两分支统一注入;"WebSearch" 伪工具名
+  正名为 $web_search(api.ts 4 处,05d 曾把它当 bash 命令敲)
+- [x] 3.2 curl 精确拦截(bash.ts):含 curl|wget 且含外网 http(s) URL → 拦截+四类换路指引;
+  localhost/127.0.0.1 白名单(内部 API 占 70-90%,未误伤);yt-dlp 不受影响
+- [x] 3.3 kimi 不可用降级:SEARCH_PROTOCOL 第 5 条(本地 /api/trends/:platform + 显式声明
+  "本次无联网",禁止退化为抓站);代码层自动检测留待 M18
+- [x] 3.4 杀改拦(loop.ts):同参第 2/3 次软拦截+换路提示,第 4 次才杀回合;
+  Bash 命令签名空白归一化(防微调逃逸)
+- [x] 3.5 自我赦免修复(ws-bridge):被杀回合历史增长不再算"有进展";进展判定升级
+  为作品目录实质写入快照(workProgressStamp,排除 chat.jsonl/eval-*.json 系统自写)
 
 ## 批次 4:可观测性与诚实状态 【⬜】
 

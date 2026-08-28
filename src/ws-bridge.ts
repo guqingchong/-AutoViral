@@ -11,7 +11,7 @@
 
 import { spawn, execSync, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, writeFile, readFile } from "node:fs/promises";
+import { mkdir, writeFile, readFile, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { WebSocketServer, WebSocket } from "ws";
@@ -69,6 +69,8 @@ export interface WsSession {
   autoContinueCount?: number;
   autoContinueMark?: number;
   autoContinueTotal?: number;
+  /** 作品目录实质写入快照(批次3.5 进展判定):mtime 最大值,排除系统自写文件 */
+  autoContinueStamp?: number;
   /** 当前 loop 的路由阶段与模型(P2 提速 A):阶段推进时 refreshStageRouting 据此判定重建 */
   routedStage?: string;
   routedModel?: string;
@@ -694,6 +696,26 @@ ${unattended
    * 此前靠 runner resumeAttempts 恢复,计数打爆(>5)作品被判 failed。
    * 同一步骤最多续 15 次防空转;评审中(evalLoopRunning/evaluating)不干预。
    */
+  /** 作品目录实质写入快照(批次3.5):浅扫 steps/assets/output/research/plan 子目录的最大 mtime,
+   *  排除系统自写文件(chat.jsonl/agent-session.json/eval-*.json/eval-timeout-*.json) */
+  private async workProgressStamp(workId: string): Promise<number> {
+    const NOISE = /^(chat\.jsonl|agent-session\.json|eval(-timeout)?-.*\.json)$/;
+    const root = join(dataDir, "works", workId);
+    let max = 0;
+    for (const sub of ["", "steps", "assets", "output", "research", "plan"]) {
+      try {
+        for (const name of await readdir(join(root, sub))) {
+          if (NOISE.test(name)) continue;
+          try {
+            const st = await stat(join(root, sub, name));
+            if (st.isFile() && st.mtimeMs > max) max = st.mtimeMs;
+          } catch { /* 单文件失败跳过 */ }
+        }
+      } catch { /* 子目录不存在跳过 */ }
+    }
+    return max;
+  }
+
   /** 回合正常结束钩子(批次2.6):awaiting_user = agent 提问等用户,记录计时并安排无人值守兜底 */
   private onTurnSettled(session: WsSession, r?: { stopReason?: string }): void {
     if (r?.stopReason === "awaiting_user" && session.loop?.pendingAskToolUseId) {
@@ -743,10 +765,17 @@ ${unattended
             session.autoContinueCount = 0;
             session.autoContinueTotal = 0;
             session.autoContinueMark = session.messageHistory.length;
+            session.autoContinueStamp = await this.workProgressStamp(session.workId);
           }
-          // 有进展的续跑不计空转(历史增长 ≥3 块=该回合干了活);空转 15 次或步骤内
-          // 总续跑 60 次封顶(2026-08-17:小碎步回合 15 次配额 13 分钟打满但素材在持续推进)
-          const progressed = session.messageHistory.length - (session.autoContinueMark ?? 0) >= 3;
+          // 批次3.5 进展判定修复:①被杀回合(LoopGuard/超时/停滞)的历史增长是幻觉,
+          // 不算进展(旧逻辑让死循环每 4 次自我赦免一次);②真进展=作品目录实质写入
+          // (素材/成片/脚本落盘),排除 chat.jsonl 等系统自写文件
+          const wasKilled = !!session.lastTurnFailure;
+          const stamp = await this.workProgressStamp(session.workId);
+          const dirProgressed = stamp > (session.autoContinueStamp ?? 0);
+          session.autoContinueStamp = stamp;
+          const historyGrew = session.messageHistory.length - (session.autoContinueMark ?? 0) >= 3;
+          const progressed = dirProgressed || (historyGrew && !wasKilled);
           session.autoContinueMark = session.messageHistory.length;
           session.autoContinueCount = progressed ? 0 : (session.autoContinueCount ?? 0) + 1;
           session.autoContinueTotal = (session.autoContinueTotal ?? 0) + 1;
