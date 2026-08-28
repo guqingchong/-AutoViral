@@ -27,6 +27,7 @@ import {
 import { MemoryClient } from "../memory.js";
 import { EvalTimeoutError, EvalParseError } from "../agent/evaluator.js";
 import { registerProgressBroadcaster } from "../services/progress-events.js";
+import { MAX_PLAN_DURATION_S } from "../services/quality-gate.js";
 import type { WsBridge } from "../ws-bridge.js";
 import { getProvider, getDefaultProvider, listProviders } from "../providers/registry.js";
 import { listSharedAssetsWithMeta, getSharedAssetPath, validateCategory, sanitizeFilename, saveSharedAsset, deleteSharedAsset, moveSharedAsset } from "../shared-assets.js";
@@ -608,10 +609,15 @@ apiRoutes.post("/api/works", async (c) => {
       topicHint?: string;
       templateId?: string;
       digitalHumanId?: string;
+      /** 批次5.8:用户显式参数(如 duration 秒)——最高优先级事实源,评审不得压低 */
+      duration?: number;
     }>();
     if (!body.title || !body.type || !body.platforms) {
       return c.json({ error: "title, type, and platforms are required" }, 400);
     }
+    // 只记录用户显式给的键(缺省键不出现 = 天然区分"显式 vs 默认")
+    const explicitParams: Record<string, unknown> = {};
+    if (typeof body.duration === "number" && body.duration > 0) explicitParams.duration = body.duration;
     const work = await createWork({
       title: body.title,
       type: body.type as "short-video" | "image-text",
@@ -622,6 +628,7 @@ apiRoutes.post("/api/works", async (c) => {
       topicHint: body.topicHint,
       templateId: body.templateId,
       digitalHumanId: body.digitalHumanId,
+      explicitParams: Object.keys(explicitParams).length ? explicitParams : undefined,
     });
     return c.json(work, 201);
   } catch (err) {
@@ -1994,6 +2001,7 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
       work.contentCategory ? `Content category: ${work.contentCategory}.` : "",
       `Platforms: ${work.platforms.map((p: any) => typeof p === "string" ? p : p.platform).join(", ")}.`,
       work.topicHint ? `Topic hint: ${work.topicHint}` : "",
+      buildExplicitParamsBlock(work),
       work.templateId ? buildTemplateSection(work.templateId) : "",
       work.digitalHumanId ? `Digital Human: ${work.digitalHumanId}` : "",
       autoModeDirective,
@@ -2706,8 +2714,9 @@ export async function runEvaluation(workId: string, completedStep: string, nextS
     let evalResult: EvalResult;
     if (gateFallback) {
       const gate = await import("../services/quality-gate.js");
+      const explicitDur = Number(work.explicitParams?.duration) > 0 ? Number(work.explicitParams?.duration) : undefined;
       const gateIssues = completedStep === "plan"
-        ? gate.assertPlanDeliverables(workDir)
+        ? gate.assertPlanDeliverables(workDir, explicitDur)
         : gate.assertAssemblyDeliverables(workDir);
       evalResult = {
         step: completedStep,
@@ -2924,6 +2933,22 @@ ${suggestionList}
 请修复以上问题，修复完成后再次调用 pipeline/advance 提交评审。`;
 }
 
+/** 用户显式要求段(2026-08-28 批次5.8,v2-M1):最高优先级事实源。
+ *  创作侧与评审侧共用——评审不得以通用规则压低用户显式指定的参数 */
+export function buildExplicitParamsBlock(work: Work): string {
+  const params = work.explicitParams;
+  if (!params || Object.keys(params).length === 0) return "";
+  const lines: string[] = ["## 用户显式要求(最高优先级事实源,优先级高于一切通用规则与预设)"];
+  for (const [k, v] of Object.entries(params)) {
+    if (k === "duration") {
+      lines.push(`- 时长: 用户明确要求约 ${v} 秒。创作与评审都必须以该值为准绳——成片时长达标于此值即合格,禁止套用"短视频 ≤3 分钟"的通用规则判 critical/major。`);
+    } else {
+      lines.push(`- ${k}: ${v}(用户显式指定,不得以通用规则压低)`);
+    }
+  }
+  return lines.join("\n");
+}
+
 function buildEvalPrompt(work: Work, step: string, attempt: number, historyText: string, prevResultsText: string, workDir: string): string {
   const stepName = work.pipeline[step]?.name ?? step;
   const platforms = work.platforms?.join(", ") ?? "未指定";
@@ -2943,6 +2968,7 @@ function buildEvalPrompt(work: Work, step: string, attempt: number, historyText:
 - 评审轮次: 第${attempt}轮
 - **作品目录: ${workDir}**
 ${work.purpose ? purposeEvalFocusBlock(work.purpose) : ""}
+${buildExplicitParamsBlock(work)}
 
 ## 评审标准
 请阅读评审标准文件(绝对路径): ${join(CRITERIA_DIR, `${step}.md`)}。如果文件不存在，请使用通用的内容质量标准进行评审，不要花时间寻找该文件。
@@ -3092,11 +3118,38 @@ apiRoutes.post("/api/works/:id/pipeline/advance", async (c) => {
     // 机器预检零成本,LLM 评审专注结构性判断。响应附 issues 清单,agent 可直接修复重提。
     if (completedStep === "plan" && work.type !== "image-text") {
       const { assertPlanDeliverables } = await import("../services/quality-gate.js");
-      const gateIssues = assertPlanDeliverables(join(dataDir, "works", id));
+      // 批次5.8:用户显式时长豁免(最高优先级事实源)
+      const explicitDur = Number(work.explicitParams?.duration) > 0 ? Number(work.explicitParams?.duration) : undefined;
+      const gateIssues = assertPlanDeliverables(join(dataDir, "works", id), explicitDur);
       if (gateIssues.length) {
         log("info", "api", "plan_gate_blocked", id, { count: gateIssues.length });
         return c.json({
           error: `分镜机器预检未通过(${gateIssues.length} 项),请逐项修复后重新调用 advance`,
+          issues: gateIssues.map((i) => i.detail),
+        }, 400);
+      }
+    }
+
+    // ── material-search / assets 机器门禁(2026-08-28 批次5.7,v2-M2)——
+    // 机械可校验项拦截在评审之前,与 plan/assembly 门禁同构
+    if (completedStep === "material-search" && work.type !== "image-text") {
+      const { assertMaterialSearchDeliverables } = await import("../services/quality-gate.js");
+      const gateIssues = assertMaterialSearchDeliverables(join(dataDir, "works", id));
+      if (gateIssues.length) {
+        log("info", "api", "material_search_gate_blocked", id, { count: gateIssues.length });
+        return c.json({
+          error: `素材搜索机器门禁未通过(${gateIssues.length} 项),请修复后重新提交`,
+          issues: gateIssues.map((i) => i.detail),
+        }, 400);
+      }
+    }
+    if (completedStep === "assets" && work.type !== "image-text") {
+      const { assertAssetsDeliverables } = await import("../services/quality-gate.js");
+      const gateIssues = assertAssetsDeliverables(join(dataDir, "works", id));
+      if (gateIssues.length) {
+        log("info", "api", "assets_gate_blocked", id, { count: gateIssues.length });
+        return c.json({
+          error: `素材准备机器门禁未通过(${gateIssues.length} 项),请修复后重新提交`,
           issues: gateIssues.map((i) => i.detail),
         }, 400);
       }
@@ -3776,7 +3829,13 @@ async function runBatchConvert(
   const workType: "short-video" | "image-text" = dualOutput ? "short-video" : type;
   // 用途预设(04 方案)：显式传参优先,缺省回落到用途默认值,最后才是全局兜底
   const purposePreset = getPurpose(body.purpose);
-  const duration = body.duration && body.duration > 0 ? body.duration : (purposePreset?.defaults.duration ?? 180);
+  // 批次5.2/5.8:用户显式 duration 是最高优先级事实源(不落 clamp);
+  // 只有回落到预设默认时才受平台口径上限约束
+  const rawDuration = body.duration && body.duration > 0 ? body.duration : (purposePreset?.defaults.duration ?? MAX_PLAN_DURATION_S);
+  const duration = body.duration && body.duration > 0 ? body.duration : Math.min(rawDuration, MAX_PLAN_DURATION_S);
+  if (!(body.duration && body.duration > 0) && rawDuration > MAX_PLAN_DURATION_S) {
+    log("warn", "api", "batch_duration_clamped", "batch", { requested: rawDuration, clamped: MAX_PLAN_DURATION_S });
+  }
   const assetForm = workType === "short-video" ? sanitizeAssetForm(body.assetForm ?? purposePreset?.defaults.assetForm) : undefined;
   const assetSource = workType === "short-video" ? sanitizeAssetSource(body.assetSource ?? purposePreset?.defaults.assetSource) : undefined;
   const assetBudget = workType === "short-video" ? sanitizeAssetBudget(body.assetBudget ?? purposePreset?.defaults.assetBudget) : undefined;
@@ -3844,6 +3903,8 @@ async function runBatchConvert(
           // 批量按钮 = 全自动模式唯一开关(2026-08-16 用户决策)
           autoMode: true,
           purpose: purposePreset?.key,
+          // 批次5.8:用户在批量弹窗显式给的时长 = 最高优先级事实源(评审与门禁豁免依据)
+          explicitParams: body.duration && body.duration > 0 ? { duration: body.duration } : undefined,
         });
         item.workId = work.id;
       }
@@ -3854,17 +3915,19 @@ async function runBatchConvert(
       if (!hasArtifacts) {
         item.stage = "generating";
         const platform = platforms[0] ?? "douyin";
-        const scriptCfg = await loadConfig();
-        const scriptModel = scriptCfg.scriptModel ?? "opus";
-        const article = await generateArticleFromTopic(topic, platform, { model: scriptModel });
-        const script = await generateScriptFromArticle(article, duration, { model: scriptModel });
+        // 批次5.5:scriptModel 是死配置(runJsonPrompt 的 model 参数在直连架构下被忽略,
+        // 实际恒走 llm.models.script 档)——删除假开关,不再读取/传参
+        const article = await generateArticleFromTopic(topic, platform);
+        const script = await generateScriptFromArticle(article, duration);
 
         try {
           createArticle({ work_id: workId, topic_id: topic.id, title: article.title, content: article.content, platform, status: "ready" });
           createScript({ work_id: workId, content: script as unknown as Record<string, unknown>, duration: script.duration, status: "ready" });
           updateTopic(topic.id, { status: "converted", work_id: workId });
         } catch (err) {
-          console.error(`[batch-convert] DB write failed for topic ${item.topicId}:`, err);
+          // 批次5.3 落库即失败:此前只 console.error,空心作品照常入队——
+          // 抛出让 processItem 的重试/终态 error 机制接管
+          throw new Error(`产物落库失败(topic ${item.topicId}): ${(err as Error).message}`);
         }
 
         // 调研产物落盘(2026-08-14):批量模式 research 自动完成但磁盘无报告,
@@ -3897,6 +3960,34 @@ async function runBatchConvert(
           await writeResearchFile(join(researchDir, "report.md"), report, "utf-8");
         } catch (err) {
           console.warn(`[batch-convert] research report write failed for ${workId}:`, err);
+        }
+
+        // 批次5.6 轻量真实性抽查:batch 路径 research 此前直接标 done 永不评审,
+        // 幻觉选题直进生产烧全链路成本(v2 病根 0)。抽查信源/事实锚点/题文一致性,
+        // 不过则 item 标 error 不推进(不走评审的会话依赖,用 eval 档一次性 JSON 判定)
+        try {
+          const check = await runJsonPrompt<{ ok: boolean; problems?: string[] }>([
+            `你是数据真实性审查员。检查以下批量自动生成的调研产物是否可信:`,
+            `选题标题: ${topic.title}`,
+            `选题描述: ${(topic.description ?? "").slice(0, 400)}`,
+            `文案标题: ${article.title}`,
+            `文案开头: ${article.content.slice(0, 600)}`,
+            ``,
+            `判定规则(任一不满足即 ok=false):`,
+            `①选题应当像源自真实热搜/趋势,而非凭空虚构的"听起来像热点"的伪趋势;`,
+            `②文案中的事实性断言(具体数字/政策名/事件/人名)不得有明显虚构迹象;`,
+            `③文案主题与选题必须一致。`,
+            `只输出 JSON: {"ok": true|false, "problems": ["问题1","问题2"]}`,
+          ].join("\n"), { stage: "eval", timeoutMs: 60_000, maxAttempts: 2 });
+          if (!check.ok) {
+            item.stage = "error";
+            item.error = `调研真实性抽查未通过: ${((check.problems ?? []).join("; ") || "未说明").slice(0, 150)}`;
+            log("warn", "api", "batch_research_spotcheck_failed", workId, { topicId: topic.id, problems: check.problems });
+            return;
+          }
+        } catch (err) {
+          // 抽查通道本身故障(模型不可用)不阻塞生产,但留痕可审计
+          log("warn", "api", "batch_research_spotcheck_error", workId, { error: (err as Error).message });
         }
       }
 

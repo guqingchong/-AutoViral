@@ -18,6 +18,11 @@ import { probeMedia } from "../video/ffmpeg.js";
 
 const execFileAsync = promisify(execFile);
 
+/** 分镜时长口径单一事实源(2026-08-28 批次5.2):短视频平台硬上限 180s + 容差 5s。
+ *  此前时长三头定义(脚本按分钟 floor/门禁 185s/质量门禁 600s 才 warn)——统一引用本常量。 */
+export const MAX_PLAN_DURATION_S = 180;
+export const DURATION_TOLERANCE_S = 5;
+
 export type CheckLevel = "pass" | "warn" | "fail";
 
 export interface QualityCheck {
@@ -63,7 +68,7 @@ async function loudness(path: string): Promise<{ i: number; tp: number } | null>
 }
 
 /** 黑帧段(blackdetect):返回超过阈值的段列表 */
-async function blackSegments(path: string): Promise<string[]> {
+export async function blackSegments(path: string): Promise<string[]> {
   const stderr = await ffmpegDetect(["-i", path, "-vf", "blackdetect=d=1.5:pix_th=0.10", "-an", "-f", "null", "-"]);
   return [...stderr.matchAll(/blackdetect.*black_start:[\d.]+ black_end:[\d.]+ black_duration:[\d.]+/g)].map((m) => m[0]);
 }
@@ -202,12 +207,12 @@ function parseDurationCell(cell: string): number | null {
 
 /**
  * plan 推进前置校验:返回问题清单(空数组=通过)。
- * ① 分镜表时长合计 ≤180s(短视频平台硬上限,容差 5s)
+ * ① 分镜表时长合计 ≤ 上限(默认 MAX_PLAN_DURATION_S 180s,容差 5s;用户显式时长豁免)
  * ② 显式旁白行(旁白:/口播: 前缀或分镜表旁白列)单句 ≤20 字
  * ③ 不得引用 material-candidates.md 剔除区的素材文件
  * ④ 标题/封面行极限词(最/第一/唯一/首个)须有"之一"限定
  */
-export function assertPlanDeliverables(workDir: string): DeliverableIssue[] {
+export function assertPlanDeliverables(workDir: string, maxDurationS = MAX_PLAN_DURATION_S): DeliverableIssue[] {
   const issues: DeliverableIssue[] = [];
 
   // 定位分镜文档:根目录 plan.md 优先,其次 assets/plan-storyboard.md
@@ -252,8 +257,11 @@ export function assertPlanDeliverables(workDir: string): DeliverableIssue[] {
     }
   }
   // 解析到 ≥5 个镜头时长才出具合计结论(拿不准不放行交给 LLM)
-  if (durationParsed >= 5 && totalDuration > 185) {
-    issues.push({ key: "duration_total", detail: `分镜表时长合计 ${Math.round(totalDuration)}s,超过短视频平台 180s 硬上限(评审 Critical 项)` });
+  // 批次5.8:用户显式时长是最高优先级事实源——显式指定时以用户值为上限(加容差),
+  // 不再套用平台默认 180s("用户要 5 分钟被砍到 2:17"的制度修复)
+  const durationLimit = maxDurationS + DURATION_TOLERANCE_S;
+  if (durationParsed >= 5 && totalDuration > durationLimit) {
+    issues.push({ key: "duration_total", detail: `分镜表时长合计 ${Math.round(totalDuration)}s,超过上限 ${maxDurationS}s(评审 Critical 项)` });
   }
 
   // ── ②b 显式旁白全文行(旁白:/口播: 前缀,分镜表之外的口播稿)──
@@ -384,4 +392,34 @@ export function assertAssemblyDeliverables(workDir: string): DeliverableIssue[] 
   }
 
   return issues;
+}
+
+/** 批次5.7 material-search 机器门禁:候选清单存在且含实质素材引用(空清单不得过闸) */
+export function assertMaterialSearchDeliverables(workDir: string): DeliverableIssue[] {
+  const candidatesPath = [join(workDir, "assets", "material-candidates.md"), join(workDir, "material-candidates.md")].find(existsSync);
+  if (!candidatesPath) {
+    return [{ key: "candidates_doc", detail: "素材候选清单缺失(assets/material-candidates.md 不存在)" }];
+  }
+  const text = readFileSync(candidatesPath, "utf-8");
+  const fileRefs = text.match(/[\w一-鿿-]+\.(?:mp4|mov|webm|jpg|jpeg|png)/gi) ?? [];
+  const urlRefs = text.match(/https?:\/\/[^\s)\]"']+/g) ?? [];
+  if (fileRefs.length === 0 && urlRefs.length === 0) {
+    return [{ key: "candidates_empty", detail: "候选清单无任何素材文件引用或来源 URL——空清单不得过闸" }];
+  }
+  return [];
+}
+
+/** 批次5.7 assets 机器门禁:素材目录有实质媒体产物(零产出不得过闸) */
+export function assertAssetsDeliverables(workDir: string): DeliverableIssue[] {
+  const mediaExt = /\.(mp4|mov|webm|jpg|jpeg|png)$/i;
+  let mediaCount = 0;
+  for (const sub of ["assets/clips", "assets/images"]) {
+    try {
+      mediaCount += readdirSync(join(workDir, sub)).filter((f) => mediaExt.test(f)).length;
+    } catch { /* 目录不存在 */ }
+  }
+  if (mediaCount === 0) {
+    return [{ key: "assets_empty", detail: "assets/clips 与 assets/images 均无任何媒体文件——素材阶段零产出不得过闸" }];
+  }
+  return [];
 }

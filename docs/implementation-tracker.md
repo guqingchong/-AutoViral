@@ -82,16 +82,27 @@
 - [x] 4.6 全局通知中心雏形:/ws 全局通道 + broadcastGlobal;eval_blocked 与配额冷却接入;
   App.svelte toast 堆栈(12s 自动消失)
 
-## 批次 5:v2 P0 三件套 【⬜】
+## 批次 5:v2 P0 三件套 【✅ 完成 2026-08-28】
 
-- [ ] 5.1 M0① 幻觉闸:trend-research.ts collectOne,raw===""+无 builtinSearchTool → error 不入库
-- [ ] 5.2 M0③ duration 统一:quality-gate 导出 MAX_PLAN_DURATION_S=180,api.ts:3634 clamp+log,prompt 常量生成
-- [ ] 5.3 M0④ 落库即失败:api.ts:3717 catch 里 throw
-- [ ] 5.4 M0⑤ topN 前置:数量要求 ceil(topN×1.5/平台数),下限 5;采集互斥锁
-- [ ] 5.5 M0⑥ scriptModel 假开关删除
-- [ ] 5.6 M0② batch research 轻量抽查:runJsonPrompt 数据真实性抽查,不过则 item error
-- [ ] 5.7 M2①③ material-search/assets 机器门禁(同构函数+分支)+ 模版预览黑屏拦截(blackdetect 挂 code-template-generator.ts:195)
-- [ ] 5.8 M1①② explicitParams 数据链:POST /api/works 收参数 → works 表加 explicit_params 列(migration)→ 创作 prompt"用户显式要求(最高优先级)"段 → buildEvalPrompt 豁免清单
+验证:tsc + vite + 全量 1058 测试通过。关键设计修正:用户显式 duration **不落 clamp**
+(M1 宪法优先于平台默认口径)——门禁与评审以显式值为上限,仅预设默认才 clamp。
+
+- [x] 5.1 M0① 幻觉闸:trend-research.ts collectOne,raw==="" 且无 builtinSearchTool →
+  平台 error 透出,不入库(宁缺毋假)
+- [x] 5.2 M0③ duration 统一:MAX_PLAN_DURATION_S=180 单一事实源(quality-gate 导出,
+  ws-bridge prompt/api.ts 引用);batch 入口预设默认 clamp+日志
+- [x] 5.3 M0④ 落库即失败:api.ts catch 里 throw,接入 processItem 重试/终态机制
+- [x] 5.4 M0⑤ topN 前置:每平台目标 ceil(topN×1.5/平台数) 下限 5;采集互斥锁
+  (collectRunning,定时/手动互斥)
+- [x] 5.5 M0⑥ scriptModel 假开关删除:config.ts 字段+默认值、api.ts 读取传参、
+  content-generator 4 处透传全清
+- [x] 5.6 M0② batch research 轻量抽查:runJsonPrompt(eval 档)真实性三规则判定,
+  不过则 item error 不推进;抽查通道故障不阻塞但留痕
+- [x] 5.7 M2①③ material-search/assets 机器门禁(advance 挂接,与 plan/assembly 同构)
+  + 模版预览黑屏拦截(blackSegments 挂 code-template-generator 修复循环,2 轮仍黑不生成)
+- [x] 5.8 M1①② explicitParams 数据链:POST /api/works 收 duration → works.explicit_params
+  (migration v30)→ 创作/评审 prompt 共用 buildExplicitParamsBlock(最高优先级豁免)→
+  plan 门禁 assertPlanDeliverables(workDir, explicitDuration) 豁免
 
 ## 批次 6:criteria 二分与图文门禁、M3 小项 【⬜】
 

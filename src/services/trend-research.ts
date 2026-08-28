@@ -94,7 +94,21 @@ export function topicScore(t: { heat?: number | string; opportunity?: string; co
   return heat * 2 + opp + comp;
 }
 
+/** 采集中标志(2026-08-28 批次5.4):定时调度与手动触发共用此函数,此前无互斥——
+ *  重叠触发 = 重复选题 + 双倍 LLM 开销 */
+let collectRunning = false;
+
 export async function collectTrends(platforms: string[], interests: string[] = [], toneProfile?: Record<string, unknown> | null, opts: CollectOptions = {}): Promise<{ platform: string; topics: DbTopic[] }[]> {
+  if (collectRunning) throw new Error("选题采集正在进行中,请勿重复触发(定时与手动采集互斥)");
+  collectRunning = true;
+  try {
+    return await collectTrendsInner(platforms, interests, toneProfile, opts);
+  } finally {
+    collectRunning = false;
+  }
+}
+
+async function collectTrendsInner(platforms: string[], interests: string[] = [], toneProfile?: Record<string, unknown> | null, opts: CollectOptions = {}): Promise<{ platform: string; topics: DbTopic[] }[]> {
   // 每个平台预置结果桶（即使 0 条候选也返回空桶，保持调用方契约）
   const results: { platform: string; topics: DbTopic[] }[] = platforms.map(p => ({ platform: p, topics: [] }));
 
@@ -116,6 +130,21 @@ export async function collectTrends(platforms: string[], interests: string[] = [
     report();
     try {
       const raw = await fetchTrendData(platform, interests);
+      // 2026-08-28 批次5.1 幻觉闸:采集失败(脚本异常/网络断)且无内置搜索能力时,
+      // LLM 会凭先验编造"最新趋势"照常入库(v2 病根 0)——拦在分析前,平台标 error
+      // 透出到任务 error 与前端,宁缺毋假。
+      if (!raw) {
+        const config = await loadConfig();
+        const { provider } = resolveModelFor(config, "research");
+        const hasSearch = !!PROVIDER_PRESETS[provider.name]?.builtinSearchTool;
+        if (!hasSearch) {
+          p.status = "error";
+          p.error = "热搜采集失败且当前 research 模型无联网搜索能力,已拦截(防幻觉选题入库)。" +
+            "请检查采集脚本,或为 research 档配置 kimi(内置 $web_search)后重试";
+          report();
+          return;
+        }
+      }
       const snapshotDate = new Date().toISOString().slice(0, 10);
       let parsedRaw: Record<string, unknown> = {};
       if (raw) {
@@ -126,7 +155,12 @@ export async function collectTrends(platforms: string[], interests: string[] = [
         }
       }
       const snapshot = createSnapshot({ platform, snapshot_date: snapshotDate, raw_data: parsedRaw });
-      const allTopics = await analyzeTrendsWithAgent(platform, raw, interests, snapshot.id, toneProfile);
+      // 2026-08-28 批次5.4 topN 前置:按 topN×1.5/平台数 生成(下限 5),
+      // 不再"每平台 ≥15 个然后 topN=10 截断、90% 生成直接丢弃"
+      const perPlatformTarget = opts.topN && opts.topN > 0
+        ? Math.max(5, Math.ceil((opts.topN * 1.5) / platforms.length))
+        : 15;
+      const allTopics = await analyzeTrendsWithAgent(platform, raw, interests, snapshot.id, toneProfile, perPlatformTarget);
 
       // Dedup: skip topics whose title already exists (case-insensitive) or is too similar
       const deduped = allTopics.filter(t => {
@@ -191,7 +225,7 @@ export async function collectTrends(platforms: string[], interests: string[] = [
   return results;
 }
 
-async function analyzeTrendsWithAgent(platform: string, rawData: string, interests: string[], snapshotId: number, toneProfile?: Record<string, unknown> | null): Promise<Omit<DbTopic, "id" | "created_at" | "status">[]> {
+async function analyzeTrendsWithAgent(platform: string, rawData: string, interests: string[], snapshotId: number, toneProfile?: Record<string, unknown> | null, targetCount = 15): Promise<Omit<DbTopic, "id" | "created_at" | "status">[]> {
     const PLATFORM_LABELS: Record<string, string> = {
       xiaohongshu: "小红书", douyin: "抖音", bilibili: "B站",
       zhihu: "知乎", kuaishou: "快手", channels: "视频号", wechat_mp: "微信公众号",
@@ -269,7 +303,7 @@ async function analyzeTrendsWithAgent(platform: string, rawData: string, interes
       }, null, 2),
       ``,
       `## 输出约束`,
-      `- topics 至少 15 个，不够就多搜多看，每个角度都可以成为一个独立话题`,
+      `- topics 目标 ${targetCount} 个(按全局 topN 前置计算,宁精勿滥;确实不够可少,禁止凑数灌水)`,
       `- heat 为 1-5 整数，5 = 现象级刷屏`,
       `- competition "低"/"中"/"高"——低竞争是蓝海机会`,
       `- opportunity "金矿"(高热低竞)/"蓝海"(低热低竞)/"红海"(高热高竞)`,

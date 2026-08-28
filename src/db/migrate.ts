@@ -814,6 +814,17 @@ ALTER TABLE topic_scores ADD COLUMN platform TEXT NOT NULL DEFAULT 'all';
 CREATE INDEX IF NOT EXISTS idx_publish_records_account ON publish_records(account_id);
 `,
   },
+  {
+    version: 30,
+    name: "work_explicit_params",
+    sql: `
+-- 2026-08-28 批次5.8(v2-M1):用户显式参数结构化存储(JSON)。
+-- 此前"用户选 5 分钟"只以 topicHint 字符串形态存活,机器不可读、评审不可见——
+-- 这是"用户要 5 分钟被评审砍到 2:17"的结构性根源。只记录用户显式给的键,
+-- 缺省键不出现 = 天然区分"显式 vs 默认"。
+ALTER TABLE works ADD COLUMN explicit_params TEXT;
+`,
+  },
 ];
 
 export function migrate(): void {
