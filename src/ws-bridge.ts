@@ -348,7 +348,11 @@ export class WsBridge {
       } catch { /* 离线 */ }
       h3StatusLine = h3Online
         ? `- H3 本地生成(ComfyUI ${h3Base}):**在线可用**,人物/场景定制图与视频优先用它`
-        : `- H3 本地生成(ComfyUI ${h3Base}):**已配置但当前离线**(AutoDL 实例未启动或隧道断开)。本作品素材规划不要依赖 H3;用素材库/即梦/程序化渲染替代,并在最终交付说明中明确注明"H3 离线,已降级"。若后续恢复在线可改用。`;
+        : work.assetBudget === "eco"
+          // 批次6.3:eco 档与 step-contract"禁用云端、阻塞提醒开机"对齐——
+          // 此前此处统一说"用即梦替代",与 eco 门禁(/api/generate/video 代码级 403)直接互斥
+          ? `- H3 本地生成(ComfyUI ${h3Base}):**已配置但当前离线**。本作品为 eco 成本档——禁止使用云端视频生成(即梦/Seedance,系统已在 API 层拦截 403),素材规划改用素材库/程序化渲染;确需 AI 视频镜头时阻塞并在交付说明中显著提醒"H3 离线,请开机后重试该镜头"`
+          : `- H3 本地生成(ComfyUI ${h3Base}):**已配置但当前离线**(AutoDL 实例未启动或隧道断开)。本作品素材规划不要依赖 H3;用素材库/即梦/程序化渲染替代,并在最终交付说明中明确注明"H3 离线,已降级"。若后续恢复在线可改用。`;
       if (!h3Online) console.warn(`[ws-bridge] H3 离线降级声明已注入:workId=${work.id}`);
     }
 

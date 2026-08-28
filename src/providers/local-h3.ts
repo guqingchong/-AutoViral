@@ -14,6 +14,25 @@ import { checkH3Health, recordH3Activity } from '../services/h3-instance-service
 import { ensureH3Tunnel } from '../services/h3-tunnel-service.js'
 import type { GenerateProvider, ImageOpts, VideoOpts, GenerateResult } from './base.js'
 
+/** 批次6.4:H3 全部 fetch 带超时(此前 4 处裸奔,SSH 隧道半开=无限挂起的机理)。
+ *  超时后先做数据面健康探测(TCP 通≠数据通),探测失败说明隧道半开/实例掉线。 */
+const H3_FETCH_TIMEOUT_MS = 30_000
+async function h3Fetch(url: string, init?: RequestInit, timeoutMs = H3_FETCH_TIMEOUT_MS): Promise<Response> {
+  try {
+    return await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) })
+  } catch (err) {
+    if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+      const healthy = await checkH3Health().catch(() => false)
+      throw new Error(
+        healthy
+          ? `H3 请求超时(${Math.round(timeoutMs / 1000)}s): ${url.slice(0, 80)}(隧道健康,可能是实例负载过高)`
+          : `H3 请求超时且健康探测失败(隧道半开或实例离线): ${url.slice(0, 80)}`,
+      )
+    }
+    throw err
+  }
+}
+
 // ── 模型文件(PoC 实例已下载,见 poc/local-gen/README.md)────────────────────
 const UNET = 'minimax_h3_fl2va_pruned_int8_convrot.safetensors'
 const CLIP = 'qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors'
@@ -141,7 +160,7 @@ export class LocalH3Provider implements GenerateProvider {
     let bytes: Buffer
     let name = 'h3-first-frame.png'
     if (firstFrame.startsWith('http://') || firstFrame.startsWith('https://')) {
-      const res = await fetch(firstFrame)
+      const res = await h3Fetch(firstFrame, undefined, 60_000)
       if (!res.ok) throw new Error(`Download failed: firstFrame ${res.status} ${res.statusText}`)
       bytes = Buffer.from(await res.arrayBuffer())
       name = basename(new URL(firstFrame).pathname) || name
@@ -152,7 +171,7 @@ export class LocalH3Provider implements GenerateProvider {
     const form = new FormData()
     form.append('image', new Blob([new Uint8Array(bytes)]), name)
     form.append('overwrite', 'true')
-    const res = await fetch(`${this.baseUrl}/upload/image`, { method: 'POST', body: form })
+    const res = await h3Fetch(`${this.baseUrl}/upload/image`, { method: 'POST', body: form }, 60_000)
     if (!res.ok) throw new Error(`Upload firstFrame failed: ${res.status} ${res.statusText}`)
     const data = (await res.json()) as { name?: string }
     if (!data.name) throw new Error('Upload firstFrame: no name in ComfyUI response')
@@ -161,7 +180,7 @@ export class LocalH3Provider implements GenerateProvider {
 
   /** 提交一次生成并轮询到完成,返回产物文件描述 */
   private async submitAndPoll(graph: Record<string, unknown>): Promise<{ filename: string; subfolder: string; type: string }> {
-    const submitRes = await fetch(`${this.baseUrl}/prompt`, {
+    const submitRes = await h3Fetch(`${this.baseUrl}/prompt`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ prompt: graph }),
@@ -177,7 +196,7 @@ export class LocalH3Provider implements GenerateProvider {
     const deadline = Date.now() + this.pollTimeoutMs
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, this.pollIntervalMs))
-      const histRes = await fetch(`${this.baseUrl}/history/${promptId}`)
+      const histRes = await h3Fetch(`${this.baseUrl}/history/${promptId}`, undefined, 15_000)
       if (!histRes.ok) continue
       const hist = (await histRes.json()) as Record<string, any>
       const entry = hist[promptId]

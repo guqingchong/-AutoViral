@@ -1,8 +1,14 @@
 # 合成阶段评审标准
 
+> **规则分级(2026-08-28 批次6.1,v2-M1)**：本文件维度分两级——
+> **【硬性】** = 机器可判/有明确阈值,违反即 fail,无自由裁量;
+> **【软性】** = 需审美/结构判断,作为评分与建议依据,单独不构成一票否决(critical 除外)。
+> 已被机器门禁/预检覆盖的硬性项(时长/字数/极限词/文件存在性)评审时直接引用门禁结果,不重复烧 LLM 判断。
+> 优先级宪法:用户显式参数(explicitParams)> 本文件硬性 > 本文件软性 > 评审自由裁量。
+
 ## 评审维度
 
-### 1. 技术参数 (technical_params)
+### 1. 技术参数 (technical_params) 【硬性·机器可判】
 检查方法：使用 ffprobe 检查最终输出
 
 ```bash
@@ -26,7 +32,7 @@ ffprobe -v error -show_entries format=duration,size -show_entries stream=width,h
 - 5-6: 有技术问题但不影响播放
 - 1-4: 严重技术问题（无法播放、无音频、分辨率错误）
 
-### 2. 剪辑节奏 (editing_rhythm)
+### 2. 剪辑节奏 (editing_rhythm) 【软性·需判断】
 - 镜头切换频率是否与内容类型匹配？
 - 是否有不合理的长静止镜头？
 - Hook部分（前3秒）的节奏是否紧凑？
@@ -38,7 +44,7 @@ ffprobe -v error -show_entries format=duration,size -show_entries stream=width,h
 - 5-6: 有部分段落节奏失衡
 - 1-4: 整体节奏混乱或极度拖沓
 
-### 3. 音画协调 (audio_visual_sync)
+### 3. 音画协调 (audio_visual_sync) 【硬性·机器可判】
 评审依据：content-assembly/modules/audio-spec.md（评审前必读）
 
 - **响度实测（必做）**：`ffmpeg -i final.mp4 -af ebur128=peak=true -f null -` 实测 I 值命中 -16~-14 LUFS、TP ≤ -1dBTP？
@@ -53,13 +59,13 @@ ffprobe -v error -show_entries format=duration,size -show_entries stream=width,h
 - 5-6: BGM 局部盖过人声，或响度偏离平台区间
 - 1-4: 音画严重不协调/无 BGM/响度严重超标（外放刺耳或听不清人声）
 
-### 4. 字幕质量 (subtitle_quality)
+### 4. 字幕质量 (subtitle_quality) 【硬性·机器可判】
 - 字幕是否与画面同步？
 - 字幕位置是否合理（不遮挡主体）？
 - **单行字数是否超标（中文 ≤15 字/行）？抽 3 个长句时间点截帧核对：字幕不得超出画面左右边界（部分 ffmpeg 构建的 libass 无 CJK 断词，长行不换行会直接出框）**
 - 字幕是否清晰可读（大小、颜色、描边）？
 - 内容是否准确、无错别字？
-- 每行字数是否合理（15-20字以内）？
+- 每行字数是否符合硬约束（≤15 字）？
 
 **评分标准：**
 - 9-10: 字幕专业精美，增强了内容表达
@@ -67,7 +73,7 @@ ffprobe -v error -show_entries format=duration,size -show_entries stream=width,h
 - 5-6: 字幕存在小问题（位置不佳、偶有不同步）
 - 1-4: 字幕严重影响观看体验
 
-### 5. 调色一致性 (color_grading)
+### 5. 调色一致性 (color_grading) 【软性·需判断】
 - 全片色调是否统一？
 - 是否有应用调色（不是原始色调）？
 - 调色是否适合内容类型和平台？
@@ -79,7 +85,7 @@ ffprobe -v error -show_entries format=duration,size -show_entries stream=width,h
 - 5-6: 调色不一致或无调色
 - 1-4: 色调混乱，各片段色彩差异巨大
 
-### 6. 发布文案 (publish_text)
+### 6. 发布文案 (publish_text) 【软性·需判断】
 - 标题是否吸引人（含关键词、有吸引力）？
 - 正文是否完整（含平台特定格式）？
 - 标签/话题是否合理（数量、相关性）？
@@ -107,7 +113,7 @@ ffprobe -v error -show_entries format=duration,size -show_entries stream=width,h
 - **字幕单行超过 15 个汉字 / 超出画面左右边界（抽帧可见文字出框）**
 - **结构/流程/逻辑类镜头全用静态文字卡应付，未使用 code-scene 程序化动画（分镜含此类镜头时）**
 
-### 7. 模板还原度 (template_fidelity)（2026-08-19 新增,"假窗口"事故)
+### 7. 模板还原度 (template_fidelity)（2026-08-19 新增,"假窗口"事故) 【硬性·机器可判】
 > 适用:作品绑定了视频模板(works.template_id 非空)。未绑定模板的作品跳过本维度,不打分。
 
 - 模板声明的视频/图片变量槽位(type:video/image)是否全部被真实素材填充?

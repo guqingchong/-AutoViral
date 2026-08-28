@@ -1,8 +1,14 @@
 # 素材阶段评审标准
 
+> **规则分级(2026-08-28 批次6.1,v2-M1)**：本文件维度分两级——
+> **【硬性】** = 机器可判/有明确阈值,违反即 fail,无自由裁量;
+> **【软性】** = 需审美/结构判断,作为评分与建议依据,单独不构成一票否决(critical 除外)。
+> 已被机器门禁/预检覆盖的硬性项(时长/字数/极限词/文件存在性)评审时直接引用门禁结果,不重复烧 LLM 判断。
+> 优先级宪法:用户显式参数(explicitParams)> 本文件硬性 > 本文件软性 > 评审自由裁量。
+
 ## 评审维度
 
-### 1. 技术质量 (technical_quality)
+### 1. 技术质量 (technical_quality) 【硬性·机器可判】
 检查方法：使用 ffprobe 和 Read 工具
 
 **图片：**
@@ -28,7 +34,7 @@ ffprobe -v error -show_entries stream=width,height,codec_name,r_frame_rate,codec
 - 5-6: 有技术问题但不影响发布（如分辨率略低）
 - 1-4: 严重技术问题（无音频、分辨率严重不足、文件损坏）
 
-### 2. 美学质量 (aesthetic_quality)
+### 2. 美学质量 (aesthetic_quality) 【软性·需判断】
 检查方法：使用 Read 工具查看图片，评估视觉效果
 
 - 构图是否合理（主体突出、空间平衡）？
@@ -43,7 +49,7 @@ ffprobe -v error -show_entries stream=width,height,codec_name,r_frame_rate,codec
 - 5-6: 可以接受但缺乏美感
 - 1-4: 美学质量差，不适合发布
 
-### 3. Prompt遵从度 (prompt_adherence)
+### 3. Prompt遵从度 (prompt_adherence) 【软性·需判断】
 - 生成结果是否匹配分镜描述？
 - 角色外观是否一致？
 - 环境/场景是否正确？
@@ -55,7 +61,7 @@ ffprobe -v error -show_entries stream=width,height,codec_name,r_frame_rate,codec
 - 5-6: 基本方向对，但部分要素不匹配
 - 1-4: 与描述严重不符
 
-### 4. 风格一致性 (style_consistency)
+### 4. 风格一致性 (style_consistency) 【软性·需判断】
 - 所有素材的色调是否统一？
 - 角色在不同镜头中是否看起来一致？
 - 风格关键词是否贯穿始终？
@@ -67,7 +73,7 @@ ffprobe -v error -show_entries stream=width,height,codec_name,r_frame_rate,codec
 - 5-6: 有明显的风格跳跃
 - 1-4: 每张素材看起来像不同风格
 
-### 5. 素材完整性 (completeness)
+### 5. 素材完整性 (completeness) 【硬性·机器可判】
 - 分镜脚本中的所有镜头是否都有对应素材？
 - 首帧和视频片段是否都已生成？
 - 是否有遗漏的素材？
@@ -97,7 +103,7 @@ ffprobe -v error -show_entries stream=width,height,codec_name,r_frame_rate,codec
 - 素材数量严重不足（缺少超过50%的镜头）
 - 所有素材风格完全不一致（每张图看起来是不同世界的）
 
-### 程序化动画覆盖 (code_scene_coverage)
+### 程序化动画覆盖 (code_scene_coverage) 【硬性·机器可判】
 - 分镜中的结构图/流程图/逻辑链条镜头是否调用了 /api/assets/code-scene 生成动态场景?
 - 仍用静态图(chart/snapshot)充当结构镜头的,降档处理(除非分镜明确说明理由)
 **评分标准:**
