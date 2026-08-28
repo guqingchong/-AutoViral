@@ -8,6 +8,7 @@ import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { dataDir } from "../config.js";
 import { quotaState, quotaAllowsStart } from "./quota-guard.js";
+import { broadcastProgress } from "./progress-events.js";
 import { loadConfig } from "../config.js";
 import { getDailyCostYuan } from "./llm-usage.js";
 
@@ -99,7 +100,11 @@ async function tickOnce(d: RunnerDeps): Promise<void> {
     const running = repo.listQueue().filter((i) => i.status === "running");
     if (!quotaAllowsStart()) {
       for (const item of running) repo.setStatus(item.workId, "paused", { pausedReason: "quota" });
-      if (running.length) console.log(`[work-queue] 配额冷却:${running.length} 个 running 项置 paused`);
+      if (running.length) {
+        console.log(`[work-queue] 配额冷却:${running.length} 个 running 项置 paused`);
+        // 批次4.6:配额冷却全局通知(此前仅 console.log,UI 无感知)
+        broadcastProgress({ kind: "system", text: `LLM 配额冷却中,${running.length} 个作品已自动暂停;恢复试探将按指数回退自动进行` });
+      }
       return;
     }
     // 试探只挑配额暂停的项——用户手动暂停(user)/预算熔断(budget)的绝不被误拉起(2026-08-19 P0)

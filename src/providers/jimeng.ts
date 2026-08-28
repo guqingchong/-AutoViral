@@ -2,6 +2,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { join, dirname } from 'node:path'
 import { dataDir } from '../config.js'
 import { submitAndPoll, downloadFile } from './_volcengine-cv.js'
+import { broadcastProgress } from '../services/progress-events.js'
 import type {
   GenerateProvider,
   ImageOpts,
@@ -125,7 +126,7 @@ export class JimengProvider implements GenerateProvider {
       }
       if (refs.length > 0) payload.image_urls = refs.slice(0, 14)
 
-      const result = await submitAndPoll(this.accessKey, this.secretKey, payload)
+      const result = await submitAndPoll(this.accessKey, this.secretKey, payload, (text) => broadcastProgress({ workId, kind: "generation", text }))
       return await this._saveImage(result.data, workId, filename)
     } catch (err: any) {
       return this._mapError(err)
@@ -166,7 +167,7 @@ export class JimengProvider implements GenerateProvider {
 
       if (opts.seed !== undefined) payload.seed = opts.seed
 
-      const result = await submitAndPoll(this.accessKey, this.secretKey, payload)
+      const result = await submitAndPoll(this.accessKey, this.secretKey, payload, (text) => broadcastProgress({ workId, kind: "generation", text }))
       return await this._saveImage(result.data, workId, filename)
     } catch (err: any) {
       return this._mapError(err)
@@ -192,7 +193,7 @@ export class JimengProvider implements GenerateProvider {
       if (opts.resolution) payload.resolution = opts.resolution
       if (opts.scale !== undefined) payload.scale = opts.scale
 
-      const result = await submitAndPoll(this.accessKey, this.secretKey, payload)
+      const result = await submitAndPoll(this.accessKey, this.secretKey, payload, (text) => broadcastProgress({ workId, kind: "generation", text }))
       return await this._saveImage(result.data, workId, filename)
     } catch (err: any) {
       return this._mapError(err)
@@ -235,7 +236,7 @@ export class JimengProvider implements GenerateProvider {
         payload.aspect_ratio = opts.resolution
       }
 
-      const result = await submitAndPoll(this.accessKey, this.secretKey, payload)
+      const result = await submitAndPoll(this.accessKey, this.secretKey, payload, (text) => broadcastProgress({ workId, kind: "generation", text }))
 
       const videoUrl = result.data?.video_urls?.[0]
         ?? result.data?.video_url

@@ -130,6 +130,12 @@ export function bashExecutor(blocklist?: string[]): ToolExecutor {
         }, timeout);
         p.stdout.on("data", pushOut);
         p.stderr.on("data", pushOut);
+        // 批次4.1 心跳:每 12s 回传输出尾部(无新输出则报"执行中"),UI 不再对
+        // ffmpeg/whisper 等长命令黑窗——静默时段曾是"分不清慢与死"的最大来源
+        const heartbeat = setInterval(() => {
+          const excerpt = (tail || head).slice(-300).trim();
+          ctx.onProgress?.(excerpt ? `…${excerpt}` : "(命令执行中,暂无输出)");
+        }, 12_000);
         ctx.signal?.addEventListener("abort", () => { p.kill("SIGTERM"); setTimeout(killTree, 2000); }, { once: true });
         // 双通道兜底:exit(进程退出)先到 → 给 5s 让 stdio 冲刷后强制收尾,
         // 不等 close(孤儿进程持管道时 close 永不到来)
@@ -138,6 +144,7 @@ export function bashExecutor(blocklist?: string[]): ToolExecutor {
           if (settled) return;
           settled = true;
           clearTimeout(killTimer);
+          clearInterval(heartbeat);
           const truncated = head.length >= HALF || tail.length >= HALF;
           const out = truncated
             ? `${head}\n…[输出过大,中段截断(头尾各保留 512KB)]…\n${tail}`
@@ -149,6 +156,7 @@ export function bashExecutor(blocklist?: string[]): ToolExecutor {
         p.on("exit", (code) => setTimeout(() => finish(code, " (exit 先于 close 收尾:可能有孤儿进程持有输出管道)"), 5000));
         p.on("error", (err) => {
           clearTimeout(killTimer);
+          clearInterval(heartbeat);
           settled = true;
           resolvePromise(`执行失败: ${err.message}`);
         });

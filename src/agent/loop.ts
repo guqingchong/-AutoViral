@@ -32,6 +32,7 @@ export interface LoopEvent {
     | "thinking_delta"
     | "tool_use"
     | "tool_result"
+    | "tool_progress"
     | "turn_start"
     | "turn_complete"
     | "vision_route"
@@ -309,7 +310,12 @@ export class AgentLoop {
             isError = true;
           } else {
             try {
-              const out = await executor.execute(tu.input, { workDir: this.deps.workDir, signal: this.abort.signal });
+              const out = await executor.execute(tu.input, {
+                workDir: this.deps.workDir,
+                signal: this.abort.signal,
+                // 批次4.1:长工具心跳(bash ffmpeg/whisper 期间 UI 不再黑窗)
+                onProgress: (text) => this.deps.onLoopEvent({ type: "tool_progress", text, toolName: tu.name }),
+              });
               resultText = typeof out === "string" ? out : "[图片内容已展示]";
               if (typeof out !== "string") {
                 // 图片等多模态结果：content 直接带块

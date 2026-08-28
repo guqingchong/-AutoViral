@@ -1,6 +1,7 @@
 import { join } from 'node:path'
 import { dataDir } from '../config.js'
 import { submitAndPoll, downloadFile } from './_volcengine-cv.js'
+import { broadcastProgress } from '../services/progress-events.js'
 import type { GenerateProvider, ImageOpts, VideoOpts, GenerateResult } from './base.js'
 
 // 小云雀 Seedance 2.0 fast 720p 两套 req_key:
@@ -73,7 +74,7 @@ export class SeedanceProvider implements GenerateProvider {
         payload.language = opts.language
       }
 
-      const result = await submitAndPoll(this.accessKey, this.secretKey, payload)
+      const result = await submitAndPoll(this.accessKey, this.secretKey, payload, (text) => broadcastProgress({ workId, kind: "generation", text }))
 
       const videoUrl = result.data?.video_url
         ?? result.data?.video_urls?.[0]

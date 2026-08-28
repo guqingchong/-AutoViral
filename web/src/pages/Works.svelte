@@ -228,7 +228,10 @@
         return { text: `评审受阻 · ${activeStep.name}`, stalled: true, queued: false };
       }
       if (stalled) {
-        return { text: "停滞 · 自动恢复中", stalled: true, queued: false };
+        // 批次4.5 诚实状态:仅当队列项在 running(看门狗确实会接管,批次4.2 活性判定已修)
+        // 才显示"自动恢复中";无 running 队列项的停滞无任何恢复机制,如实提示人工查看
+        const recovering = qp?.status === "running";
+        return { text: recovering ? "停滞 · 自动恢复中" : "停滞 · 需人工查看", stalled: true, queued: false };
       }
       return { text: `进行中 · ${activeStep.name}`, stalled: false, queued: false };
     }
