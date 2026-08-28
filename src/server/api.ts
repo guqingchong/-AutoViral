@@ -25,6 +25,7 @@ import {
   type Work, type PipelineStep, type EvalResult,
 } from "../work-store.js";
 import { MemoryClient } from "../memory.js";
+import { EvalTimeoutError, EvalParseError } from "../agent/evaluator.js";
 import type { WsBridge } from "../ws-bridge.js";
 import { getProvider, getDefaultProvider, listProviders } from "../providers/registry.js";
 import { listSharedAssetsWithMeta, getSharedAssetPath, validateCategory, sanitizeFilename, saveSharedAsset, deleteSharedAsset, moveSharedAsset } from "../shared-assets.js";
@@ -2545,7 +2546,64 @@ async function waitForCreatorIdle(workId: string, timeoutMs = 120_000): Promise<
   }
 }
 
-export async function runEvaluation(workId: string, completedStep: string, nextStep?: string, evalErrorRetries = 0): Promise<void> {
+/** 评审熔断落态(2026-08-28 批次1 抽取共用):3 轮不过 / 超时降级链末端 都走这里。
+ *  置 eval_blocked + works.status=failed + 出队通知 + 广播,交人工处置。 */
+async function markEvalBlocked(workId: string, completedStep: string, broadcastData: Record<string, unknown>): Promise<void> {
+  if (!wsBridge) return;
+  const freshWork = await getWork(workId);
+  if (freshWork) {
+    freshWork.pipeline[completedStep].status = "eval_blocked" as any;
+    // 2026-08-19 P1:同步置 works.status=failed——此前只改 pipeline,卡片永远
+    // 显示"素材准备中/合成中"中间态,无人工处置入口(状态腐烂)
+    await storeUpdateWork(workId, { pipeline: freshWork.pipeline, status: "failed" });
+    broadcastPipelineUpdate(workId, freshWork.pipeline);
+  }
+  // 队列闭环：评审 3 轮不过即卡死，显式出队标 failed 交人工处置 ——
+  // 否则队列项停在 running，runner 健康检查会反复恢复（且 startWorkSession
+  // 只认 pending/active 步骤，恢复后会跳过被卡的 eval_blocked 步骤）。
+  notifyWorkSettled(workId, "failed");
+  wsBridge.broadcastToBrowsers(workId, {
+    event: "eval_blocked",
+    data: { workId, step: completedStep, ...broadcastData },
+  });
+  const session = wsBridge.getSession(workId);
+  if (session) saveWorkChat(workId, { blocks: session.messageHistory }).catch(() => {});
+}
+
+/** 评审超时标记落盘(批次1.2 纪律:超时事件必须在磁盘上可审计,"挂起不可见"是 5e3 的教训)。
+ *  返回该步骤累计超时次数。 */
+async function recordEvalTimeout(workId: string, step: string, detail: string): Promise<number> {
+  const workDir = join(dataDir, "works", workId);
+  let count = 0;
+  try {
+    count = (await readdir(workDir)).filter((f) => f.startsWith(`eval-timeout-${step}-`)).length + 1;
+    await writeFile(
+      join(workDir, `eval-timeout-${step}-${count}.json`),
+      JSON.stringify({ step, timeoutCount: count, detail, timestamp: new Date().toISOString() }, null, 2),
+    );
+  } catch (err) {
+    console.warn(`[eval] 超时标记落盘失败(不阻断): ${(err as Error).message}`);
+  }
+  return count;
+}
+
+/** 降级链"换模型"段:选一个与当前 eval 档不同的可用 provider 模型 */
+function pickFallbackEvalModel(config: Awaited<ReturnType<typeof loadConfig>>, currentProvider: string): string | undefined {
+  const candidates: [string, string][] = [
+    ["deepseek", "deepseek-v4-pro"],
+    ["kimi", "kimi-for-coding"],
+    ["glm", "glm-4.6"],
+  ];
+  for (const [key, model] of candidates) {
+    if (key === currentProvider) continue;
+    const p = config.llm?.providers?.[key];
+    const preset = PROVIDER_PRESETS[key];
+    if ((p?.enabled !== false) && (p?.apiKey || preset)) return `${key}:${model}`;
+  }
+  return undefined;
+}
+
+export async function runEvaluation(workId: string, completedStep: string, nextStep?: string, evalErrorRetries = 0, evalModelSpec?: string, gateFallback = false): Promise<void> {
   if (!wsBridge) throw new Error("WsBridge not initialized");
 
   // CRITICAL: Wait for creator agent's CLI process to finish before starting evaluator
@@ -2598,15 +2656,37 @@ export async function runEvaluation(workId: string, completedStep: string, nextS
     // P4-T2(2026-08-19):CLI 评审路径删除,评审恒走 API loop(独立 AgentLoop+视觉路由)。
     // 无 loop 的会话说明作品未经 API 会话启动——直接报错进 eval_error 重试链,不再 CLI 回落
     if (!session.loop) throw new Error("评审需要 API loop 会话(CLI 路径已于 P4-T2 下线)");
-    const evalResult = await (await import("../agent/evaluator.js")).runApiEvaluator({
-      workId,
-      step: completedStep,
-      evalPrompt,
-      config: await loadConfig(),
-      workDir,
-      session,
-      bridge: wsBridge,
-    });
+    // 2026-08-28 批次1.3 降级链末端:评审器两次超时后,plan/assembly 用机器门禁兜底——
+    // 产物过门禁则带 __gateOnly 标记放行(落盘可审计),不过则门禁问题清单即修复反馈
+    let evalResult: EvalResult;
+    if (gateFallback) {
+      const gate = await import("../services/quality-gate.js");
+      const gateIssues = completedStep === "plan"
+        ? gate.assertPlanDeliverables(workDir)
+        : gate.assertAssemblyDeliverables(workDir);
+      evalResult = {
+        step: completedStep,
+        attempt,
+        verdict: gateIssues.length ? "fail" : "pass",
+        scores: {},
+        issues: gateIssues.map((i) => ({ severity: "major" as const, description: `[机器门禁] ${i.key}: ${i.detail}` })),
+        suggestions: gateIssues.length ? ["修复上述机器门禁问题后重新提交"] : [],
+        timestamp: new Date().toISOString(),
+      };
+      (evalResult as EvalResult & { __gateOnly?: boolean }).__gateOnly = true;
+      log("warn", "api", "eval_gate_fallback", workId, { step: completedStep, issues: gateIssues.length });
+    } else {
+      evalResult = await (await import("../agent/evaluator.js")).runApiEvaluator({
+        workId,
+        step: completedStep,
+        evalPrompt,
+        config: await loadConfig(),
+        workDir,
+        session,
+        bridge: wsBridge,
+        modelSpec: evalModelSpec,
+      });
+    }
     evalResult.step = completedStep;
     evalResult.attempt = attempt;
     evalResult.timestamp = new Date().toISOString();
@@ -2706,23 +2786,7 @@ export async function runEvaluation(workId: string, completedStep: string, nextS
 
       // Check iteration limit
       if (attempt >= 3) {
-        const freshWork = await getWork(workId);
-        if (freshWork) {
-          freshWork.pipeline[completedStep].status = "eval_blocked" as any;
-          // 2026-08-19 P1:同步置 works.status=failed——此前只改 pipeline,卡片永远
-          // 显示"素材准备中/合成中"中间态,无人工处置入口(状态腐烂)
-          await storeUpdateWork(workId, { pipeline: freshWork.pipeline, status: "failed" });
-          broadcastPipelineUpdate(workId, freshWork.pipeline);
-        }
-        // 队列闭环：评审 3 轮不过即卡死，显式出队标 failed 交人工处置 ——
-        // 否则队列项停在 running，runner 健康检查会反复恢复（且 startWorkSession
-        // 只认 pending/active 步骤，恢复后会跳过被卡的 eval_blocked 步骤）。
-        notifyWorkSettled(workId, "failed");
-        wsBridge.broadcastToBrowsers(workId, {
-          event: "eval_blocked",
-          data: { workId, step: completedStep, attempt, result: evalResult },
-        });
-        saveWorkChat(workId, { blocks: session.messageHistory }).catch(() => {});
+        await markEvalBlocked(workId, completedStep, { attempt, result: evalResult });
         return;
       }
 
@@ -2748,11 +2812,41 @@ export async function runEvaluation(workId: string, completedStep: string, nextS
     }
   } catch (err) {
     log("error", "api", "eval_error", workId, { error: (err as Error).message, retry: evalErrorRetries });
+
+    // ── 2026-08-28 批次1.3:评审器硬超时的降级链 ──
+    // 超时 → 同模型重试 1 次 → 换模型 1 次 →(plan/assembly:机器门禁兜底)→ eval_blocked 交人工。
+    // 超时计数持久化在作品目录的 eval-timeout-*.json 标记文件,重启后不丢、不烧 eval_attempts。
+    if (err instanceof EvalTimeoutError) {
+      const timeoutCount = await recordEvalTimeout(workId, completedStep, err.message);
+      const config = await loadConfig();
+      if (timeoutCount === 1) {
+        log("warn", "api", "eval_timeout_retry", workId, { step: completedStep, timeoutCount });
+        await new Promise((r) => setTimeout(r, 10_000));
+        return runEvaluation(workId, completedStep, nextStep, evalErrorRetries, evalModelSpec, gateFallback);
+      }
+      if (timeoutCount === 2 && !evalModelSpec) {
+        const currentProvider = config.llm?.models?.eval?.split(":")[0] ?? config.llm?.defaultProvider ?? "deepseek";
+        const fallback = pickFallbackEvalModel(config, currentProvider);
+        if (fallback) {
+          log("warn", "api", "eval_timeout_switch_model", workId, { step: completedStep, fallback });
+          await new Promise((r) => setTimeout(r, 10_000));
+          return runEvaluation(workId, completedStep, nextStep, evalErrorRetries, fallback, gateFallback);
+        }
+      }
+      // 末端:plan/assembly 有机器门禁可兜底;其余阶段只能交人工
+      if (!gateFallback && (completedStep === "plan" || completedStep === "assembly")) {
+        log("warn", "api", "eval_timeout_gate_fallback", workId, { step: completedStep, timeoutCount });
+        return runEvaluation(workId, completedStep, nextStep, evalErrorRetries, evalModelSpec, true);
+      }
+      await markEvalBlocked(workId, completedStep, { reason: "eval_timeout", timeoutCount, error: err.message });
+      return;
+    }
+
     // 2026-08-19 P1:评审器异常不再"回退 active 后停摆"——有限重试(5s/10s 退避),
     // 连续失败则显式置 failed 出队交人工,杜绝无人值守场景下作品无声卡死
     if (evalErrorRetries < 2) {
       await new Promise((r) => setTimeout(r, 5000 * (evalErrorRetries + 1)));
-      return runEvaluation(workId, completedStep, nextStep, evalErrorRetries + 1);
+      return runEvaluation(workId, completedStep, nextStep, evalErrorRetries + 1, evalModelSpec, gateFallback);
     }
     const freshWork = await getWork(workId);
     if (freshWork) {
@@ -2909,6 +3003,12 @@ apiRoutes.post("/api/works/:id/pipeline/advance", async (c) => {
     // (reject/eval-fail)会先把阶段置回 active,不在此拦截范围。
     if (work.pipeline[completedStep].status === "done") {
       return c.json({ error: `阶段「${work.pipeline[completedStep].name}」已完成，无需重复推进。请查询当前 pipeline 状态，从第一个未完成阶段继续。` }, 409);
+    }
+    // 守卫1c:eval_blocked 熔断是终态,禁止 agent 自行复活(2026-08-28 批次1.4)——
+    // 05d 实证:3 轮 fail 熔断后 agent 再调 advance 即重新评审(全程 7 次 advance),
+    // "3 轮杀作品"形同虚设。重开只允许人工通道(Studio 的强制通过/指导重试端点)。
+    if (work.pipeline[completedStep].status === "eval_blocked") {
+      return c.json({ error: `阶段「${work.pipeline[completedStep].name}」评审已被熔断(eval_blocked),属于终态,禁止自动重开。请等待人工处置(强制通过或带指导意见重评)。` }, 409);
     }
     // 守卫2:越级推进禁令。前序阶段处于 active/evaluating(进行中)时不允许推进
     // 后续阶段——f2c 曾在 assets=active 时推进 assembly 并过审,造成

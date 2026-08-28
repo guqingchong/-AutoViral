@@ -41,6 +41,24 @@ export function parseEvalResultText(resultText: string, fallbackStep: string): E
   }
 }
 
+/** 评审器硬超时(2026-08-28 批次1.2):超时触发 abortTurn,控制流收敛后由调用方转降级链 */
+export class EvalTimeoutError extends Error {
+  readonly step: string;
+  constructor(step: string, timeoutMs: number) {
+    super(`评审器硬超时(${step} 阶段,${Math.round(timeoutMs / 60000)} 分钟未完成)`);
+    this.name = "EvalTimeoutError";
+    this.step = step;
+  }
+}
+
+/** 评审输出二次解析仍失败(2026-08-28 批次1.5):此前兜底 pass 是制度化放水通道,改为显式错误进 eval_error 链 */
+export class EvalParseError extends Error {
+  constructor(step: string) {
+    super(`评审输出两次均无法解析为 JSON(${step} 阶段),不再兜底 pass`);
+    this.name = "EvalParseError";
+  }
+}
+
 /** 视觉路由解析:返回 null 表示当前配置无任何可用视觉模型 */
 export function resolveVision(config: Config, evalProviderKey: string): { provider: LlmProvider; model: string } | null {
   for (const key of [evalProviderKey, "kimi", "glm", "deepseek"]) {
@@ -55,6 +73,17 @@ export function resolveVision(config: Config, evalProviderKey: string): { provid
   return null;
 }
 
+/** 评审目标解析:modelSpec 形如 "provider:model"(降级链换模型用),缺省走 eval 档配置 */
+export function resolveEvalTarget(config: Config, modelSpec?: string): { provider: LlmProvider; model: string } {
+  if (modelSpec) {
+    const idx = modelSpec.indexOf(":");
+    if (idx > 0) {
+      return { provider: getProvider(config, modelSpec.slice(0, idx)), model: modelSpec.slice(idx + 1) };
+    }
+  }
+  return resolveModelFor(config, "eval");
+}
+
 const VISION_REQUIRED_STEPS = new Set(["assets", "assembly"]);
 
 export interface ApiEvaluatorOpts {
@@ -65,11 +94,13 @@ export interface ApiEvaluatorOpts {
   workDir: string;
   session: WsSession;
   bridge: WsBridge;
+  /** 降级链"换模型"段(2026-08-28 批次1.3):形如 "provider:model",覆盖 eval 档配置 */
+  modelSpec?: string;
 }
 
 export async function runApiEvaluator(opts: ApiEvaluatorOpts): Promise<EvalResult> {
   const { config, step } = opts;
-  const { provider, model } = resolveModelFor(config, "eval");
+  const { provider, model } = resolveEvalTarget(config, opts.modelSpec);
   const vision = resolveVision(config, provider.name);
   if (VISION_REQUIRED_STEPS.has(step) && !vision) {
     throw new Error(
@@ -80,6 +111,7 @@ export async function runApiEvaluator(opts: ApiEvaluatorOpts): Promise<EvalResul
   const sink = createLoopEventSink(opts.session, opts.bridge, { source: "evaluator" });
   // 评审进行中标记:runner 健康检查据此判定会话存活(isWorkActive),防评审窗口被误判死亡
   opts.session.evalLoopRunning = true;
+  opts.session.evalStartedAt = Date.now();
   const loop = new AgentLoop({
     provider,
     model,
@@ -102,8 +134,19 @@ export async function runApiEvaluator(opts: ApiEvaluatorOpts): Promise<EvalResul
     usageContext: { workId: opts.workId, stage: `eval:${step}` },
   });
 
+  // 硬超时:到期 abortTurn(abort 信号一路传到 chatStream/Bash,清理链现成);
+  // runTurn 随后以 throw 或 stopReason="aborted" 返回,两种形态都由 timedOut 标志统一转 EvalTimeoutError
+  const evalTimeoutMs = (config.llm?.guard?.evalTimeoutMinutes ?? 15) * 60_000;
+  let timedOut = false;
+  const hardTimer = setTimeout(() => {
+    timedOut = true;
+    console.warn(`[evaluator] ${opts.workId}/${step}: 评审硬超时(${Math.round(evalTimeoutMs / 60000)}min),中止评审回合`);
+    loop.abortTurn();
+  }, evalTimeoutMs);
+
   try {
     const { resultText } = await loop.runTurn(opts.evalPrompt);
+    if (timedOut) throw new EvalTimeoutError(step, evalTimeoutMs);
     let result = parseEvalResultText(resultText, step) as EvalResult & { __parseFailed?: boolean };
     if (result.__parseFailed) {
       // 解析失败不再是静默 pass:先让评审重出一轮(大概率是话痨没按格式输出)
@@ -113,14 +156,20 @@ export async function runApiEvaluator(opts: ApiEvaluatorOpts): Promise<EvalResul
         "(字段: verdict \"pass\"|\"fail\", scores, issues[{severity,description}], suggestions[])," +
         "不要输出任何其他文字。",
       );
+      if (timedOut) throw new EvalTimeoutError(step, evalTimeoutMs);
       result = parseEvalResultText(retry.resultText, step) as EvalResult & { __parseFailed?: boolean };
       if (result.__parseFailed) {
-        // 重出仍失败:兜底 pass 但在结果里留痕(__parseFailed 随 eval JSON 落盘可审计)
-        console.warn(`[evaluator] ${opts.workId}/${step}: 重出仍无法解析,兜底 pass 并留痕 __parseFailed`);
+        // 2026-08-28 批次1.5:重出仍失败 → 显式错误进 eval_error 链,堵死兜底 pass 放水通道
+        throw new EvalParseError(step);
       }
     }
     return result;
+  } catch (err) {
+    if (timedOut && !(err instanceof EvalTimeoutError)) throw new EvalTimeoutError(step, evalTimeoutMs);
+    throw err;
   } finally {
+    clearTimeout(hardTimer);
     opts.session.evalLoopRunning = false;
+    opts.session.evalStartedAt = undefined;
   }
 }

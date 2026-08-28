@@ -170,7 +170,7 @@ describe("runApiEvaluator", () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  it("重出仍无法解析 → 兜底 pass 但保留 __parseFailed 留痕", async () => {
+  it("重出仍无法解析 → 抛 EvalParseError(2026-08-28 批次1.5:兜底 pass 放水通道已堵死)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "av-eval-"));
     const fetchMock = vi.fn().mockImplementation(async () =>
       new Response(sse([
@@ -180,14 +180,12 @@ describe("runApiEvaluator", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const { session, bridge } = fakeBridgeSession("w4");
-    const result = await runApiEvaluator({
+    await expect(runApiEvaluator({
       workId: "w4", step: "plan", evalPrompt: "评审 plan 阶段产出", workDir: dir,
       config: cfgWith({ deepseek: { protocol: "openai", baseUrl: "https://ds.test/v1", apiKey: "k1" } }),
       session, bridge,
-    });
+    })).rejects.toThrow("不再兜底 pass");
 
-    expect(result.verdict).toBe("pass");
-    expect((result as { __parseFailed?: boolean }).__parseFailed).toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     await rm(dir, { recursive: true, force: true });
   });

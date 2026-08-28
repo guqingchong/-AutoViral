@@ -60,6 +60,8 @@ export interface WsSession {
   /** API 评审 loop 进行中(P2-T1):评审期间创作者 loop 空闲,无此标记 runner 会误判会话死亡
    *  反复 resume/重建会话(2026-08-17 验收实测:eval 窗口内 resumeAttempts 6 次把队列项打 failed) */
   evalLoopRunning?: boolean;
+  /** 评审开始时间(2026-08-28 批次1.2):watchdog 据此判定评审挂死(此前 evalStep 只写不读,升级为可读信号) */
+  evalStartedAt?: number;
   /** autoMode 无人值守续跑计数(P2-T2):步骤 key + 连续空转次数 + 历史长度标记 + 步骤内总次数 */
   autoContinueStep?: string;
   autoContinueCount?: number;
