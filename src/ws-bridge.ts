@@ -21,6 +21,7 @@ import type { Duplex } from "node:stream";
 import { appendFile } from "node:fs/promises";
 import { logBridge, logBridgeDebug } from "./logger.js";
 import { loadConfig, dataDir } from "./config.js";
+import { MAX_PLAN_DURATION_S } from "./services/quality-gate.js";
 import { getWork, updateWork, saveStepHistory, loadStepHistory, saveWorkChat, loadWorkChat, type Work, type PipelineStep, type EvalResult } from "./work-store.js";
 import { listSharedAssets } from "./shared-assets.js";
 import { MemoryClient } from "./memory.js";
@@ -373,7 +374,7 @@ export class WsBridge {
   ① output/ 下文件名含 final 的成片视频 ② output/publish-text.md(发布文案)
   ③ output/quality-report.json——对当前成片跑质量门禁生成,videoPath 指向该片且生成时间不早于成片 ④ output/ 下 .ass 字幕(单可视行 ≤15 字、CPS ≤8)
 - plan 阶段的 advance 有机器预检,命中即被 400 拦截(提交前逐项自检):
-  ① 分镜表时长合计 ≤180s ② 旁白单句 ≤20 字 ③ 不得引用 material-candidates.md 剔除区素材
+  ① 分镜表时长合计 ≤${MAX_PLAN_DURATION_S}s ② 旁白单句 ≤20 字 ③ 不得引用 material-candidates.md 剔除区素材
   ④ 标题/封面极限词(最/第一/唯一/首个)必须加「之一」限定
 - 模版卡渲染铁律(code-scene customScene):渲染前必须 GET /api/templates/{templateId} 查看
   variables 中的媒体槽位(videoSrc/imageSrc),并传入真实素材路径——槽位留空会渲染出

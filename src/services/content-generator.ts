@@ -23,7 +23,7 @@ export interface GeneratedScript {
 
 export interface ContentGenOptions {
   toneProfile?: Record<string, unknown> | null;
-  /** 生成用模型（默认由 runJsonPrompt 决定，批量链路传 config.scriptModel） */
+  /** @deprecated 假开关(2026-08-28 批次5.5 删除):直连架构下 runJsonPrompt 恒走 llm.models.script 档 */
   model?: string;
 }
 
@@ -59,7 +59,7 @@ async function generateOutline(topic: DbTopic, platform: string, opts?: ContentG
     ].join("\n"),
     evolution
   );
-  return runJsonPrompt<Record<string, unknown>>(prompt, { timeoutMs: 120_000, model: opts?.model });
+  return runJsonPrompt<Record<string, unknown>>(prompt, { timeoutMs: 120_000 });
 }
 
 /**
@@ -84,7 +84,7 @@ async function expandOutline(
     buildContext(topic, platform),
     `输出 JSON：{"title":"标题","content":"完整正文（含换行，1500-3000字）"}`,
   ].join("\n");
-  return runJsonPrompt<GeneratedArticle>(prompt, { timeoutMs: 180_000, model: opts?.model });
+  return runJsonPrompt<GeneratedArticle>(prompt, { timeoutMs: 180_000 });
 }
 
 /**
@@ -104,7 +104,7 @@ async function refineArticle(article: GeneratedArticle, opts?: ContentGenOptions
     `原文：${article.content}`,
     `输出 JSON：{"title":"精修后标题","content":"精修后正文"}`,
   ].join("\n");
-  return runJsonPrompt<GeneratedArticle>(prompt, { timeoutMs: 180_000, model: opts?.model });
+  return runJsonPrompt<GeneratedArticle>(prompt, { timeoutMs: 180_000 });
 }
 
 export async function generateArticleFromTopic(topic: DbTopic, platform: string, opts?: ContentGenOptions): Promise<GeneratedArticle> {
@@ -137,5 +137,5 @@ export async function generateScriptFromArticle(article: GeneratedArticle, durat
     ].join("\n"),
     evolution
   );
-  return runJsonPrompt<GeneratedScript>(prompt, { timeoutMs: 180_000, model: opts?.model });
+  return runJsonPrompt<GeneratedScript>(prompt, { timeoutMs: 180_000 });
 }

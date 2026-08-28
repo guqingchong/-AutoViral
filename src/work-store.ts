@@ -85,6 +85,8 @@ export interface Work {
   /** 全自动模式：选题页「批量转为作品(自动流水线)」按钮创建 = true；其余入口 = 深度介入（逐步确认） */
   autoMode?: boolean;
   purpose?: string;  // 用途(04 方案)
+  /** 用户显式参数(批次5.8):只存用户显式给的键,最高优先级事实源(如 { duration: 300 }) */
+  explicitParams?: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
 }
@@ -218,6 +220,7 @@ function dbWorkToWork(w: DbWork, steps?: DbPipelineStep[]): Work {
     parentWorkId: w.parent_work_id,
     autoMode: w.auto_mode,
     purpose: w.purpose,
+    explicitParams: (() => { try { return w.explicit_params ? JSON.parse(w.explicit_params) : undefined; } catch { return undefined; } })(),
     createdAt: w.created_at,
     updatedAt: w.updated_at,
   };
@@ -289,6 +292,8 @@ export async function createWork(input: {
   autoMode?: boolean;
   /** 用途(04 方案)：grow_fans|sell_products|drive_traffic|brand_exposure|authority|short_drama */
   purpose?: string;
+  /** 用户显式参数(批次5.8):只存用户显式给的键 */
+  explicitParams?: Record<string, unknown>;
 }): Promise<Work> {
   await maybeMigrateLegacy();
   const now = new Date().toISOString();
@@ -316,6 +321,7 @@ export async function createWork(input: {
     dual_output: input.dualOutput ?? false,
     auto_mode: input.autoMode ?? false,
     purpose: input.purpose,
+    explicit_params: input.explicitParams ? JSON.stringify(input.explicitParams) : undefined,
     tags: [],
     created_at: now,
     updated_at: now,
@@ -376,6 +382,7 @@ export async function updateWork(id: string, updates: Partial<Work>): Promise<Wo
   if (updates.dualOutput !== undefined) dbUpdates.dual_output = updates.dualOutput;
   if (updates.autoMode !== undefined) dbUpdates.auto_mode = updates.autoMode;
   if (updates.purpose !== undefined) dbUpdates.purpose = updates.purpose;
+  if (updates.explicitParams !== undefined) dbUpdates.explicit_params = JSON.stringify(updates.explicitParams);
   if (updates.pipeline !== undefined) {
     // Sync steps back to DB
     for (const [key, step] of Object.entries(updates.pipeline)) {

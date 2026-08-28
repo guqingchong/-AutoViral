@@ -14,6 +14,7 @@ import { randomUUID } from "node:crypto";
 import { dataDir } from "../config.js";
 import { runJsonPrompt } from "./llm-json.js";
 import { renderCodeScene } from "./code-scene.js";
+import { blackSegments } from "./quality-gate.js";
 import { createTemplate } from "../db/templates-repo.js";
 import type { DbTemplate } from "../db/templates-repo.js";
 import type { DesignBrief } from "./design-brief.js";
@@ -193,9 +194,16 @@ export async function generateCodeTemplate(input: GenerateCodeTemplateInput): Pr
         size,
       });
       if (preview.success && preview.path) {
-        return await saveCodeTemplate(draft, tsx, input, size, preview.path);
+        // 2026-08-28 批次5.7 黑屏拦截(v2-M2):"可渲染即入库"曾让黑屏模版无任何拦截。
+        // blackdetect 命中即视为失败,带原因进定点修复循环;修复 2 轮仍黑则不生成
+        const blacks = await blackSegments(preview.path);
+        if (blacks.length === 0) {
+          return await saveCodeTemplate(draft, tsx, input, size, preview.path);
+        }
+        lastError = `预览可渲染但画面黑屏/纯色(${blacks[0]})——模版必须渲染出真实可见内容:检查元素尺寸/坐标/颜色对比度/占位分支`;
+      } else {
+        lastError = preview.error ?? "渲染失败(无错误信息)";
       }
-      lastError = preview.error ?? "渲染失败(无错误信息)";
     } else {
       lastError = `静态检查未过: ${staticErrors.join("; ")}`;
     }

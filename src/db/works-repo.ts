@@ -39,6 +39,7 @@ function rowToWork(row: Record<string, unknown>): DbWork {
     parent_work_id: (row.parent_work_id as string) || undefined,
     auto_mode: Boolean(row.auto_mode),
     purpose: (row.purpose as string) || undefined,
+    explicit_params: (row.explicit_params as string) || undefined,
     created_at: row.created_at as string,
     updated_at: row.updated_at as string,
   };
@@ -60,8 +61,8 @@ function rowToStep(row: Record<string, unknown>): DbPipelineStep {
 export function createWork(work: DbWork, steps: DbPipelineStep[]): DbWork {
   const db = getDb();
   const insert = db.prepare(
-    `INSERT INTO works (id, title, type, content_category, content_form, video_source, video_search_query, status, platforms, evaluation_mode, topic_hint, topic_id, article_id, script_id, digital_human_id, voice_id, cli_session_id, account_id, eval_session_ids, eval_attempts, topic_category, emotion_type, hook_type, template_id, tags, estimated_cost, actual_cost, review_comment, asset_form, asset_source, asset_budget, dual_output, parent_work_id, auto_mode, purpose, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO works (id, title, type, content_category, content_form, video_source, video_search_query, status, platforms, evaluation_mode, topic_hint, topic_id, article_id, script_id, digital_human_id, voice_id, cli_session_id, account_id, eval_session_ids, eval_attempts, topic_category, emotion_type, hook_type, template_id, tags, estimated_cost, actual_cost, review_comment, asset_form, asset_source, asset_budget, dual_output, parent_work_id, auto_mode, purpose, explicit_params, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
   const insertStep = db.prepare(
     `INSERT INTO pipeline_steps (work_id, step_key, name, status, started_at, completed_at, note, sort_order)
@@ -104,6 +105,7 @@ export function createWork(work: DbWork, steps: DbPipelineStep[]): DbWork {
       work.parent_work_id ?? null,
       work.auto_mode ? 1 : 0,
       work.purpose ?? null,
+      work.explicit_params ?? null,
       work.created_at,
       work.updated_at
     );
@@ -171,7 +173,7 @@ export function updateWork(id: string, updates: Partial<DbWork>): DbWork | undef
     `UPDATE works SET
       title = ?, type = ?, content_category = ?, content_form = ?, video_source = ?, video_search_query = ?,
       status = ?, platforms = ?, evaluation_mode = ?, topic_hint = ?, topic_id = ?, article_id = ?, script_id = ?, digital_human_id = ?, voice_id = ?, cli_session_id = ?, account_id = ?, eval_session_ids = ?, eval_attempts = ?,
-      topic_category = ?, emotion_type = ?, hook_type = ?, template_id = ?, tags = ?, estimated_cost = ?, actual_cost = ?, review_comment = ?, asset_form = ?, asset_source = ?, asset_budget = ?, dual_output = ?, auto_mode = ?, purpose = ?, updated_at = ?
+      topic_category = ?, emotion_type = ?, hook_type = ?, template_id = ?, tags = ?, estimated_cost = ?, actual_cost = ?, review_comment = ?, asset_form = ?, asset_source = ?, asset_budget = ?, dual_output = ?, auto_mode = ?, purpose = ?, explicit_params = ?, updated_at = ?
      WHERE id = ?`
   ).run(
     work.title,
@@ -207,6 +209,7 @@ export function updateWork(id: string, updates: Partial<DbWork>): DbWork | undef
     work.dual_output ? 1 : 0,
     work.auto_mode ? 1 : 0,
     work.purpose ?? null,
+    work.explicit_params ?? null,
     work.updated_at,
     id
   );

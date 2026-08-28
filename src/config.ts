@@ -78,8 +78,6 @@ export const H3_TUNNEL_DEFAULTS: H3TunnelConfig = {
 export interface Config {
   port: number;
   model: string;
-  /** 文案/脚本生成专用模型(默认 opus;批量链路的 article/script 三段式生成用,与 creator 会话 model 解耦) */
-  scriptModel?: string;
   /** LLM 直连（API agent loop）。未配置时维持 CLI 现状——零迁移成本 */
   llm?: LlmConfig;
   jimeng: { accessKey: string; secretKey: string };
@@ -146,7 +144,6 @@ export function getDefaultConfig(): Config {
   return {
     port: 3271,
     model: "opus",
-    scriptModel: "opus",
     jimeng: { accessKey: "", secretKey: "" },
     research: { enabled: true, schedule: "0 9,21 * * *", platforms: ["douyin", "xiaohongshu", "bilibili", "zhihu", "kuaishou", "channels", "wechat_mp"], topN: 10 },
     interests: [],
