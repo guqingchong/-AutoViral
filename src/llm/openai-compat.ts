@@ -26,6 +26,21 @@ import { noRetry, withRetry } from "./retry.js";
 import { extractJsonFromText, JSON_OUTPUT_DISCIPLINE } from "./json-extract.js";
 import { QuotaExhaustedError, isQuotaErrorText, reportQuotaSuccess } from "../services/quota-guard.js";
 
+/** SSE 停滞超时(2026-08-28 批次1.1):provider 保持连接但停发数据时,此前会永久挂起
+ *  (5e3 评审器僵死 14h 的技术根因之一)。
+ *  分段计时:首 delta(TTFB,含排队/预填充/非流式思考缓冲,GLM-5.3 thinking 不可关闭可长达数分钟)
+ *  与流中停滞(thinking 模式下 reasoning_delta 持续流动,可用较紧阈值)分别设限。 */
+export class StallTimeoutError extends Error {
+  readonly phase: "first_delta" | "mid_stream";
+  constructor(phase: "first_delta" | "mid_stream", timeoutMs: number) {
+    super(`LLM SSE 停滞超时(${phase === "first_delta" ? "首 delta" : "流中"},${Math.round(timeoutMs / 1000)}s 无数据)`);
+    this.name = "StallTimeoutError";
+    this.phase = phase;
+  }
+}
+const FIRST_DELTA_TIMEOUT_MS = 180_000;
+const MID_STREAM_STALL_TIMEOUT_MS = 120_000;
+
 interface OpenAiToolCallDelta {
   index: number;
   id?: string;
@@ -170,7 +185,28 @@ export class OpenAICompatProvider implements LlmProvider {
     req: ChatRequest,
     onEvent: (ev: StreamEvent) => void,
   ): Promise<{ stopReason: string; assistant: AgentMessage }> {
-    const res = await fetch(`${this.opts.baseUrl}/chat/completions`, {
+    // 停滞超时控制器:与 req.signal(用户/回合中止)独立,合并进 fetch。
+    // 纪律(2026-08-28 论证):停滞必须显式 throw StallTimeoutError——
+    // 若只中断读循环,会落入下方"部分输出组装成正常消息返回"的路径造成静默截断。
+    const stallCtrl = new AbortController();
+    let stallPhase: "first_delta" | "mid_stream" = "first_delta";
+    let stallTimer: NodeJS.Timeout | undefined;
+    const resetStallTimer = (): void => {
+      if (stallTimer) clearTimeout(stallTimer);
+      stallTimer = setTimeout(
+        () => stallCtrl.abort(),
+        stallPhase === "first_delta" ? FIRST_DELTA_TIMEOUT_MS : MID_STREAM_STALL_TIMEOUT_MS,
+      );
+    };
+    resetStallTimer();
+    const combinedSignal =
+      typeof AbortSignal.any === "function"
+        ? AbortSignal.any([req.signal, stallCtrl.signal].filter(Boolean) as AbortSignal[])
+        : (req.signal ?? stallCtrl.signal);
+
+    let res: Response;
+    try {
+      res = await fetch(`${this.opts.baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -184,8 +220,15 @@ export class OpenAICompatProvider implements LlmProvider {
         stream: true,
         stream_options: { include_usage: true },
       }),
-      signal: req.signal,
+      signal: combinedSignal,
     });
+    } catch (err) {
+      // 停滞中止(TTFB 阶段)区别于用户中止:转专用错误,便于日志/重试语义区分
+      if (stallCtrl.signal.aborted) throw new StallTimeoutError(stallPhase, FIRST_DELTA_TIMEOUT_MS);
+      // 用户/回合中止不可重试(否则 abort 后还会空转 3 次退避 ~50s)
+      if (req.signal?.aborted) throw noRetry(err as Error);
+      throw err;
+    }
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       // 诊断留证(2026-08-18 kimi reasoning_content 400 排查):400 时落盘请求体供复盘
@@ -256,6 +299,10 @@ export class OpenAICompatProvider implements LlmProvider {
       } catch {
         return; // 半行/心跳，忽略
       }
+      // 首个有意义 delta 到达 → 切换为流中停滞阈值(更紧)
+      if (stallPhase === "first_delta" && (chunk.usage || chunk.choices?.[0])) {
+        stallPhase = "mid_stream";
+      }
       if (chunk.usage) {
         onEvent({
           type: "usage",
@@ -296,19 +343,31 @@ export class OpenAICompatProvider implements LlmProvider {
       }
     };
 
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      let idx: number;
-      while ((idx = buf.indexOf("\n")) >= 0) {
-        const line = buf.slice(0, idx).trim();
-        buf = buf.slice(idx + 1);
-        if (!line.startsWith("data:")) continue;
-        const payload = line.slice(5).trim();
-        if (payload === "[DONE]") continue;
-        handleData(payload);
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        resetStallTimer(); // 任何数据块到达都证明连接活着
+        buf += decoder.decode(value, { stream: true });
+        let idx: number;
+        while ((idx = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, idx).trim();
+          buf = buf.slice(idx + 1);
+          if (!line.startsWith("data:")) continue;
+          const payload = line.slice(5).trim();
+          if (payload === "[DONE]") continue;
+          handleData(payload);
+        }
       }
+    } catch (err) {
+      // 流中停滞中止 → 显式抛 StallTimeoutError(纪律:绝不落入下方部分输出正常返回路径)
+      if (stallCtrl.signal.aborted) {
+        throw new StallTimeoutError(stallPhase, stallPhase === "first_delta" ? FIRST_DELTA_TIMEOUT_MS : MID_STREAM_STALL_TIMEOUT_MS);
+      }
+      if (req.signal?.aborted) throw noRetry(err as Error);
+      throw err;
+    } finally {
+      if (stallTimer) clearTimeout(stallTimer);
     }
     if (req.signal?.aborted) {
       onEvent({ type: "message_stop", stopReason: "aborted" });

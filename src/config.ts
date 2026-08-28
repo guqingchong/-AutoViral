@@ -45,6 +45,7 @@ export interface LlmConfig {
     maxTurnMinutes?: number;     // 默认 30
     dailyTokenBudget?: number;   // 成本熔断
     bashBlocklist?: string[];    // bash 命令黑名单正则
+    evalTimeoutMinutes?: number; // 评审器硬超时,默认 15(2026-08-28 批次1.2:防评审器无限挂起)
   };
 }
 
