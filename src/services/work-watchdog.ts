@@ -6,6 +6,7 @@ import { getDb } from "../db/connection.js";
 import * as queueRepo from "../db/work-queue-repo.js";
 import { latestTimestamp, parseTsMs } from "../db/time.js";
 import { kickRunner } from "./work-queue.js";
+import { failVisible } from "./fail-visible.js";
 
 /** 停滞阈值：最近活动超过 10 分钟视为停滞 */
 export const STALL_MS = 10 * 60 * 1000;
@@ -86,6 +87,55 @@ export function findStalledWorks(now: Date = new Date()): StalledWork[] {
 
 let timer: ReturnType<typeof setInterval> | null = null;
 let scanning = false;
+/** 批次7.8:扩展维度的告警去重(每个对象每个维度只告警一次,防 60s 扫描刷屏) */
+const alerted = new Set<string>();
+const alertOnce = (key: string, scope: { workId?: string; stage?: string }, reason: string): void => {
+  if (alerted.has(key)) return;
+  alerted.add(key);
+  failVisible(scope, reason);
+};
+
+/**
+ * 批次7.8 扩展维度(v2-M6 X-1):reviewing 滞留/数字人渲染池/发布记录 此前全是监控盲区。
+ * 只告警不自动处置(reviewing=等人工是正常态,但滞留 24h+ 值得提醒;
+ * 数字人/发布的停滞另有轮询/cron 负责恢复,这里兜底可见性)。
+ */
+function scanExtendedDimensions(now: Date): void {
+  const db = getDb();
+  // reviewing 滞留 >24h(全库曾 8/12 作品永久停 reviewing)
+  const reviewingRows = db
+    .prepare("SELECT id, updated_at FROM works WHERE status = 'reviewing'")
+    .all() as { id: string; updated_at: string }[];
+  for (const r of reviewingRows) {
+    const ms = parseTsMs(r.updated_at);
+    if (ms !== null && now.getTime() - ms > 24 * 3600_000) {
+      alertOnce(`reviewing:${r.id}`, { workId: r.id, stage: "reviewing" },
+        `作品已停在"待审核"超过 24 小时,请前往审核或处置`);
+    }
+  }
+  // 数字人渲染任务 running 滞留 >30min(DB 级兜底;轮询超时修复之外的漏网)
+  const dhRows = db
+    .prepare("SELECT id, work_id, updated_at FROM digital_human_jobs WHERE status = 'running'")
+    .all() as { id: string; work_id: string; updated_at: string }[];
+  for (const r of dhRows) {
+    const ms = parseTsMs(r.updated_at);
+    if (ms !== null && now.getTime() - ms > 30 * 60_000) {
+      alertOnce(`dh:${r.id}`, { workId: r.work_id, stage: "digital-human" },
+        `数字人渲染任务 ${r.id.slice(0, 12)} 滞留 running 超 30 分钟,疑似无人轮询`);
+    }
+  }
+  // 发布记录 publishing 滞留 >15min(发布 cron 的恢复之外的兜底告警)
+  const pubRows = db
+    .prepare("SELECT id, work_id, platform, updated_at FROM publish_records WHERE status = 'publishing'")
+    .all() as { id: number; work_id: string; platform: string; updated_at: string }[];
+  for (const r of pubRows) {
+    const ms = parseTsMs(r.updated_at);
+    if (ms !== null && now.getTime() - ms > 15 * 60_000) {
+      alertOnce(`pub:${r.id}`, { workId: r.work_id, stage: "publish" },
+        `发布记录 #${r.id}(${r.platform})停在 publishing 超 15 分钟,疑似挂起`);
+    }
+  }
+}
 
 async function scanOnce(deps: WatchdogDeps): Promise<void> {
   if (scanning) return;
@@ -97,6 +147,7 @@ async function scanOnce(deps: WatchdogDeps): Promise<void> {
       if (!queueRepo.getItem(stalled.id)) queueRepo.enqueue(stalled.id);
       kickRunner();
     }
+    scanExtendedDimensions(new Date());
   } finally {
     scanning = false;
   }

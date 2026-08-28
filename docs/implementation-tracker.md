@@ -123,18 +123,27 @@ code-scene 渲染 flake,单跑 20/20 通过)。
   "轮询不刷新的端点"修复
 - [x] 6.6 回合软着陆:到期前 5min 注入收尾指令(半成品落盘+断点说明+禁开新长任务)
 
-## 批次 7:评审软化与失败通道 【⬜】
+## 批次 7:评审软化与失败通道 【✅ 完成 2026-08-28】
 
-前置:批次 1(eval_blocked 封堵)、批次 2(criteria 合一)、批次 4(活性判定)。
+前置(批次 1/2/4)均已落地。验证:tsc + vite + 全量测试(3 个超时型 flake 单跑 50/50 通过;
+publish-account 2 个测试按"禁重发"新契约更新)。
 
-- [ ] 7.1 M5 熔断软化:minor-only → awaiting_human 状态 + UI 人工放行/指导重试按钮
-- [ ] 7.2 M5 重复问题提示(与 M13.1 同一实现,buildFeedbackPrompt,Jaccard 相似度 ≥0.6)
-- [ ] 7.3 M5 图文 criteria 分文件(criteria/${work.type}/${step}.md 优先,step-contract 自检侧同改)
-- [ ] 7.4 M5 按阶段降档:eval:research/eval:plan 档(先实测 glm-5.3-flash 成本与指令服从)
-- [ ] 7.5 M6 failVisible 助手 + 20+ 静默失败站点逐点替换
-- [ ] 7.6 M6 发布安全两修:publish-service.ts:159 + publishing.ts:151 两处超时取消底层;publishing.ts:127 禁重发
-- [ ] 7.7 M6 内存态对账:batchConvertJobs 重启由 topic.status 反推
-- [ ] 7.8 M6 watchdog 扩展:reviewing/渲染池/发布/publish_records 维度
+- [x] 7.1 M5 熔断软化:剩余问题全 minor → awaiting_human 新状态(不杀作品),
+  含 critical/major 维持硬熔断;force-pass/retry 白名单接纳;Works/PipelineSteps/Studio 全呈现
+- [x] 7.2 M5 重复问题提示(与 M13.1 同一实现):buildFeedbackPrompt 跨轮 bigram Jaccard ≥0.6
+  比对,命中附"换路警示+备选策略表"(素材不符→换源不换描述等)
+- [x] 7.3 M5 图文 criteria 分文件:criteria/image-text/plan.md+assembly.md 新建
+  (不再要求 final.mp4);readCriteriaForStep/readCriteriaPathForStep 双挂点(创作自检+评审)
+- [x] 7.4 M5 按阶段降档:config.llm.evalLightModel("provider:model"),research/plan/material-search
+  评审可降档,assets/assembly 必须看图不受影响
+- [x] 7.5 M6 failVisible 助手(services/fail-visible.ts)+ 关键站点:batch job 崩溃标 error
+  (不再标 done);DH-1 数字人轮询超时回写 DB failed+通知
+- [x] 7.6 M6 发布安全:PublishInput 加 AbortSignal,两处超时护栏(publish-service:159 +
+  publishing.ts:151)超时即 abort 底层;已 published/reviewing 记录禁重发(403 语义)
+- [x] 7.7 M6 batchConvertJobs 重启反推(轻量):404 文案说明影响面与自查路径;
+  A-1 评论 externalCommentId 合成稳定哈希键(去重生效)
+- [x] 7.8 M6 watchdog 扩展:reviewing 滞留 24h/数字人 running 30min/发布 publishing 15min
+  三维告警(去重防刷屏);A-4 登录态失效垃圾指标拒入库+通知(账号与作品两级)
 
 ## 批次 8:模版契约与台账遥测 【⬜】
 

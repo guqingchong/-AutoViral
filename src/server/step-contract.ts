@@ -14,7 +14,7 @@
  * 注入点(api.ts):/step 端点、会话启动 prompt、advance 自动续命消息——三处共用本模块。
  */
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -87,6 +87,21 @@ export function buildAssetConstraintSection(assetForm?: string, assetSource?: st
   return lines.length ? `素材约束:\n${lines.join("\n")}` : "";
 }
 
+/** 批次7.3:评审标准按作品类型分文件——图文作品读 criteria/image-text/<step>.md
+ *  (此前图文被要求交付 final.mp4,幻觉打分根源),缺省回落通用 <step>.md */
+export function readCriteriaForStep(step: string, workType?: string): string {
+  const typed = workType === "image-text" ? join(CRITERIA_DIR, "image-text", `${step}.md`) : null;
+  if (typed && existsSync(typed)) return readFileSync(typed, "utf-8").trim();
+  return readFileSync(join(CRITERIA_DIR, `${step}.md`), "utf-8").trim();
+}
+
+/** 同上的路径版(评审 prompt 告诉 agent 读哪个文件) */
+export function readCriteriaPathForStep(step: string, workType?: string): string {
+  const typed = workType === "image-text" ? join(CRITERIA_DIR, "image-text", `${step}.md`) : null;
+  if (typed && existsSync(typed)) return typed;
+  return join(CRITERIA_DIR, `${step}.md`);
+}
+
 /**
  * 阶段契约段:素材三维约束 + 本阶段验收标准(评审拿同一份 criteria/<step>.md 评分,
  * 创作者拿它自检)。把"闭卷考试"变成"开卷自检",目标一次通过、减少驳回反复。
@@ -94,7 +109,7 @@ export function buildAssetConstraintSection(assetForm?: string, assetSource?: st
  */
 export function buildStepContractSection(
   step: string,
-  work: { assetForm?: string; assetSource?: string; assetBudget?: string; digitalHumanId?: string | null },
+  work: { assetForm?: string; assetSource?: string; assetBudget?: string; digitalHumanId?: string | null; type?: string },
   opts: { includeAssets?: boolean } = {},
 ): string {
   const parts: string[] = [];
@@ -103,7 +118,7 @@ export function buildStepContractSection(
     if (assetSection) parts.push(assetSection);
   }
   try {
-    const criteria = readFileSync(join(CRITERIA_DIR, `${step}.md`), "utf-8").trim();
+    const criteria = readCriteriaForStep(step, work.type);
     if (criteria) {
       parts.push(`## 本阶段验收标准(评审将逐条核对;交付前请逐条自检,目标一次通过)\n\n${criteria}`);
     }

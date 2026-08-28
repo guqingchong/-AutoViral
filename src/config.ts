@@ -38,6 +38,10 @@ export interface LlmConfig {
   providers?: Record<string, LlmProviderConfig>;
   /** 分阶段模型路由：值形如 "deepseek:deepseek-v4-pro" 或裸模型名（走 defaultProvider） */
   models?: Partial<Record<"research" | "plan" | "assets" | "assembly" | "eval" | "script", string>>;
+  /** 批次7.4:无视觉要求阶段(research/plan/material-search)评审的轻量模型("provider:model"),
+   *  设置后这些阶段的评审从 eval 档降档到该模型(机械项已被机器门禁覆盖,评审只需轻判断);
+   *  assets/assembly 必须看图,恒走 eval 档+视觉路由,不受此影响 */
+  evalLightModel?: string;
   /** 可选价格表（元/百万 tokens），用于 llm_usage 成本估算：{ "deepseek:deepseek-v4-pro": {input:4.5, output:13.5, cacheRead:0.15} } */
   priceTable?: Record<string, { input: number; output: number; cacheRead?: number }>;
   guard?: {

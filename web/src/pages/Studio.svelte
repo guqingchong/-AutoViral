@@ -582,6 +582,10 @@
       case "eval_blocked":
         evalBlocked = { step: data.step, attempt: data.attempt };
         break;
+      case "awaiting_human":
+        // 批次7.1 熔断软化:仅剩 minor 问题,转人工待决(复用受阻横幅与处置按钮)
+        evalBlocked = { step: data.step, attempt: data.attempt };
+        break;
       case "turn_complete":
         if (inactivityTimer) clearTimeout(inactivityTimer);
         streaming = false;

@@ -127,6 +127,10 @@ export async function publishToPlatform(workId: string, platform: string, input:
   const existing = recordsRepo.listPublishRecords({ workId }).find(
     (r) => r.platform === platform && r.status !== "failed" && (r.account_id ?? null) === (accountId ?? null)
   );
+  // 批次7.6:已 published 记录禁止原样重发(此前 published 也被捞出来复用置回 publishing = 重复发帖)
+  if (existing && (existing.status === "published" || existing.status === "reviewing")) {
+    throw new Error(`该作品在 ${platform} 已有 ${existing.status === "published" ? "已发布" : "审核中"}记录(#${existing.id}),禁止重复发布;如确需重发请先人工作废该记录`);
+  }
   let recordId: number;
   if (existing) {
     recordId = existing.id;
@@ -148,9 +152,11 @@ export async function publishToPlatform(workId: string, platform: string, input:
   try {
     // 发布外层超时护栏(2026-08-19 P2):Playwright 流程正常 5-8 分钟,给 10 分钟;
     // 无护栏时挂死的请求会让发布路由永不返回(前端按钮永远"发布中")
+    // 批次7.6:超时同时 abort 底层(与 publish-service 同型修复)
+    const abort = new AbortController();
     result = await Promise.race([
-      publisher.publish({ ...input, accountId }),
-      new Promise<PublishOutput>((_, rej) => setTimeout(() => rej(new Error("发布超时(10min)")), 10 * 60_000)),
+      publisher.publish({ ...input, accountId, signal: abort.signal }),
+      new Promise<PublishOutput>((_, rej) => setTimeout(() => { abort.abort(); rej(new Error("发布超时(10min,已尝试取消底层流程)")); }, 10 * 60_000)),
     ]);
   } catch (err) {
     result = {

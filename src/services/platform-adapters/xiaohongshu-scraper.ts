@@ -116,7 +116,8 @@ export class XiaohongshuScraper implements PlatformAdapter {
 
       return {
         comments: result.comments.map((c) => ({
-          externalCommentId: undefined,
+          // 批次7.7(A-1):DOM 无评论 ID——用 内容哈希合成稳定去重键(此前恒 undefined,去重永不命中+无限分页)
+          externalCommentId: `${externalId}:${Buffer.from(`${c.authorName}:${c.content}`).toString("base64url").slice(0, 32)}`,
           authorName: c.authorName,
           authorId: c.authorId || undefined,
           content: c.content,

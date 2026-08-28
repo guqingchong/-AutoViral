@@ -8,6 +8,7 @@
 
 import { listPublishRecords } from "../db/publish-records-repo.js";
 import { createMetric } from "../db/platform-metrics-repo.js";
+import { failVisible } from "./fail-visible.js";
 import { listAccounts } from "../db/accounts-repo.js";
 import { getAdapterForAccount, listAdapters } from "./platform-adapters/registry.js";
 import { collectComments } from "./comment-service.js";
@@ -58,6 +59,13 @@ export function startScheduler(
       if (!adapter) continue;
       try {
         const metrics = await adapter.collectAccountMetrics();
+        // 批次7.8(A-4):登录态失效时选择器全空,undefined 垃圾指标照常入库——
+        // 拒收并通知(登录态失效要告警,不是静默)
+        if (metrics.followers === undefined || metrics.followers === null) {
+          console.warn(`[analytics-scheduler] ${account.platform}/${account.name} 指标为空(疑似登录态失效),垃圾指标未入库`);
+          failVisible({ stage: "analytics" }, `${account.platform}/${account.name} 指标采集为空,疑似登录态失效——请到渠道页重新扫码`);
+          continue;
+        }
         await createMetric({
           platform: account.platform,
           account_id: account.id,
@@ -125,6 +133,10 @@ export function startScheduler(
 
       try {
         const metrics = await adapter.collectPostMetrics(record.platform_post_id);
+        if (metrics.views === undefined && metrics.likes === undefined) {
+          console.warn(`[analytics-scheduler] ${record.platform}#${record.id} 作品指标为空(疑似登录态失效),未入库`);
+          continue;
+        }
         await createMetric({
           publish_record_id: record.id,
           platform: record.platform,

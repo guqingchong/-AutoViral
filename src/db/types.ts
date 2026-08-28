@@ -9,7 +9,7 @@ export type DbWorkStatus =
   | "approved"
   | "published"
   | "failed";
-export type DbStepStatus = "pending" | "active" | "evaluating" | "done" | "skipped" | "eval_blocked";
+export type DbStepStatus = "pending" | "active" | "evaluating" | "done" | "skipped" | "eval_blocked" | "awaiting_human";
 
 export interface DbWork {
   id: string;

@@ -34,7 +34,8 @@ export type WorkStatus =
 
 export interface PipelineStep {
   name: string;
-  status: "pending" | "active" | "evaluating" | "done" | "skipped" | "eval_blocked";
+  // awaiting_human(2026-08-28 批次7.1):评审熔断软化——只剩 minor 问题时不杀作品,转人工待决
+  status: "pending" | "active" | "evaluating" | "done" | "skipped" | "eval_blocked" | "awaiting_human";
   startedAt?: string;
   completedAt?: string;
   note?: string;
@@ -577,7 +578,7 @@ export function deriveStatusFromPipeline(
   if (steps.every(([, s]) => isFinished(s))) return "reviewing";
 
   const activeEntry = steps.find(
-    ([, s]) => s.status === "active" || s.status === "evaluating" || s.status === "eval_blocked",
+    ([, s]) => s.status === "active" || s.status === "evaluating" || s.status === "eval_blocked" || s.status === "awaiting_human",
   );
   if (activeEntry) return STEP_TO_STATUS[activeEntry[0]] ?? current;
 
