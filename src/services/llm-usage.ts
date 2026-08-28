@@ -5,6 +5,9 @@
  * - 成本按 config.llm.priceTable（元/百万 tokens）估算，缺价目记 0 但不阻断记账；
  * - 日累计超 budget.dailyLimitYuan → 全部 running/queued 队列项置 paused + 错误日志
  *   （恢复入口：设置页改预算或次日自动——runner 只跳过 paused，不自动唤醒）。
+ *
+ * 2026-08-28 批次8.6:成本台账修复——cost 恒 0 的根因是 priceTable 纯缺配
+ * (逻辑正确但全库无默认值写入)。现在:内置默认刊例价 + 未知模型 warn(不再静默归零)。
  */
 
 import { getDb } from "../db/connection.js";
@@ -18,12 +21,38 @@ export interface UsageRecord {
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens?: number;
+  /** 批次8.7:调用墙钟(毫秒)与思考 token 估算(可选,缺省 null) */
+  latencyMs?: number;
+  thinkingTokens?: number;
 }
 
-/** 按价目表估算单次成本（元）。priceTable key 形如 "deepseek:deepseek-v4-pro" */
+/** 内置默认刊例价(元/百万 tokens,2026-08-28 公开刊例估算值,设置页 priceTable 可覆盖)。
+ *  注意:key 是 provider:model 精确匹配,新增模型必须同步加行 */
+const DEFAULT_PRICE_TABLE: Record<string, { input: number; output: number; cacheRead?: number }> = {
+  "deepseek:deepseek-v4-flash": { input: 2, output: 8, cacheRead: 0.2 },
+  "deepseek:deepseek-v4-pro": { input: 4, output: 12, cacheRead: 0.4 },
+  "deepseek:deepseek-v4-flash-vision-exp": { input: 2, output: 8, cacheRead: 0.2 },
+  "kimi:kimi-for-coding": { input: 6, output: 24 },
+  "glm:glm-4v": { input: 4, output: 12 },
+  "glm:glm-4.6": { input: 2, output: 8 },
+  "glm:glm-5.3-flash": { input: 1.1, output: 3.6, cacheRead: 0.2 }, // $0.15/$0.50 刊例
+};
+
+/** 未知模型 warn 去重(每个模型只警告一次,防刷屏) */
+const warnedUnknownModels = new Set<string>();
+
+/** 按价目表估算单次成本（元）。priceTable key 形如 "deepseek:deepseek-v4-pro";
+ *  用户配置优先,缺省回落内置刊例;两边都没有 → warn 并记 0(不再静默) */
 export function estimateCostYuan(config: Config, r: UsageRecord): number {
-  const price = config.llm?.priceTable?.[`${r.provider}:${r.model}`];
-  if (!price) return 0;
+  const key = `${r.provider}:${r.model}`;
+  const price = config.llm?.priceTable?.[key] ?? DEFAULT_PRICE_TABLE[key];
+  if (!price) {
+    if (!warnedUnknownModels.has(key)) {
+      warnedUnknownModels.add(key);
+      console.warn(`[llm-usage] 未知模型 ${key} 无价目(内置刊例与用户配置均未覆盖),成本记 0——请在设置页补 priceTable`);
+    }
+    return 0;
+  }
   return (
     (r.inputTokens * price.input) / 1e6 +
     (r.outputTokens * price.output) / 1e6 +
@@ -35,10 +64,10 @@ export function recordUsage(config: Config, r: UsageRecord): void {
   const cost = estimateCostYuan(config, r);
   getDb()
     .prepare(
-      `INSERT INTO llm_usage (work_id, stage, provider, model, input_tokens, output_tokens, cache_read, cost_yuan)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO llm_usage (work_id, stage, provider, model, input_tokens, output_tokens, cache_read, cost_yuan, latency_ms, thinking_tokens)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
-    .run(r.workId ?? null, r.stage ?? null, r.provider, r.model, r.inputTokens, r.outputTokens, r.cacheReadTokens ?? 0, cost);
+    .run(r.workId ?? null, r.stage ?? null, r.provider, r.model, r.inputTokens, r.outputTokens, r.cacheReadTokens ?? 0, cost, r.latencyMs ?? null, r.thinkingTokens ?? null);
 }
 
 /** 今日累计成本（元）。按本地日期切（llm_usage.ts 存 UTC datetime('now')，+8h 换算） */

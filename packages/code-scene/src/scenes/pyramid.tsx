@@ -15,7 +15,7 @@ export interface PyramidParams {
 
 /** 金字塔层级:底层先行弹入,逐层向上堆叠构建,塔尖最后落成 */
 export default function makePyramid(params: PyramidParams) {
-  const theme = getSceneTheme(params.theme);
+  const theme = getSceneTheme(params.theme, params.themeTokens);
   const levels = params.levels.slice(0, 5);
   const n = levels.length;
   return makeScene2D("pyramid", function* (view) {

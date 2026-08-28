@@ -173,3 +173,25 @@ export const GOLDEN_EXAMPLE_NOTES = [
   "变量：所有会随内容变化的文字都是 {{变量}}，装饰性文字（01/02/03）才是写死的",
   "安全区：左右边距 70px，最底元素 1772px，距画布底 148px",
 ].join("\n");
+
+/** 渲染端能力白名单(2026-08-28 批次8.5,v2-M2④/M4):声明的能力必须在渲染端有实现,
+ *  无实现路径的声明(此前 decorations 自由文本静默丢弃、layout 渲染端只认 center)拒绝入库 */
+export const RENDERER_DECORATIONS = ["accent_bar", "serial_number", "divider", "corner_marks"] as const;
+
+/** 图文模版的声明-能力一致性校验:返回问题清单(空=通过)。
+ *  decorations 严格白名单(未实现的声明会被渲染端静默丢弃=能力说谎,拒绝入库);
+ *  layout 不硬拦:渲染端对任意 layout 都有兜底形态(center 检测居中,其余走默认排布),
+ *  只对"既不在 LAYOUTS 清单又不含 center"的完全自由文本记 warn 级提示(不入 issues) */
+export function validateDeclaredCapabilities(t: { kind?: string; layers?: unknown[] }): string[] {
+  const issues: string[] = [];
+  if (t.kind !== "image-text") return issues;
+  const decos = new Set<string>(RENDERER_DECORATIONS);
+  for (const l of t.layers ?? []) {
+    const spec = l as Record<string, any>;
+    if (spec?.type !== "image-text-layout") continue;
+    for (const d of (spec.decorations as string[] | undefined) ?? []) {
+      if (!decos.has(d)) issues.push(`decoration "${d}" 渲染端未实现(已实现: ${[...decos].join("/")})`);
+    }
+  }
+  return issues;
+}

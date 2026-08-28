@@ -129,7 +129,7 @@ export class AgentLoop {
   }
 
   /** usage 事件落账(P3-T2) + 日预算熔断。异步执行,不阻塞主循环;失败仅告警 */
-  private recordUsage(ev: { inputTokens: number; outputTokens: number; cacheReadTokens?: number }, useVision: boolean): void {
+  private recordUsage(ev: { inputTokens: number; outputTokens: number; cacheReadTokens?: number; latencyMs?: number; thinkingTokens?: number }, useVision: boolean): void {
     const ctx = this.deps.usageContext;
     if (!ctx) return;
     const provider = useVision && this.deps.visionProvider ? this.deps.visionProvider : this.deps.provider;
@@ -143,6 +143,7 @@ export class AgentLoop {
         recordUsage(config, {
           workId: ctx.workId, stage: ctx.stage, provider: provider.name, model,
           inputTokens: ev.inputTokens, outputTokens: ev.outputTokens, cacheReadTokens: ev.cacheReadTokens,
+          latencyMs: ev.latencyMs, thinkingTokens: ev.thinkingTokens,
         });
         enforceDailyBudget(config, () => {
           let n = 0;

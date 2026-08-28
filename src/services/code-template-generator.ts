@@ -87,6 +87,48 @@ export default function makeScene(params: any) {
 }
 `;
 
+/** 批次8.4 template_fidelity:抽帧 + 视觉模型比对设计意图(v2 病根 7"生成与设计意图
+ *  无视觉验证闭环"的修复)。返回 null=通过;返回文本=问题描述(进定点修复循环)。
+ *  视觉通道不可用时放行并 warn(不让 fidelity 成为生产单点故障) */
+async function checkTemplateFidelity(previewPath: string, input: GenerateCodeTemplateInput): Promise<string | null> {
+  try {
+    const { execFile } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const execFileAsync = promisify(execFile);
+    const frames: string[] = [];
+    for (const [i, t] of [0.5, 2.5].entries()) {
+      const fp = join(dataDir, "tmp", `fidelity_${randomUUID().slice(0, 8)}_${i}.png`);
+      await mkdir(join(dataDir, "tmp"), { recursive: true });
+      await execFileAsync("ffmpeg", ["-ss", String(t), "-i", previewPath, "-frames:v", "1", "-y", fp], { timeout: 30_000 });
+      frames.push(fp);
+    }
+    const { loadConfig } = await import("../config.js");
+    const { chatVisionJson } = await import("../llm/vision-json.js");
+    const intent = input.brief
+      ? JSON.stringify({ palette: input.brief.palette, layout: input.brief.layout, motion: input.brief.motion, elements: input.brief.elements })
+      : input.style;
+    const r = await chatVisionJson<{ score?: number; problems?: string[] }>(
+      await loadConfig(),
+      frames,
+      [
+        "你是视觉验收员。以下是模版渲染预览的抽帧,设计意图如下:",
+        intent,
+        "判断渲染结果与设计意图的还原度。只输出 JSON:",
+        '{"score": 1-10 整数, "problems": ["不还原之处"]}',
+        "评分锚点:9-10=版式/配色/元素全面还原;6-8=主体还原局部偏差;1-5=明显货不对板(风格/配色/结构错位)",
+      ].join("\n"),
+      { timeoutMs: 120_000 },
+    );
+    if ((r.score ?? 10) < 6) {
+      return `设计意图还原度不足(${r.score}/10): ${(r.problems ?? []).join("; ").slice(0, 200) || "未说明"}`;
+    }
+    return null;
+  } catch (err) {
+    console.warn(`[code-template-gen] fidelity 检查通道不可用,放行(不阻断): ${(err as Error).message}`);
+    return null;
+  }
+}
+
 /** 生成 prompt(导出供单测断言设计约束不丢失) */
 export function buildCodeTemplatePrompt(input: GenerateCodeTemplateInput): string {
   const W = input.orientation === "landscape" ? 1920 : 1080;
@@ -198,9 +240,15 @@ export async function generateCodeTemplate(input: GenerateCodeTemplateInput): Pr
         // blackdetect 命中即视为失败,带原因进定点修复循环;修复 2 轮仍黑则不生成
         const blacks = await blackSegments(preview.path);
         if (blacks.length === 0) {
-          return await saveCodeTemplate(draft, tsx, input, size, preview.path);
+          // 批次8.4:黑屏过关后过 fidelity(抽帧比对设计意图),不足也进修复循环
+          const fidelityIssue = await checkTemplateFidelity(preview.path, input);
+          if (!fidelityIssue) {
+            return await saveCodeTemplate(draft, tsx, input, size, preview.path);
+          }
+          lastError = fidelityIssue;
+        } else {
+          lastError = `预览可渲染但画面黑屏/纯色(${blacks[0]})——模版必须渲染出真实可见内容:检查元素尺寸/坐标/颜色对比度/占位分支`;
         }
-        lastError = `预览可渲染但画面黑屏/纯色(${blacks[0]})——模版必须渲染出真实可见内容:检查元素尺寸/坐标/颜色对比度/占位分支`;
       } else {
         lastError = preview.error ?? "渲染失败(无错误信息)";
       }
@@ -277,8 +325,9 @@ async function saveCodeTemplate(
         ? [{ name: "imageSrc", type: "image" as const, label: "图片窗口素材(必须填充真实素材,禁止占位)" }]
         : []),
     ],
-    // kind=code 约定:layers[0] 场景配置;customCode 为 LLM 生成的 TSX 源码
-    layers: [{ scene: "custom", customCode: tsx, params: {} }],
+    // kind=code 约定:layers[0] 场景配置;customCode 为 LLM 生成的 TSX 源码;
+    // brief/style 随 layers[0] 持久化(批次8.4:fidelity 审计与 refine 的设计意图依据)
+    layers: [{ scene: "custom", customCode: tsx, params: {}, brief: input.brief ?? null, style: input.style }],
     audio: [],
     transitions: [],
     preview_url: `/api/templates/${id}/preview-file`,

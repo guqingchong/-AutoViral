@@ -11,7 +11,7 @@ export interface LogicChainParams {
 
 /** 逻辑链条:标题淡入 → 节点逐节弹入 → 箭头连线生长 */
 export default function makeLogicChain(params: LogicChainParams) {
-  const theme = getSceneTheme(params.theme);
+  const theme = getSceneTheme(params.theme, params.themeTokens);
   const H = DESIGN_H;
   const items = params.chain.slice(0, 4);
   const n = items.length;

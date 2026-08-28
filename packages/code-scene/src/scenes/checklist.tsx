@@ -17,7 +17,7 @@ export interface ChecklistParams {
 
 /** 清单打勾:逐项弹入 + 对勾描边动画,进度点同步推进 */
 export default function makeChecklist(params: ChecklistParams) {
-  const theme = getSceneTheme(params.theme);
+  const theme = getSceneTheme(params.theme, params.themeTokens);
   const accent = theme.palette[1] ?? theme.palette[0];
   const items = params.items.slice(0, 6);
   const n = items.length;

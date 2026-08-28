@@ -18,7 +18,7 @@ export interface BarCompareParams {
 
 /** 条形对比:柱条弹簧生长+数值随动滚动,最高项高亮。比 chart 端点更"设计感"的轻量数据卡 */
 export default function makeBarCompare(params: BarCompareParams) {
-  const theme = getSceneTheme(params.theme);
+  const theme = getSceneTheme(params.theme, params.themeTokens);
   const bars = params.bars.slice(0, 5);
   const n = bars.length;
   const maxV = Math.max(...bars.map((b) => b.value), 1);

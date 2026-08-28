@@ -13,7 +13,7 @@ export interface StructureGrowthParams {
 
 /** 中心辐射结构图:中心弹入 → 分支错峰弹入 → 连线生长 → 标签淡入 → 循环箭头 → 中心脉冲 */
 export default function makeStructureGrowth(params: StructureGrowthParams) {
-  const theme = getSceneTheme(params.theme);
+  const theme = getSceneTheme(params.theme, params.themeTokens);
   const W = DESIGN_W, H = DESIGN_H;
   const items = params.branches.slice(0, 4);
   const n = items.length;
