@@ -119,6 +119,7 @@ export async function submitAndPoll(
     method: 'POST',
     headers: submitReq.headers,
     body: submitReq.body,
+    signal: AbortSignal.timeout(30_000), // 批次6.4
   })
   const submitData = await submitRes.json() as any
   if (submitData.code && submitData.code !== 10000 && submitData.code !== 0) {
@@ -145,6 +146,7 @@ export async function submitAndPoll(
       method: 'POST',
       headers: queryReq.headers,
       body: queryReq.body,
+      signal: AbortSignal.timeout(15_000), // 批次6.4:单次查询挂起不再冻结轮询循环
     })
     const queryData = await queryRes.json() as any
 
@@ -164,7 +166,8 @@ export async function submitAndPoll(
 // ── 下载 ─────────────────────────────────────────────────────────────────────
 
 export async function downloadFile(url: string, destPath: string): Promise<void> {
-  const res = await fetch(url)
+  // 批次6.4:下载加 120s 超时(此前无超时,隧道半开/对端挂起即无限等待)
+  const res = await fetch(url, { signal: AbortSignal.timeout(120_000) })
   if (!res.ok) throw new Error(`Download failed: ${res.status} ${res.statusText}`)
   const buffer = Buffer.from(await res.arrayBuffer())
   await mkdir(dirname(destPath), { recursive: true })

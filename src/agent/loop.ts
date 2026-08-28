@@ -196,12 +196,26 @@ export class AgentLoop {
     }
 
     this.deps.onLoopEvent({ type: "turn_start" });
+    // 批次6.6 软着陆:到期前 5min 注入收尾指令,agent 有一步机会主动落盘写断点,
+    // 不再到点硬杀全回合作废(恢复时只能靠恢复 prompt 猜断点)
+    let softLandingWarned = false;
     try {
       for (let step = 0; ; step++) {
         if (step > maxSteps) throw new LoopGuardError(`回合工具步数超过 ${maxSteps}，判定死循环`);
         if (Date.now() > deadline) throw new LoopGuardError("回合超时（maxTurnMinutes）");
         if ((this.state as LoopState) === "aborted") {
           return { resultText: "", stopReason: "aborted" };
+        }
+        if (!softLandingWarned && deadline - Date.now() < 5 * 60_000) {
+          softLandingWarned = true;
+          this.messages.push({
+            role: "user",
+            content: [{
+              type: "text",
+              text: "系统提示:本回合剩余约 5 分钟,到点将被强制结束。请立即收尾:①正在跑的长任务等它结束或主动终止 ②把半成品与断点说明写入当前阶段文件(已完成什么/下一步从哪继续) ③禁止新开任何长耗时任务。",
+            }],
+          });
+          this.deps.onLoopEvent({ type: "tool_progress", text: "回合剩余约 5 分钟,已通知 agent 收尾(软着陆)" });
         }
 
         // 结构压缩(P2-T2):估算超阈值先把中段换确定性摘要再发,防上下文无限膨胀

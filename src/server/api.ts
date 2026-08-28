@@ -965,6 +965,27 @@ apiRoutes.post("/api/generate/video", async (c) => {
   if (!provider) {
     return c.json({ success: false, error: "No video provider available", code: "INVALID_PARAMS" }, 400);
   }
+  // 批次6.3 eco 成本管控代码级强制(v2 病根 9):此前纯 prompt 自觉,eco 档作品可任意调云端。
+  // eco 档只允许 local-h3;H3 离线时返回 INSTANCE_OFFLINE 由 provider 的固定文案引导开机
+  const genWork = await getWork(workId);
+  if (genWork?.assetBudget === "eco") {
+    if (provider.name !== "local-h3") {
+      log("warn", "api", "eco_cloud_blocked", workId, { provider: provider.name });
+      return c.json({
+        success: false,
+        error: `本作品为 eco 成本档,禁止使用云端视频生成(${provider.name})。请改用 local-h3(AutoDL 实例);若实例离线,请在 AutoDL 控制台开机后重试。`,
+        code: "ECO_BUDGET_BLOCKED",
+      }, 403);
+    }
+    // assertH3Ready 接线(此前写了从未接线):eco+local-h3 且实例离线 → 提前显式失败,
+    // 不进入提交/轮询流程
+    try {
+      const { assertH3Ready } = await import("../services/h3-instance-service.js");
+      await assertH3Ready();
+    } catch (err) {
+      return c.json({ success: false, error: (err as Error).message, code: "INSTANCE_OFFLINE" }, 503);
+    }
+  }
   try {
     const result = await provider.generateVideo({
       prompt, firstFrame, lastFrame, resolution, workId, filename,
@@ -3155,6 +3176,20 @@ apiRoutes.post("/api/works/:id/pipeline/advance", async (c) => {
       }
     }
 
+    // ── 图文作品等价门禁(2026-08-28 批次6.2,v2-M2):图文 assembly 此前被整体跳过,
+    // 空图文可过审。卡片数/封面/空白文件机器可检,与视频门禁同位拦截
+    if (completedStep === "assembly" && work.type === "image-text") {
+      const { assertImageTextDeliverables } = await import("../services/quality-gate.js");
+      const gateIssues = assertImageTextDeliverables(join(dataDir, "works", id));
+      if (gateIssues.length) {
+        log("info", "api", "image_text_gate_blocked", id, { count: gateIssues.length });
+        return c.json({
+          error: `图文交付物机器门禁未通过(${gateIssues.length} 项),请修复后重新提交`,
+          issues: gateIssues.map((i) => i.detail),
+        }, 400);
+      }
+    }
+
     // ── Evaluation gate ─────────────────────────────────────────────────
     // (evaluating 态的重入已被上方守卫1拦截,此处恒为非评审中)
     if (work.evaluationMode) {
@@ -4411,8 +4446,18 @@ apiRoutes.get("/api/digital-humans/jobs", async (c) => {
 // GET /api/digital-humans/jobs/:id
 apiRoutes.get("/api/digital-humans/jobs/:id", async (c) => {
   const id = c.req.param("id");
-  const job = dhJobsRepo.getJob(id);
+  let job = dhJobsRepo.getJob(id);
   if (!job) return c.json({ error: "Job not found" }, 404);
+  // 2026-08-28 批次6.5:官方指令让 agent 轮询本端点,但此前它只读库不刷新——
+  // 直连提交的 job 无人轮询,DB 永久停在 running(DH-1/DH-2)。running 态内联触发一次 refresh
+  if (job.status === "running" || job.status === "pending") {
+    try {
+      job = (await refreshJob(id)) ?? job;
+    } catch (err) {
+      // 刷新失败(实例不可达等)不阻断查询,返回现有状态
+      console.warn(`[digital-humans] inline refresh failed for ${id}:`, (err as Error).message);
+    }
+  }
   return c.json(job);
 });
 

@@ -423,3 +423,29 @@ export function assertAssetsDeliverables(workDir: string): DeliverableIssue[] {
   }
   return [];
 }
+
+/** 批次6.2 图文等价门禁(v2-M2):图文作品的 assembly 此前被门禁整体跳过,空图文可过审。
+ *  校验:output/cards/ 存在 ≥2 张 PNG、含 01-cover 封面、无空白小文件 */
+export function assertImageTextDeliverables(workDir: string): DeliverableIssue[] {
+  const issues: DeliverableIssue[] = [];
+  const cardsDir = join(workDir, "output", "cards");
+  let cards: string[] = [];
+  try {
+    cards = readdirSync(cardsDir).filter((f) => /\.png$/i.test(f));
+  } catch { /* 目录不存在 */ }
+  if (cards.length < 2) {
+    issues.push({ key: "cards_missing", detail: `图文卡片不足(output/cards/ 仅 ${cards.length} 张 PNG,至少需封面+1 张内容卡)` });
+    return issues;
+  }
+  if (!cards.some((f) => /cover/i.test(f))) {
+    issues.push({ key: "cover_missing", detail: "封面卡缺失(output/cards/ 下无 *cover*.png)" });
+  }
+  for (const f of cards) {
+    try {
+      if (statSync(join(cardsDir, f)).size < 10_000) {
+        issues.push({ key: "card_blank", detail: `卡片疑似空白/渲染残缺:${f}(${statSync(join(cardsDir, f)).size}B < 10KB)` });
+      }
+    } catch { /* 单文件失败跳过 */ }
+  }
+  return issues;
+}

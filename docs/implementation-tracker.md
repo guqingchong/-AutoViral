@@ -104,14 +104,24 @@
   (migration v30)→ 创作/评审 prompt 共用 buildExplicitParamsBlock(最高优先级豁免)→
   plan 门禁 assertPlanDeliverables(workDir, explicitDuration) 豁免
 
-## 批次 6:criteria 二分与图文门禁、M3 小项 【⬜】
+## 批次 6:criteria 二分与图文门禁、M3 小项 【✅ 完成 2026-08-28】
 
-- [ ] 6.1 M1③ criteria 硬性/最佳实践二分(5 文件人工标注)
-- [ ] 6.2 M2② 图文等价门禁双路径(纯图文 assembly + deriveDualOutputs 派生)
-- [ ] 6.3 M3 eco 门禁:api.ts:918 读 asset_budget 拒绝云端 + 同批修 ws-bridge.ts:290 矛盾指令 + assertH3Ready 接线
-- [ ] 6.4 M3 H3 四处 fetch 超时 + 半开检测(checkH3Health 复用)+ 重复提交防护
-- [ ] 6.5 M3 数字人 GET /jobs/:id 内联 refreshJob
-- [ ] 6.6 M3 回合软着陆:到期前 5min 注入收尾指令
+前置:批次 1/2 已落地。验证:tsc + vite + 全量测试 1057/1058(唯一失败为已知
+code-scene 渲染 flake,单跑 20/20 通过)。
+
+- [x] 6.1 criteria 硬性/软性二分:5 文件全部加分级约定头(优先级宪法写入:显式参数>硬性>软性
+  >自由裁量)+ 全部维度打标;顺手修 assembly.md 字幕字数残留矛盾(15-20 vs ≤15)
+- [x] 6.2 图文等价门禁双路径:①纯图文 assembly advance 挂 assertImageTextDeliverables
+  (卡片≥2/封面/空白文件)②双产物派生失败显式化(dual-output-failed.txt 标记+总线广播),
+  空图文不再静默过审
+- [x] 6.3 eco 门禁:/api/generate/video 读 asset_budget,eco 档云端 provider 403
+  (ECO_BUDGET_BLOCKED);ws-bridge H3 离线声明按 budget 分支(eco→阻塞文案,与
+  step-contract 对齐);assertH3Ready 接线到 eco+local-h3 路径(503 提前显式失败)
+- [x] 6.4 H3 四处 fetch 超时(h3Fetch 30s/60s/15s 分档)+ 超时后 checkH3Health 半开检测;
+  顺手修 _volcengine-cv 提交/查询/下载三处无超时(30s/15s/120s)
+- [x] 6.5 数字人 GET /api/digital-humans/jobs/:id 内联 refreshJob(running/pending 时),
+  "轮询不刷新的端点"修复
+- [x] 6.6 回合软着陆:到期前 5min 注入收尾指令(半成品落盘+断点说明+禁开新长任务)
 
 ## 批次 7:评审软化与失败通道 【⬜】
 

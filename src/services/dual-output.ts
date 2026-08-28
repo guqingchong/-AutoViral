@@ -20,6 +20,7 @@ import { mkdir, writeFile, cp, readdir, rm } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { join, extname } from "node:path";
 import { dataDir } from "../config.js";
+import { broadcastProgress } from "./progress-events.js";
 import { log } from "../logger.js";
 import { getWork, getChildWorkByParent, createWork } from "../db/works-repo.js";
 import { listArticlesByWork, createArticle, updateArticle } from "../db/articles-repo.js";
@@ -830,6 +831,25 @@ export interface DeriveDualOutputsDeps {
 }
 
 /**
+ * 批次6.2:双产物派生失败显式化(v2-M6/M2)——此前任何失败只记日志,
+ * 父作品照常 reviewing,空图文可过审。现在:①父作品目录落 dual-output-failed 标记文件
+ * (可审计)②进度总线广播(UI 可见;批次 7 加重试入口)
+ */
+async function markDualOutputFailed(workId: string, reason: string): Promise<void> {
+  try {
+    const { writeFile, mkdir } = await import("node:fs/promises");
+    const dir = join(dataDir, "works", workId, "output");
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, "dual-output-failed.txt"),
+      `${new Date().toISOString()}\n${reason}\n`,
+      "utf-8",
+    );
+  } catch { /* 标记失败不阻断 */ }
+  broadcastProgress({ workId, kind: "system", text: `⚠️ 图文派生失败:${reason.slice(0, 100)}` });
+}
+
+/**
  * dual_output 作品进入 reviewing 时的派生入口。
  * 不抛异常 —— 任何失败记日志后返回已产出的部分结果。
  */
@@ -864,6 +884,12 @@ export async function deriveDualOutputs(
       log("error", "server", "dual_output_child_failed", workId, {
         error: err instanceof Error ? err.message : String(err),
       });
+      await markDualOutputFailed(workId, `图文子作品派生失败: ${(err as Error).message}`);
+    }
+
+    // 批次6.2:空图文不得静默过审——派生成功但卡片不足同样显式标记
+    if (result.childWorkId && result.cardFiles.length < 2) {
+      await markDualOutputFailed(workId, `派生图文卡片不足(仅 ${result.cardFiles.length} 张),子作品 ${result.childWorkId} 需人工核查`);
     }
 
     log("info", "server", "dual_output_derived", workId, {
