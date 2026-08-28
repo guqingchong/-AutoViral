@@ -170,8 +170,17 @@ export class AgentLoop {
     this.abort = new AbortController();
     const maxSteps = this.deps.guard?.maxStepsPerTurn ?? 200;
     const deadline = Date.now() + (this.deps.guard?.maxTurnMinutes ?? 30) * 60_000;
-    let lastSig = "";
-    let repeatCount = 0;
+    // 2026-08-28 批次3.4 杀改拦:同参重复不再 3 连杀整回合(被杀回合进展作废、
+    // 且被 auto-continue 误判"有进展"自我赦免)。改为:第 2 次起软拦截+换路提示,
+    // 拦后仍试 ≥3 次才杀回合(死循环防护力不降);签名归一化防微调参数逃逸。
+    const sigCount = new Map<string, number>();
+    const normalizeSig = (name: string, input: Record<string, unknown>): string => {
+      const norm = { ...input };
+      if (name === "Bash" && typeof norm.command === "string") {
+        norm.command = norm.command.replace(/\s+/g, " ").trim();
+      }
+      return `${name}:${JSON.stringify(norm)}`;
+    };
 
     // AskUserQuestion 配对回填：用户答案作为 pending tool_use 的 tool_result
     if (this.pendingAskToolUseId) {
@@ -254,11 +263,19 @@ export class AgentLoop {
         for (const tu of toolUses) {
           this.deps.onLoopEvent({ type: "tool_use", toolName: tu.name, toolInput: tu.input });
 
-          // 同工具同参 3 连检测
-          const sig = `${tu.name}:${JSON.stringify(tu.input)}`;
-          repeatCount = sig === lastSig ? repeatCount + 1 : 0;
-          lastSig = sig;
-          if (repeatCount >= 3) throw new LoopGuardError(`同一工具同一参数连续 ${repeatCount + 1} 次：${tu.name}`);
+          // 同参重复检测(批次3.4 杀改拦):第 2、3 次软拦截给换路提示,第 4 次才杀回合
+          const sig = normalizeSig(tu.name, tu.input);
+          const seen = (sigCount.get(sig) ?? 0) + 1;
+          sigCount.set(sig, seen);
+          if (seen >= 4) throw new LoopGuardError(`同一工具同一参数第 ${seen} 次(拦截后仍重试):${tu.name}`);
+          if (seen >= 2) {
+            const msg = `拦截:该调用与之前完全相同(第 ${seen} 次),不再重复执行——重复执行不会改变结果。` +
+              `请换策略:①换参数(不同关键词/路径/源) ②换工具 ③阅读 fallback-strategy 模块 ④确实无路可走时,` +
+              `在回复中显式报告阻塞点而不是重试同一调用。`;
+            this.deps.onLoopEvent({ type: "tool_result", toolName: tu.name, toolResult: msg });
+            results.push({ type: "tool_result", tool_use_id: tu.id, name: tu.name, content: msg, is_error: true });
+            continue;
+          }
 
           if (tu.name === "AskUserQuestion") {
             // 配对回填：结束回合，等待用户下条输入作为本 tool_use 的 tool_result
