@@ -18,7 +18,7 @@ export interface CompareSplitParams {
 
 /** 对比对照:左右双栏自两侧弹簧滑入 → 逐项错峰点亮 → 结论压底 */
 export default function makeCompareSplit(params: CompareSplitParams) {
-  const theme = getSceneTheme(params.theme);
+  const theme = getSceneTheme(params.theme, params.themeTokens);
   const leftColor = theme.palette[1] ?? theme.palette[0];
   const rightColor = theme.palette[0];
   const midX = 20; // 中缝

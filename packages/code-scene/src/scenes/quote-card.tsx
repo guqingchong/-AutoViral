@@ -14,7 +14,7 @@ export interface QuoteCardParams {
 
 /** 金句卡:引号装饰 → 逐词显现(阅读节奏感) → 署名淡入。回形针式留白设计 */
 export default function makeQuoteCard(params: QuoteCardParams) {
-  const theme = getSceneTheme(params.theme);
+  const theme = getSceneTheme(params.theme, params.themeTokens);
   const accent = theme.palette[0];
   const words = params.quote.split(/(?<=，|。|、|!|？|,|\s)/).filter(Boolean); // 按标点分词组,逐组显现
   return makeScene2D("quote-card", function* (view) {

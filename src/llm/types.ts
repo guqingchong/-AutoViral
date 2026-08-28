@@ -86,7 +86,7 @@ export type StreamEvent =
   /** input JSON 完整后一次性发（对齐 CLI 按完整 block 发的行为） */
   | { type: "tool_use"; block: ToolUseBlock }
   | { type: "message_stop"; stopReason: "end_turn" | "tool_use" | "max_tokens" | "aborted" }
-  | { type: "usage"; inputTokens: number; outputTokens: number; cacheReadTokens?: number };
+  | { type: "usage"; inputTokens: number; outputTokens: number; cacheReadTokens?: number; latencyMs?: number; thinkingTokens?: number };
 
 /** 分阶段路由键（llm.models 的可配项） */
 export type StageKey = "research" | "plan" | "assets" | "assembly" | "eval" | "script";

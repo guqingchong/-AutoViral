@@ -145,15 +145,27 @@ publish-account 2 个测试按"禁重发"新契约更新)。
 - [x] 7.8 M6 watchdog 扩展:reviewing 滞留 24h/数字人 running 30min/发布 publishing 15min
   三维告警(去重防刷屏);A-4 登录态失效垃圾指标拒入库+通知(账号与作品两级)
 
-## 批次 8:模版契约与台账遥测 【⬜】
+## 批次 8:模版契约与台账遥测 【✅ 完成 2026-08-28】
 
-- [ ] 8.1 M4 code 模版 refine TSX 专用通道(校验链复用 code-template-generator)
-- [ ] 8.2 M4 绑定模式显式化 + code-scene 设计令牌注入(themes.ts 扩展;footage 级皮肤单列不做)
-- [ ] 8.3 M4 媒体槽硬失败 + req.assets 接入 code 模版渲染(video-factory.ts:258-311 断线修复)
-- [ ] 8.4 M4 template_fidelity 视觉比对(brief 持久化 + chatVisionJson 抽帧比对 + 阈值拒收)
-- [ ] 8.5 M2④+M4 元数据-能力一致性白名单(layout/decorations/code params 常量导出+入库静态校验)
-- [ ] 8.6 M7 成本台账:内置默认价目+未知模型 warn(与 8.7 同一次迁移)
-- [ ] 8.7 M7 遥测:llm_usage 加 latency_ms + thinking_tokens(合并一次 migration)+ 阶段墙钟报表
+验证:tsc + vite + 全量 1058/1058 通过。范围纪律:v2 低估的"全片皮肤"切两刀——
+本批只做 code-scene 令牌注入;footage 级皮肤(调色/转场覆盖真人素材)确认超范围,不做。
+
+- [x] 8.1 M4 code 模版 refine TSX 专用通道(template-refine.ts refineCodeTemplate:
+  完整 TSX → staticCheckTsx → 试渲染 → 黑屏拦截,2 轮不过报错;覆盖写回降回 candidate)
+- [x] 8.2 M4 令牌注入最小切片:themes.ts ThemeTokenOverrides + getSceneTheme(key, overrides)
+  全 8 场景接入;layers[0].designTokens → params.themeTokens(video-factory 接线)
+- [x] 8.3 M4 媒体槽硬失败 + req.assets 断线修复:renderCodeTemplate 接 assets/variables,
+  媒体槽(type:video/image)无值即硬失败(假窗口制度性封堵)
+- [x] 8.4 M4 template_fidelity:brief/style 随 layers[0] 持久化(免 migration);
+  生成入库前抽帧×2 + chatVisionJson 视觉比对设计意图,score<6 进修复循环;
+  视觉通道不可用放行并 warn(不成单点故障)
+- [x] 8.5 M2④+M4 元数据-能力一致性:RENDERER_DECORATIONS 白名单(accent_bar/serial_number/
+  divider/corner_marks),图文模版创建端点+生成器入库双挂点;layout 不硬拦(渲染端有兜底,
+  存量 big_title_center 等不受影响——首版误拦已修正)
+- [x] 8.6 M7 成本台账:内置默认刊例价 7 模型(用户 priceTable 优先覆盖)+ 未知模型 warn
+  (不再静默归零)——cost 恒 0 根因(纯缺配)修复,日预算熔断恢复实效
+- [x] 8.7 M7 遥测:migration v31 llm_usage +latency_ms/+thinking_tokens;流式/非流式/vision
+  全链埋点;GET /api/works/:id/timing 阶段墙钟+token+成本报表端点
 
 ## 批次 9:M9 真独立项与作业化 【⬜】
 

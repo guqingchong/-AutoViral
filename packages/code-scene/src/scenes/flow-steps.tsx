@@ -11,7 +11,7 @@ export interface FlowStepsParams {
 
 /** 流程步骤推进:标题淡入 → 步骤自右滑入 → 当前步脉冲强调逐步推进 */
 export default function makeFlowSteps(params: FlowStepsParams) {
-  const theme = getSceneTheme(params.theme);
+  const theme = getSceneTheme(params.theme, params.themeTokens);
   const H = DESIGN_H;
   const steps = params.steps.slice(0, 5);
   const n = steps.length;

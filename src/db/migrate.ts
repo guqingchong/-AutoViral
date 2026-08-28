@@ -825,6 +825,16 @@ CREATE INDEX IF NOT EXISTS idx_publish_records_account ON publish_records(accoun
 ALTER TABLE works ADD COLUMN explicit_params TEXT;
 `,
   },
+  {
+    version: 31,
+    name: "llm_usage_latency_thinking",
+    sql: `
+-- 2026-08-28 批次8.7(v2-M7/v3-M12):延迟与思考 token 遥测。
+-- 此前系统无法自答"时间花哪了/thinking 占多少"(单作品 thinking 占可见输出 96% 无记账)。
+ALTER TABLE llm_usage ADD COLUMN latency_ms INTEGER;
+ALTER TABLE llm_usage ADD COLUMN thinking_tokens INTEGER;
+`,
+  },
 ];
 
 export function migrate(): void {

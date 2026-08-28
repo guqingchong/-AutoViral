@@ -15,6 +15,7 @@
 import { randomUUID } from "node:crypto";
 import { runJsonPrompt } from "./llm-json.js";
 import { createTemplate } from "../db/templates-repo.js";
+import { validateDeclaredCapabilities } from "./template-dna.js";
 import type { DbTemplate, TemplateCanvas } from "../db/templates-repo.js";
 
 export interface GenerateImageTextTemplatesInput {
@@ -139,6 +140,16 @@ export async function generateImageTextTemplates(input: GenerateImageTextTemplat
       fps: 30,
       backgroundColor: normalized.cover.colorScheme.background ?? "#FFFFFF",
     };
+    const layers = [
+      { id: "cover", type: "image-text-layout", page: "cover", ...normalized.cover },
+      { id: "content-page", type: "image-text-layout", page: "content", ...normalized.contentPage },
+    ];
+    // 批次8.5:声明-能力一致性——渲染端未实现的 layout/decorations 声明拒绝入库
+    const capIssues = validateDeclaredCapabilities({ kind: "image-text", layers });
+    if (capIssues.length) {
+      console.warn(`[image-text-template-gen] 跳过能力越界的模版 ${normalized.name}: ${capIssues.join("; ")}`);
+      continue;
+    }
     const template = createTemplate({
       id,
       name: normalized.name,
@@ -146,10 +157,7 @@ export async function generateImageTextTemplates(input: GenerateImageTextTemplat
       canvas,
       variables: [],
       // 版式 JSON 存 layers：cover / content-page 两条记录（渲染引擎按 type 识别）
-      layers: [
-        { id: "cover", type: "image-text-layout", page: "cover", ...normalized.cover },
-        { id: "content-page", type: "image-text-layout", page: "content", ...normalized.contentPage },
-      ],
+      layers,
       audio: [],
       transitions: [],
       status: "candidate",

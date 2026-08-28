@@ -15,7 +15,7 @@ export interface TimelineParams {
 
 /** 时间轴:纵轴主线生长 → 节点逐个激活(圆点弹跳+标签划入) */
 export default function makeTimeline(params: TimelineParams) {
-  const theme = getSceneTheme(params.theme);
+  const theme = getSceneTheme(params.theme, params.themeTokens);
   const accent = theme.palette[0];
   const events = params.events.slice(0, 5);
   const n = events.length;

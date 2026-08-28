@@ -199,6 +199,9 @@ export class OpenAICompatProvider implements LlmProvider {
       );
     };
     resetStallTimer();
+    // 批次8.7 遥测:调用墙钟 + thinking 字符量(思考 token 此前无记账,96% 产出不可见)
+    const callStart = Date.now();
+    let thinkingChars = 0;
     const combinedSignal =
       typeof AbortSignal.any === "function"
         ? AbortSignal.any([req.signal, stallCtrl.signal].filter(Boolean) as AbortSignal[])
@@ -309,6 +312,9 @@ export class OpenAICompatProvider implements LlmProvider {
           inputTokens: chunk.usage.prompt_tokens ?? 0,
           outputTokens: chunk.usage.completion_tokens ?? 0,
           cacheReadTokens: chunk.usage.prompt_cache_hit_tokens ?? undefined,
+          latencyMs: Date.now() - callStart,
+          // thinking token 估算:字符数 / 1.5(中英混合粗估,用于占比观测而非精确计费)
+          thinkingTokens: thinkingChars ? Math.ceil(thinkingChars / 1.5) : undefined,
         });
       }
       const choice = chunk.choices?.[0];
@@ -316,6 +322,7 @@ export class OpenAICompatProvider implements LlmProvider {
       const delta = choice.delta ?? {};
       if (typeof delta.reasoning_content === "string" && delta.reasoning_content) {
         thinkParts.push(delta.reasoning_content);
+        thinkingChars += delta.reasoning_content.length;
         onEvent({ type: "thinking_delta", text: delta.reasoning_content });
       }
       if (typeof delta.content === "string" && delta.content) {
@@ -397,6 +404,7 @@ export class OpenAICompatProvider implements LlmProvider {
     return withRetry(async () => {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 120_000);
+      const callStart = Date.now();
       try {
         const res = await fetch(`${this.opts.baseUrl}/chat/completions`, {
           method: "POST",
@@ -427,6 +435,7 @@ export class OpenAICompatProvider implements LlmProvider {
             provider: this.name, model: opts.model,
             inputTokens: u.prompt_tokens ?? 0, outputTokens: u.completion_tokens ?? 0,
             cacheReadTokens: u.prompt_cache_hit_tokens,
+            latencyMs: Date.now() - callStart,
           });
         }
         const text: string = data.choices?.[0]?.message?.content ?? "";

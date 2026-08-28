@@ -264,7 +264,7 @@ async function renderCodeTemplate(
   req: RenderRequest,
   outputPath: string,
 ): Promise<number | undefined> {
-  const cfg = (template.layers?.[0] ?? {}) as { scene?: string; customCode?: string; params?: Record<string, unknown> };
+  const cfg = (template.layers?.[0] ?? {}) as { scene?: string; customCode?: string; params?: Record<string, unknown>; designTokens?: Record<string, unknown> };
   const isCustom = typeof cfg.customCode === "string" && cfg.customCode.trim().length > 0;
   if (!isCustom && (typeof cfg.scene !== "string" || !cfg.scene)) {
     throw new Error(`code 模板 ${template.id} 缺少场景配置(layers[0].scene 或 layers[0].customCode)`);
@@ -284,7 +284,27 @@ async function renderCodeTemplate(
     ...cfg.params,
     ...overrides,
   };
+  // 批次8.2:模版携带的设计令牌注入主题系统(layers[0].designTokens → params.themeTokens)
+  if (cfg.designTokens && typeof cfg.designTokens === "object") params.themeTokens = cfg.designTokens;
   if (req.digitalHumanVideo) params.videoSrc = req.digitalHumanVideo;
+
+  // 批次8.3(v2-M4/病根 7):req.assets 接入 code 模版 params——此前渲染白名单
+  // 只喂 OVERRIDABLE 四个文案键,声明的媒体槽(imageSrc 等)静默留空("声明了但渲染不喂值")。
+  // 媒体槽(type:video/image)无值即硬失败:窗口必须播真实画面,禁止占位假窗口(评审 critical)
+  const assetsMap = (req.assets ?? {}) as Record<string, string>;
+  for (const v of template.variables ?? []) {
+    if (v.type !== "video" && v.type !== "image") continue;
+    const value =
+      assetsMap[v.name]
+      ?? (typeof req.variables?.[v.name] === "string" ? (req.variables[v.name] as string) : undefined)
+      ?? ((v.name === "videoSrc" || v.name === "host_video") ? req.digitalHumanVideo : undefined)
+      ?? (typeof v.default === "string" && v.default ? v.default : undefined);
+    if (value) { params[v.name] = value; continue; }
+    throw new Error(
+      `模版媒体槽 {{${v.name}}}(${v.type})未填真实素材路径——槽位留空会渲染占位假窗口。` +
+      `请在渲染请求 assets 或 variables 中提供 "${v.name}": "本地素材绝对路径"`,
+    );
+  }
 
   // 时长跟数字人源片走(口播内容长度决定整片时长);占位预览用模板默认。
   // 600s 封顶:revideo 渲染窗口上限(2026-08-24 长口播支持,与 code-scene 校验一致)

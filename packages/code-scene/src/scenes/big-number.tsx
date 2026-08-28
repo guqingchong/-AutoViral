@@ -32,7 +32,7 @@ function fmt(v: number, format: string, unit: string): string {
 
 /** 大数字冲击:标题区 → 巨型数字弹簧入场+滚动计数 → 解读行 */
 export default function makeBigNumber(params: BigNumberParams) {
-  const theme = getSceneTheme(params.theme);
+  const theme = getSceneTheme(params.theme, params.themeTokens);
   const accent = theme.palette[0];
   return makeScene2D("big-number", function* (view) {
     view.fill(theme.background);

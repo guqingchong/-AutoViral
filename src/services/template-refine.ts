@@ -87,6 +87,12 @@ export async function refineTemplate(
   if (!template) throw new Error(`模板不存在: ${templateId}`);
   if (!instruction.trim()) throw new Error("加工指令不能为空");
 
+  // 2026-08-28 批次8.1:code 模版走 TSX 专用 refine 通道——此前落入时间线 validateTemplate
+  // 必然失败(template-refine.ts 按时间线校验 TSX,v2 病根 4)
+  if (template.kind === "code") {
+    return refineCodeTemplate(template, instruction, saveAsCopy);
+  }
+
   let validationError: string | undefined;
   let refined: Record<string, unknown> | undefined;
 
@@ -142,4 +148,81 @@ export async function refineTemplate(
     transitions: refined!.transitions as any,
   } as any);
   return { templateId: template.id, diffSummary: diffSummary(template, refined!), copied: false };
+}
+
+/** 批次8.1:code 模版 TSX 专用 refine 通道。
+ *  输出完整 TSX → staticCheckTsx → 试渲染 → 黑屏拦截,两轮不过则报错;
+ *  覆盖写回后状态降回 candidate(refine 产物必须重新验证,approved 不豁免) */
+async function refineCodeTemplate(
+  template: DbTemplate,
+  instruction: string,
+  saveAsCopy: boolean,
+): Promise<RefineResult> {
+  const layer0 = (template.layers?.[0] ?? {}) as Record<string, unknown>;
+  const currentTsx = String(layer0.customCode ?? "");
+  if (!currentTsx) throw new Error(`code 模版 ${template.id} 无 customCode 可加工`);
+
+  const { staticCheckTsx } = await import("./code-template-generator.js");
+  const { renderCodeScene } = await import("./code-scene.js");
+  const { blackSegments } = await import("./quality-gate.js");
+
+  let lastError = "";
+  let tsx = "";
+  let name = template.name;
+  let passed = false;
+  for (let round = 1; round <= 2; round++) {
+    const result = await runJsonPrompt<{ name?: string; tsx?: string }>(
+      [
+        "你是 Revideo 场景代码工程师。用户要对一个已有代码模版的 TSX 场景做二次加工。",
+        "",
+        "## 现有 TSX 源码",
+        "```tsx",
+        currentTsx,
+        "```",
+        "",
+        "## 用户加工指令",
+        instruction,
+        "",
+        "## 要求",
+        "1. 只改用户指令涉及的部分,其余保持原样;保持 export default function + makeScene2D 结构",
+        "2. 禁止使用 fetch/document/window/setTimeout/setInterval/Math.random/while(true)",
+        '3. 输出严格 JSON: {"name": "模版名(不改则同前)", "tsx": "完整修改后 TSX 源码"}',
+        lastError ? `\n⚠️ 上一次输出未通过校验/渲染:${lastError}\n请修正后重新输出完整 TSX。` : "",
+      ].filter(Boolean).join("\n"),
+      { stage: "plan", timeoutMs: 300_000, maxAttempts: 2 },
+    );
+    tsx = result.tsx ?? "";
+    if (result.name) name = result.name;
+    const staticErrors = staticCheckTsx(tsx);
+    if (staticErrors.length) { lastError = `静态检查未过: ${staticErrors.join("; ")}`; continue; }
+    const preview = await renderCodeScene({
+      workId: "tpl_refine",
+      filename: `refine_${randomUUID().slice(0, 8)}`,
+      customScene: tsx,
+      params: {},
+      duration: 5,
+    });
+    if (!preview.success || !preview.path) { lastError = `试渲染失败: ${preview.error ?? "未知"}`; continue; }
+    const blacks = await blackSegments(preview.path);
+    if (blacks.length) { lastError = `试渲染黑屏(${blacks[0]})——加工后必须渲染出真实可见内容`; continue; }
+    passed = true;
+    break;
+  }
+  if (!passed) {
+    throw new Error(`code 模版再加工失败(2 轮后仍未通过): ${lastError || "未产出有效 TSX"}`);
+  }
+
+  const newLayers = [{ ...layer0, customCode: tsx }] as any;
+  if (saveAsCopy) {
+    const newId = `tpl_${randomUUID().slice(0, 8)}`;
+    createTemplate({
+      id: newId, name: `${name}(改版)`, content_form: template.content_form,
+      canvas: template.canvas, variables: template.variables, layers: newLayers,
+      audio: template.audio, subtitles: template.subtitles, transitions: template.transitions,
+      status: "candidate", kind: "code",
+    } as any);
+    return { templateId: newId, diffSummary: "TSX 场景已按指令加工(另存副本,待验证转正)", copied: true };
+  }
+  updateTemplate(template.id, { name, layers: newLayers, status: "candidate" } as any);
+  return { templateId: template.id, diffSummary: "TSX 场景已按指令加工并通过试渲染(状态降回 candidate 待验证)", copied: false };
 }

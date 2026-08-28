@@ -3472,6 +3472,42 @@ apiRoutes.get("/api/works/:id/eval/results/:step", async (c) => {
   return c.json({ results });
 });
 
+// GET /api/works/:id/timing — 批次8.7 阶段墙钟+token 报表(系统自答"时间花哪了")
+apiRoutes.get("/api/works/:id/timing", async (c) => {
+  const id = c.req.param("id");
+  const work = await getWork(id);
+  if (!work) return c.json({ error: "Work not found" }, 404);
+  const { getWorkSteps } = await import("../db/works-repo.js");
+  const steps = getWorkSteps(id);
+  const now = Date.now();
+  const stepTiming = Object.entries(work.pipeline).map(([key, s]) => {
+    const start = s.startedAt ? Date.parse(s.startedAt) : null;
+    const end = s.completedAt ? Date.parse(s.completedAt) : null;
+    return {
+      step: key,
+      name: s.name,
+      status: s.status,
+      wallMinutes: start ? Math.round(((end ?? now) - start) / 6000) / 10 : null,
+      startedAt: s.startedAt ?? null,
+      completedAt: s.completedAt ?? null,
+      evalAttempts: work.evalAttempts?.[key] ?? 0,
+    };
+  });
+  const usage = getDb()
+    .prepare(
+      `SELECT stage, COUNT(*) AS calls,
+              SUM(input_tokens) AS inputTokens, SUM(output_tokens) AS outputTokens,
+              SUM(thinking_tokens) AS thinkingTokens, SUM(latency_ms) AS totalLatencyMs,
+              SUM(cost_yuan) AS costYuan
+       FROM llm_usage WHERE work_id = ? GROUP BY stage`,
+    )
+    .all(id);
+  const total = getDb()
+    .prepare("SELECT COUNT(*) AS calls, SUM(cost_yuan) AS costYuan FROM llm_usage WHERE work_id = ?")
+    .get(id);
+  return c.json({ workId: id, steps: stepTiming, usageByStage: usage, total, dbSteps: steps.length });
+});
+
 // ---------------------------------------------------------------------------
 // Step History API (persistent execution logs per pipeline step)
 // ---------------------------------------------------------------------------
@@ -5131,6 +5167,12 @@ apiRoutes.post("/api/templates", async (c) => {
     const body = await c.req.json();
     // 图文模板不走视频时间线校验(layers 是 LayoutSpec 而非时间线层)
     if (body.kind === "image-text") {
+      // 批次8.5:声明-能力一致性校验(decorations/layout 必须在渲染端有实现)
+      const { validateDeclaredCapabilities } = await import("../services/template-dna.js");
+      const capIssues = validateDeclaredCapabilities({ kind: "image-text", layers: body.layers ?? [] });
+      if (capIssues.length) {
+        return c.json({ error: `声明的能力超出渲染端实现: ${capIssues.join("; ")}` }, 400);
+      }
       const template = createTemplate({
         id: body.id ?? `tpl_it_${randomUUID().slice(0, 8)}`,
         name: body.name ?? "未命名图文模板",
