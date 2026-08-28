@@ -49,7 +49,8 @@ export async function synthesizeToFile(apiKey: string, opts: {
       },
     }
 
-    const res = await fetch(MINIMAX_TTS_URL, {
+    const res = await fetch(MINIMAX_TTS_URL, { signal: AbortSignal.timeout(120_000), // 批次10.3 无超时清零
+
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${apiKey}`,

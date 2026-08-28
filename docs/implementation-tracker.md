@@ -185,12 +185,22 @@ publish-account 2 个测试按"禁重发"新契约更新)。
   spawn 后台+日志落盘+30s 心跳广播)+ POST/GET /api/long-tasks + ws-bridge 长任务铁律改写
   (ASR 优先走作业化 API,不占回合/bash 上限)
 
-## 批次 10:极速模式与二三梯队 【⬜,动工前补论证】
+## 批次 10:极速模式与二三梯队安全切片 【✅ 完成 2026-08-28(部分项留实测基线)】
 
-- [ ] 10.1 M8 code-scene warm 池(Revideo 内部 API 耦合风险)
-- [ ] 10.2 M8 镜头并行(依赖 9.5 作业化)+ 评审分级 standard|express
-- [ ] 10.3 M14 学习回路 / M17 介入通道 / M18 无超时清零+额度记账+磁盘清理
-- [ ] 10.4 M11 沉淀闭环 / M12 上下文经济学(thinking 回填瘦身/阶段边界 compact/cache 命中)
+验证:tsc + vite + 全量 1058/1058 通过。
+
+- [x] 10.2 M8 评审分级:migration v33 works.eval_mode(standard|express);express =
+  机器门禁照跑 + 仅 assembly 单轮 LLM 终审,其余阶段门禁过后直接推进;
+  batch 弹窗/单作品创建 API 均可指定;UI 选择器留实测后接(NewWorkModal)
+- [x] 10.3 M18 无超时清零:minimax tts/music/voice-clone×3、nanobanana、stock 下载、
+  asset-library、memory.ts、template-clone×2、login-health×3、5 家官方发布商主链路
+  (发布商多行异形 fetch 有少量残留未覆盖,务实收尾);M14 事故卡(services/incidents.ts,
+  熔断时写卡+会话启动注入最近 3 张教训摘要,消灭换皮重跑);M17 决策事件化首项
+  (成片时长渲染确定即广播)
+- [ ] 10.1 M8 code-scene warm 池(Revideo 内部 API 耦合风险)——**留待实测基线后单做**
+- [ ] 10.2 补充:M8 镜头并行(依赖 9.5 已就绪,可后续开)+ kimi 显式缓存(M12.4 数据先行)
+- [ ] 10.3 剩余:M11 沉淀闭环 / M12 思考回填瘦身+阶段隔离 / M18 额度记账与磁盘清理——
+  均需批次 1-10 实测数据支撑后启动(v3 附录纪律:二三梯队动工前补论证)
 
 ## 已完成的模型选项任务(2026-08-28,独立于批次)
 

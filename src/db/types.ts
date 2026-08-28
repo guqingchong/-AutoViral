@@ -49,6 +49,8 @@ export interface DbWork {
   purpose?: string;                // 用途：grow_fans|sell_products|drive_traffic|brand_exposure|authority|short_drama（迁移 v26，04 方案）
   /** 用户显式参数 JSON(迁移 v30,批次5.8):只存用户显式给的键(如 {"duration":300}),缺省键不出现 */
   explicit_params?: string;
+  /** 评审分级(迁移 v33,批次10.2):'standard'(默认/NULL)|'express'(机器门禁+assembly 单轮终审) */
+  eval_mode?: string;
   created_at: string;
   updated_at: string;
 }

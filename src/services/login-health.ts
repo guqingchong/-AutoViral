@@ -169,7 +169,8 @@ async function verifyWechat(getCred: CredGetter = platformCred("wechat")): Promi
   if (!appId || !appSecret) return { platform, configured: false, valid: null, detail: "未配置 AppID/AppSecret" };
   try {
     const res = await fetch(
-      `https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid=${encodeURIComponent(appId)}&secret=${encodeURIComponent(appSecret)}`
+      `https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid=${encodeURIComponent(appId)}&secret=${encodeURIComponent(appSecret)}`,
+      { signal: AbortSignal.timeout(15_000) }, // 批次10.3
     );
     const data = (await res.json()) as { access_token?: string; errcode?: number; errmsg?: string };
     if (data.access_token) return { platform, configured: true, valid: true, detail: "AppID/AppSecret 有效" };
@@ -188,7 +189,8 @@ async function verifyBilibili(getCred: CredGetter = platformCred("bilibili")): P
   const csrf = getCred("csrf");
   if (!sess || !csrf) return { platform, configured: false, valid: null, detail: "未配置 SESSDATA/bili_jct" };
   try {
-    const res = await fetch("https://api.bilibili.com/x/web-interface/nav", {
+    const res = await fetch("https://api.bilibili.com/x/web-interface/nav", { signal: AbortSignal.timeout(15_000), // 批次10.3
+
       headers: { Cookie: `SESSDATA=${sess}`, "User-Agent": UA },
     });
     const data = (await res.json()) as { code: number; data?: { isLogin?: boolean; uname?: string } };
@@ -207,7 +209,8 @@ async function verifyKuaishou(getCred: CredGetter = platformCred("kuaishou")): P
   const appSecret = getCred("app_secret");
   if (!appId || !appSecret) return { platform, configured: false, valid: null, detail: "未配置 app_id/app_secret" };
   try {
-    const res = await fetch("https://open.kuaishou.com/oauth2/access_token", {
+    const res = await fetch("https://open.kuaishou.com/oauth2/access_token", { signal: AbortSignal.timeout(15_000), // 批次10.3
+
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ app_id: appId, app_secret: appSecret, grant_type: "client_credentials" }),

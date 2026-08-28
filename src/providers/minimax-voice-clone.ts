@@ -23,7 +23,8 @@ export async function uploadVoiceCloneFile(cfg: MiniMaxCloneConfig, buffer: Buff
   const form = new FormData()
   form.append('purpose', 'voice_clone')
   form.append('file', new Blob([new Uint8Array(buffer)]), filename)
-  const res = await fetch(withGroupId(`${MINIMAX_BASE}/v1/files/upload`, cfg), {
+  const res = await fetch(withGroupId(`${MINIMAX_BASE}/v1/files/upload`, cfg), { signal: AbortSignal.timeout(60_000), // 批次10.3
+
     method: 'POST',
     headers: { Authorization: `Bearer ${cfg.apiKey}` },
     body: form,
@@ -36,7 +37,8 @@ export async function uploadVoiceCloneFile(cfg: MiniMaxCloneConfig, buffer: Buff
 
 /** 执行声音克隆，成功即可在 t2a_v2 中使用该 voice_id */
 export async function cloneVoiceOnMiniMax(cfg: MiniMaxCloneConfig, fileId: number, voiceId: string): Promise<void> {
-  const res = await fetch(withGroupId(`${MINIMAX_BASE}/v1/voice_clone`, cfg), {
+  const res = await fetch(withGroupId(`${MINIMAX_BASE}/v1/voice_clone`, cfg), { signal: AbortSignal.timeout(60_000),
+
     method: 'POST',
     headers: { Authorization: `Bearer ${cfg.apiKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -51,7 +53,8 @@ export async function cloneVoiceOnMiniMax(cfg: MiniMaxCloneConfig, fileId: numbe
 
 /** 拉取 MiniMax 系统内置音色全量列表 */
 export async function listSystemVoices(cfg: MiniMaxCloneConfig): Promise<Array<{ voice_id: string; name?: string; description?: string }>> {
-  const res = await fetch(withGroupId(`${MINIMAX_BASE}/v1/get_voice`, cfg), {
+  const res = await fetch(withGroupId(`${MINIMAX_BASE}/v1/get_voice`, cfg), { signal: AbortSignal.timeout(15_000),
+
     method: 'POST',
     headers: { Authorization: `Bearer ${cfg.apiKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ voice_type: 'system' }),

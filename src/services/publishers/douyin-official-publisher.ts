@@ -47,6 +47,7 @@ export class DouyinOfficialPublisher implements Publisher {
       const createRes = await fetch(
         `https://open.douyin.com/video/create/?access_token=${encodeURIComponent(accessToken)}&open_id=${encodeURIComponent(openId)}`,
         {
+      signal: AbortSignal.timeout(60_000), // 批次10.3
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ video_id: videoId, title: input.title }),

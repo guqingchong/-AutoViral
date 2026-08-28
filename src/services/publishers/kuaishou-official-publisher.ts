@@ -46,6 +46,7 @@ export class KuaishouOfficialPublisher implements Publisher {
     const appSecret = resolveAccountCredential(this.platform, accountId, "app_secret");
     if (!appId || !appSecret) throw new Error("缺少快手 app_id / app_secret");
     const res = await fetch(`${BASE}/oauth2/access_token`, {
+      signal: AbortSignal.timeout(60_000), // 批次10.3
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ app_id: appId, app_secret: appSecret, grant_type: "client_credentials" }),
@@ -81,6 +82,7 @@ export class KuaishouOfficialPublisher implements Publisher {
       const publishRes = await fetch(
         `${BASE}/openapi/video/publish?access_token=${encodeURIComponent(token)}`,
         {
+      signal: AbortSignal.timeout(60_000), // 批次10.3
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ video_id: videoId, title: input.title, cover: input.coverPath ?? "" }),

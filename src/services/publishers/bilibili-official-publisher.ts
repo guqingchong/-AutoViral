@@ -71,6 +71,7 @@ export class BilibiliOfficialPublisher implements Publisher {
       form.append("cover", `data:${mime};base64,${img.toString("base64")}`);
       form.append("csrf", csrf);
       const res = await fetch(`${MEMBER_BASE}/x/vu/web/cover/up`, {
+      signal: AbortSignal.timeout(60_000), // 批次10.3
         method: "POST",
         headers: { Cookie: this.cookieHeader(accountId), "User-Agent": UA, Referer: `${MEMBER_BASE}/york/videoup` },
         body: form,
@@ -135,6 +136,7 @@ export class BilibiliOfficialPublisher implements Publisher {
           const putRes = await fetch(
             `${base}?partNumber=${partNumber}&uploadId=${uploadId}&chunk=${idx}`,
             {
+      signal: AbortSignal.timeout(60_000), // 批次10.3
               method: "PUT",
               headers: { ...uposHeaders, "Content-Type": "application/octet-stream" },
               body: chunk,
@@ -154,6 +156,7 @@ export class BilibiliOfficialPublisher implements Publisher {
       const completeRes = await fetch(
         `${base}?output=json&name=video.mp4&uploadId=${uploadId}&biz_id=${pre.biz_id}&profile=${encodeURIComponent(UPLOAD_PROFILE)}`,
         {
+      signal: AbortSignal.timeout(60_000), // 批次10.3
           method: "POST",
           headers: { ...uposHeaders, "Content-Type": "application/json" },
           body: JSON.stringify({ parts }),
@@ -172,6 +175,7 @@ export class BilibiliOfficialPublisher implements Publisher {
       }
       const biliFilename = uposPath.split("/").pop()!.replace(/\.[^.]+$/, "");
       const addRes = await fetch(`${MEMBER_BASE}/x/vu/web/add/v3?csrf=${encodeURIComponent(csrf)}`, {
+      signal: AbortSignal.timeout(60_000), // 批次10.3
         method: "POST",
         headers: {
           Cookie: cookie,

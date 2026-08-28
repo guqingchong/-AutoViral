@@ -88,6 +88,8 @@ export interface Work {
   purpose?: string;  // 用途(04 方案)
   /** 用户显式参数(批次5.8):只存用户显式给的键,最高优先级事实源(如 { duration: 300 }) */
   explicitParams?: Record<string, unknown>;
+  /** 评审分级(批次10.2):standard(缺省)|express(机器门禁+assembly 单轮 LLM 终审) */
+  evalMode?: "standard" | "express";
   createdAt: string;
   updatedAt: string;
 }
@@ -222,6 +224,7 @@ function dbWorkToWork(w: DbWork, steps?: DbPipelineStep[]): Work {
     autoMode: w.auto_mode,
     purpose: w.purpose,
     explicitParams: (() => { try { return w.explicit_params ? JSON.parse(w.explicit_params) : undefined; } catch { return undefined; } })(),
+    evalMode: (w.eval_mode as "standard" | "express" | undefined) ?? undefined,
     createdAt: w.created_at,
     updatedAt: w.updated_at,
   };
@@ -295,6 +298,7 @@ export async function createWork(input: {
   purpose?: string;
   /** 用户显式参数(批次5.8):只存用户显式给的键 */
   explicitParams?: Record<string, unknown>;
+  evalMode?: "standard" | "express";
 }): Promise<Work> {
   await maybeMigrateLegacy();
   const now = new Date().toISOString();
@@ -323,6 +327,7 @@ export async function createWork(input: {
     auto_mode: input.autoMode ?? false,
     purpose: input.purpose,
     explicit_params: input.explicitParams ? JSON.stringify(input.explicitParams) : undefined,
+    eval_mode: input.evalMode,
     tags: [],
     created_at: now,
     updated_at: now,
@@ -384,6 +389,7 @@ export async function updateWork(id: string, updates: Partial<Work>): Promise<Wo
   if (updates.autoMode !== undefined) dbUpdates.auto_mode = updates.autoMode;
   if (updates.purpose !== undefined) dbUpdates.purpose = updates.purpose;
   if (updates.explicitParams !== undefined) dbUpdates.explicit_params = JSON.stringify(updates.explicitParams);
+  if (updates.evalMode !== undefined) dbUpdates.eval_mode = updates.evalMode;
   if (updates.pipeline !== undefined) {
     // Sync steps back to DB
     for (const [key, step] of Object.entries(updates.pipeline)) {
