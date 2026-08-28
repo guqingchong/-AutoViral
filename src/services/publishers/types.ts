@@ -13,6 +13,8 @@ export interface PublishInput {
   accountId?: string;
   /** Platform-specific extra fields (description, tags, schedule, …). */
   options?: Record<string, unknown>;
+  /** 批次7.6:超时取消信号 */
+  signal?: AbortSignal;
 }
 
 export interface PublishOutput {

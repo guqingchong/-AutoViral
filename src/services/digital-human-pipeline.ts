@@ -4,6 +4,7 @@ import * as worksRepo from "../db/works-repo.js";
 import * as scriptsRepo from "../db/scripts-repo.js";
 import * as avatarsRepo from "../db/avatars-repo.js";
 import * as jobsRepo from "../db/digital-human-jobs-repo.js";
+import { failVisible } from "./fail-visible.js";
 import * as queueRepo from "../db/work-queue-repo.js";
 import { submitQueuedJob, refreshJob } from "./digital-human.js";
 import { getInstanceView } from "./instance-service.js";
@@ -476,6 +477,12 @@ async function pollPendingJobs(pending: Map<string, string>, intervalMs: number,
   for (const [jobId, workId] of pending) {
     batchState.failed++;
     batchState.errors.push({ workId, error: `轮询超时（job ${jobId}）` });
+    // 批次7.5 DH-1:超时任务此前只记内存 batchState,DB 里 job 永久烂在 running——
+    // 回写 DB failed + 全局通知(失败必须显式可见)
+    try {
+      jobsRepo.updateJob(jobId, { status: "failed", error: `轮询超时(${Math.round(timeoutMs / 60000)}min)` } as any);
+    } catch { /* 回写失败不阻断清理 */ }
+    failVisible({ workId, stage: "digital-human" }, `数字人渲染轮询超时(job ${jobId}),已标记失败`);
   }
   pending.clear();
 }

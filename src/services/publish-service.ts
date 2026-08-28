@@ -156,13 +156,17 @@ async function runPublishJob(jobId: string): Promise<void> {
 
     const driver = getDriver(job.platform);
     const timeoutMs = getPublishTimeoutMs();
+    // 批次7.6:超时必须尝试取消底层流程——此前 Promise.race 只拒 promise,
+    // 底层 Playwright/fetch 还在跑,retry 造成重复发帖(事故级)
+    const abort = new AbortController();
     const result = await Promise.race([
       driver.publish({
         title: job.title,
         content: job.content,
         mediaPath: job.media_path ?? undefined,
+        signal: abort.signal,
       }),
-      timeoutPromise(timeoutMs),
+      timeoutPromise(timeoutMs).catch((err) => { abort.abort(); throw err; }),
     ]);
     updateJob(jobId, {
       status: "published",

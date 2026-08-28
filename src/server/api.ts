@@ -10,7 +10,7 @@ import { loadConfig, saveConfig, dataDir, getConfigDir, HEYGEM_TUNNEL_DEFAULTS, 
 import { PROVIDER_PRESETS } from "../llm/provider-keys.js";
 import { runJsonPrompt } from "../services/llm-json.js";
 import { PURPOSE_PRESETS, CONTENT_FORMS, getPurpose, purposeEvalFocusBlock } from "../services/purpose-presets.js";
-import { buildAssetConstraintSection, buildStepContractSection, buildMaterialSearchInstruction, CRITERIA_DIR, SEARCH_PROTOCOL } from "./step-contract.js";
+import { buildAssetConstraintSection, buildStepContractSection, buildMaterialSearchInstruction, CRITERIA_DIR, SEARCH_PROTOCOL, readCriteriaPathForStep } from "./step-contract.js";
 import { purposeSkillsBlock, countPurposeSkills, listPurposeSkills } from "../db/purpose-skills-repo.js";
 import { researchPurposeSkills } from "../services/purpose-skills.js";
 import { getDb } from "../db/connection.js";
@@ -27,6 +27,7 @@ import {
 import { MemoryClient } from "../memory.js";
 import { EvalTimeoutError, EvalParseError } from "../agent/evaluator.js";
 import { registerProgressBroadcaster } from "../services/progress-events.js";
+import { failVisible } from "../services/fail-visible.js";
 import { MAX_PLAN_DURATION_S } from "../services/quality-gate.js";
 import type { WsBridge } from "../ws-bridge.js";
 import { getProvider, getDefaultProvider, listProviders } from "../providers/registry.js";
@@ -2614,13 +2615,19 @@ async function waitForCreatorIdle(workId: string, timeoutMs = 120_000): Promise<
   }
 }
 
-/** 评审熔断落态(2026-08-28 批次1 抽取共用):3 轮不过 / 超时降级链末端 都走这里。
- *  置 eval_blocked + works.status=failed + 出队通知 + 广播,交人工处置。 */
+/** 评审熔断落态(2026-08-28 批次1 抽取共用;批次7.1 软化):3 轮不过 / 超时降级链末端 都走这里。
+ *  软化规则:剩余问题全部 minor → awaiting_human(转人工待决,作品不判死);
+ *  含 critical/major → eval_blocked + works.status=failed(维持硬熔断)。 */
 async function markEvalBlocked(workId: string, completedStep: string, broadcastData: Record<string, unknown>): Promise<void> {
   if (!wsBridge) return;
+  const result = broadcastData.result as EvalResult | undefined;
+  const minorOnly = !!result?.issues?.length && result.issues.every((i) => i.severity === "minor");
   const freshWork = await getWork(workId);
   if (freshWork) {
-    freshWork.pipeline[completedStep].status = "eval_blocked" as any;
+    freshWork.pipeline[completedStep].status = (minorOnly ? "awaiting_human" : "eval_blocked") as any;
+    if (minorOnly) {
+      freshWork.pipeline[completedStep].note = `评审 ${broadcastData.attempt ?? ""} 轮后仅剩 minor 问题,转人工待决`;
+    }
     // 2026-08-19 P1:同步置 works.status=failed——此前只改 pipeline,卡片永远
     // 显示"素材准备中/合成中"中间态,无人工处置入口(状态腐烂)
     await storeUpdateWork(workId, { pipeline: freshWork.pipeline, status: "failed" });
@@ -2631,13 +2638,16 @@ async function markEvalBlocked(workId: string, completedStep: string, broadcastD
   // 只认 pending/active 步骤，恢复后会跳过被卡的 eval_blocked 步骤）。
   notifyWorkSettled(workId, "failed");
   wsBridge.broadcastToBrowsers(workId, {
-    event: "eval_blocked",
-    data: { workId, step: completedStep, ...broadcastData },
+    event: minorOnly ? "awaiting_human" : "eval_blocked",
+    data: { workId, step: completedStep, minorOnly, ...broadcastData },
   });
   // 批次4.6:全局通知(不再只覆盖正盯着该作品页的用户)
   wsBridge.broadcastGlobal("notify", {
-    level: "error", kind: "eval_blocked",
-    text: `作品 ${workId} 评审受阻(${completedStep}),需人工处置`,
+    level: minorOnly ? "warn" : "error",
+    kind: minorOnly ? "awaiting_human" : "eval_blocked",
+    text: minorOnly
+      ? `作品 ${workId} 的 ${completedStep} 阶段仅剩 minor 问题,已转人工待决(可强制通过或指导重评)`
+      : `作品 ${workId} 评审受阻(${completedStep}),需人工处置`,
     workId,
   });
   const session = wsBridge.getSession(workId);
@@ -2732,6 +2742,11 @@ export async function runEvaluation(workId: string, completedStep: string, nextS
     if (!session.loop) throw new Error("评审需要 API loop 会话(CLI 路径已于 P4-T2 下线)");
     // 2026-08-28 批次1.3 降级链末端:评审器两次超时后,plan/assembly 用机器门禁兜底——
     // 产物过门禁则带 __gateOnly 标记放行(落盘可审计),不过则门禁问题清单即修复反馈
+    // 批次7.4 按阶段降档:无视觉要求阶段可用轻量评审模型(config.llm.evalLightModel),
+    // assets/assembly 必须看图不受影响;降级链显式换模型(evalModelSpec)优先
+    const evalCfg = await loadConfig();
+    const effectiveModelSpec = evalModelSpec
+      ?? (!["assets", "assembly"].includes(completedStep) ? evalCfg.llm?.evalLightModel : undefined);
     let evalResult: EvalResult;
     if (gateFallback) {
       const gate = await import("../services/quality-gate.js");
@@ -2755,11 +2770,11 @@ export async function runEvaluation(workId: string, completedStep: string, nextS
         workId,
         step: completedStep,
         evalPrompt,
-        config: await loadConfig(),
+        config: evalCfg,
         workDir,
         session,
         bridge: wsBridge,
-        modelSpec: evalModelSpec,
+        modelSpec: effectiveModelSpec,
       });
     }
     evalResult.step = completedStep;
@@ -2879,7 +2894,9 @@ export async function runEvaluation(workId: string, completedStep: string, nextS
       }
 
       // Inject feedback into creator agent via resume
-      const feedbackPrompt = buildFeedbackPrompt(evalResult, attempt);
+      // 批次7.2:重复问题检测——同一 issue 跨轮出现即附换路警示(治"改描述式假修 ×4 轮")
+      const repeatNotes = await findRepeatedIssues(workId, completedStep, evalResult);
+      const feedbackPrompt = buildFeedbackPrompt(evalResult, attempt, repeatNotes);
       await wsBridge.sendMessage(workId, feedbackPrompt);
 
       // Persist chat
@@ -2933,7 +2950,47 @@ export async function runEvaluation(workId: string, completedStep: string, nextS
   }
 }
 
-function buildFeedbackPrompt(evalResult: EvalResult, attempt: number): string {
+/** 批次7.2 重复问题检测(与 M13.1 同一实现):当前轮 issue 与历史轮比对,
+ *  归一化文本 bigram Jaccard ≥0.6 判同。返回"第 N 次出现"的提示行。 */
+function normalizeIssueText(s: string): string {
+  return s.toLowerCase().replace(/\d+/g, "").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+}
+function bigramsOf(s: string): Set<string> {
+  const t = normalizeIssueText(s).replace(/\s+/g, "");
+  const set = new Set<string>();
+  for (let i = 0; i < t.length - 1; i++) set.add(t.slice(i, i + 2));
+  return set;
+}
+function jaccardSim(a: Set<string>, b: Set<string>): number {
+  if (!a.size || !b.size) return 0;
+  let inter = 0;
+  for (const x of a) if (b.has(x)) inter++;
+  return inter / (a.size + b.size - inter);
+}
+async function findRepeatedIssues(workId: string, step: string, current: EvalResult): Promise<string[]> {
+  try {
+    const prev = (await loadAllEvalResults(workId, step)).filter((r) => r.attempt < current.attempt);
+    if (!prev.length) return [];
+    const notes: string[] = [];
+    for (const issue of current.issues) {
+      const sig = bigramsOf(issue.description);
+      let maxRound = 0;
+      for (const r of prev) {
+        for (const pi of r.issues) {
+          if (jaccardSim(sig, bigramsOf(pi.description)) >= 0.6) maxRound = Math.max(maxRound, r.attempt);
+        }
+      }
+      if (maxRound > 0) {
+        notes.push(`「${issue.description.slice(0, 60)}」——该问题第 ${maxRound} 轮评审已指出,本轮仍出现`);
+      }
+    }
+    return notes;
+  } catch {
+    return [];
+  }
+}
+
+function buildFeedbackPrompt(evalResult: EvalResult, attempt: number, repeatNotes: string[] = []): string {
   const issueList = evalResult.issues
     .map((i, idx) => `${idx + 1}. [${i.severity}] ${i.description}${i.file ? ` (文件: ${i.file})` : ""}`)
     .join("\n");
@@ -2950,7 +3007,15 @@ ${issueList}
 
 ### 修改建议
 ${suggestionList}
+${repeatNotes.length ? `
+### ⚠️ 重复问题换路警示(系统检测)
+${repeatNotes.map((n) => `- ${n}`).join("\n")}
 
+同一问题多轮未修复,说明你前两轮的修法没有触达根因。**禁止沿用原思路**,必须换策略:
+- 素材不符/货不对板 → 换素材源或换素材,不是改描述文案
+- 时长不足 → 加镜头/加内容,不是注水凑秒
+- 技术参数不达标 → 改生成/合成参数重跑,不是修补输出文件
+` : ""}
 请修复以上问题，修复完成后再次调用 pipeline/advance 提交评审。`;
 }
 
@@ -2992,7 +3057,7 @@ ${work.purpose ? purposeEvalFocusBlock(work.purpose) : ""}
 ${buildExplicitParamsBlock(work)}
 
 ## 评审标准
-请阅读评审标准文件(绝对路径): ${join(CRITERIA_DIR, `${step}.md`)}。如果文件不存在，请使用通用的内容质量标准进行评审，不要花时间寻找该文件。
+请阅读评审标准文件(绝对路径): ${readCriteriaPathForStep(step, work.type)}。如果文件不存在，请使用通用的内容质量标准进行评审，不要花时间寻找该文件。
 
 ## 创作产出摘要
 ${historyText.slice(0, 6000) || "(无文本产出记录)"}
@@ -3365,8 +3430,8 @@ apiRoutes.post("/api/works/:id/eval/force-pass", async (c) => {
   const work = await getWork(id);
   if (!work) return c.json({ error: "Work not found" }, 404);
   const { step, nextStep } = body;
-  if (!step || !["eval_blocked", "evaluating"].includes(work.pipeline[step]?.status as string)) {
-    return c.json({ error: "Step not in eval_blocked/evaluating state" }, 400);
+  if (!step || !["eval_blocked", "evaluating", "awaiting_human"].includes(work.pipeline[step]?.status as string)) {
+    return c.json({ error: "Step not in eval_blocked/evaluating/awaiting_human state" }, 400);
   }
   work.pipeline[step].status = "done";
   work.pipeline[step].completedAt = new Date().toISOString();
@@ -3741,8 +3806,9 @@ interface BatchConvertItem {
 }
 interface BatchConvertJob {
   id: string;
-  status: "running" | "done";
+  status: "running" | "done" | "error";
   autoPipeline: boolean;
+  error?: string;
   items: BatchConvertItem[];
   startedAt: number;
   finishedAt?: number;
@@ -4127,7 +4193,10 @@ apiRoutes.post("/api/topics/batch-convert", async (c) => {
 
   // fire-and-forget：后台串行执行，前端轮询进度
   runBatchConvert(job, body).catch((err) => {
-    job.status = "done";
+    // 批次7.5:job 崩溃标 error 不标 done(此前崩溃=done,用户看到"完成"但产物残缺)
+    job.status = "error";
+    job.error = `批量任务崩溃: ${(err as Error).message}`;
+    failVisible({ stage: "batch-convert" }, (err as Error).message, { fatal: true });
     console.error("[batch-convert] job crashed:", err);
   });
 
@@ -4137,7 +4206,9 @@ apiRoutes.post("/api/topics/batch-convert", async (c) => {
 // GET /api/topics/batch-status/:jobId - poll batch conversion progress
 apiRoutes.get("/api/topics/batch-status/:jobId", (c) => {
   const job = batchConvertJobs.get(c.req.param("jobId"));
-  if (!job) return c.json({ error: "Job not found" }, 404);
+  // 批次7.7:job 全内存态,重启即丢——404 文案说明影响面与自查路径(轻量方案,
+  // 作品/选题持久态不受影响:未 converted 的可重新转换,已 converted 的有 workId 可查)
+  if (!job) return c.json({ error: "Job not found(服务重启后进行中的批量进度丢失;作品与选题状态未受影响——未转换的选题可重新发起,已转换的可直接查作品)" }, 404);
   return c.json(job);
 });
 

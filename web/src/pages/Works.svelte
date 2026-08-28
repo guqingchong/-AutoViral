@@ -221,11 +221,14 @@
     if (qp && qp.status === "queued") {
       return { text: `排队中（第 ${qp.pos} 位）`, stalled: false, queued: true };
     }
-    const activeStep = w.pipeline?.find((s) => s.status === "active" || s.status === "evaluating" || s.status === "eval_blocked");
+    const activeStep = w.pipeline?.find((s) => s.status === "active" || s.status === "evaluating" || s.status === "eval_blocked" || s.status === "awaiting_human");
     if (activeStep) {
       const stalled = !!w.lastActivityAt && Date.now() - new Date(w.lastActivityAt).getTime() >= STALL_THRESHOLD_MS;
       if (activeStep.status === "eval_blocked") {
         return { text: `评审受阻 · ${activeStep.name}`, stalled: true, queued: false };
+      }
+      if (activeStep.status === "awaiting_human") {
+        return { text: `待人工拍板 · ${activeStep.name}`, stalled: true, queued: false };
       }
       if (stalled) {
         // 批次4.5 诚实状态:仅当队列项在 running(看门狗确实会接管,批次4.2 活性判定已修)

@@ -86,23 +86,25 @@ describe("publish accountId 链路", () => {
     expect(rows.map((r) => r.account_id).sort()).toEqual([a1.id, a2.id].sort());
   });
 
-  it("③ 同作品同平台同 accountId 连发两次 → 仍一行(复用)", async () => {
+  it("③ 同作品同平台同 accountId 连发两次 → 第二次被拒(批次7.6 禁重发)", async () => {
+    // 语义变更(2026-08-28):首次发布成功后记录为 published,重复发布=重复发帖事故源,
+    // 必须显式拒绝;只有 failed 记录才走复用重发
     const account = createAccount(makeAccount());
 
     const first = await publishToPlatform(WORK_ID, "douyin", { ...input, accountId: account.id });
-    const second = await publishToPlatform(WORK_ID, "douyin", { ...input, accountId: account.id });
+    await expect(publishToPlatform(WORK_ID, "douyin", { ...input, accountId: account.id }))
+      .rejects.toThrow("禁止重复发布");
 
-    expect(second.id).toBe(first.id);
     expect(recordsRepo.listPublishRecords({ workId: WORK_ID })).toHaveLength(1);
+    expect(first.status).toBe("published");
   });
 
-  it("③b account_id 缺省(null/undefined)与显式 undefined 视为同值 → 复用旧记录", async () => {
-    // 无账号体系下的旧式发布:第一次不落 account_id,第二次也不传 → 复用同一行
+  it("③b account_id 缺省(null/undefined)与显式 undefined 视为同值 → 已发布同样拒重发", async () => {
     const first = await publishToPlatform(WORK_ID, "douyin", input);
-    const second = await publishToPlatform(WORK_ID, "douyin", input);
+    await expect(publishToPlatform(WORK_ID, "douyin", input)).rejects.toThrow("禁止重复发布");
 
-    expect(second.id).toBe(first.id);
     expect(recordsRepo.listPublishRecords({ workId: WORK_ID })).toHaveLength(1);
+    expect(first.status).toBe("published");
   });
 
   it("④ accountId 属于别的平台 → throw 不属于平台", async () => {

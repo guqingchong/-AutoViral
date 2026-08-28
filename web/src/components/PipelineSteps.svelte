@@ -45,6 +45,7 @@
     if (status === "active") return "step-running" + active;
     if (status === "evaluating") return "step-evaluating" + active;
     if (status === "eval_blocked") return "step-blocked" + active;
+    if (status === "awaiting_human") return "step-blocked" + active;
     if (status === "aborted") return "step-aborted" + active;
     if (status === "skipped") return "step-failed" + active;
     return "step-pending" + active;
@@ -123,6 +124,8 @@
                   {/if}
                 {:else if status === "eval_blocked"}
                   评审受阻
+                {:else if status === "awaiting_human"}
+                  待人工拍板
                 {:else if status === "active"}
                   {tt("stepRunningLabel")}
                   {#if elapsed(step)}
