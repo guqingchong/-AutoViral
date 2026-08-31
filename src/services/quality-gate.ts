@@ -370,11 +370,21 @@ export function assertAssemblyDeliverables(workDir: string): DeliverableIssue[] 
     issues.push({ key: "quality_report", detail: "output/quality-report.json 缺失(成片未过质量门禁)" });
   } else if (finalVideo) {
     try {
-      const report = JSON.parse(readFileSync(join(outDir, reportFile), "utf-8")) as { videoPath?: string };
+      const report = JSON.parse(readFileSync(join(outDir, reportFile), "utf-8")) as { videoPath?: string; createdAt?: string };
       if (!report.videoPath || basename(report.videoPath) !== finalVideo) {
         issues.push({ key: "quality_report", detail: `quality-report.json 的 videoPath(${report.videoPath ?? "空"})不指向当前成片 ${finalVideo}——QC 跑在了旧文件上` });
-      } else if (statSync(join(outDir, reportFile)).mtimeMs < statSync(join(outDir, finalVideo)).mtimeMs) {
-        issues.push({ key: "quality_report", detail: "quality-report.json 早于成片最后修改时间——成片重渲染后未重跑 QC" });
+      } else {
+        const finalMtime = statSync(join(outDir, finalVideo)).mtimeMs;
+        if (statSync(join(outDir, reportFile)).mtimeMs < finalMtime) {
+          issues.push({ key: "quality_report", detail: "quality-report.json 早于成片最后修改时间——成片重渲染后未重跑 QC" });
+        } else {
+          // 2026-08-31 实测(dde):agent 重渲染出全片黑帧后,复制旧报告刷新 mtime 混过门禁
+          // (报告 createdAt 18:30 比 19:03 的成片旧,内容是对旧版的分析)。内容级时间戳才是真相。
+          const createdAtMs = Date.parse(report.createdAt ?? "");
+          if (Number.isFinite(createdAtMs) && createdAtMs < finalMtime - 5000) {
+            issues.push({ key: "quality_report", detail: "quality-report.json 的内容时间(createdAt)早于成片最后修改时间——仅刷新文件时间不算重跑 QC,请重新运行质量门禁" });
+          }
+        }
       }
     } catch {
       issues.push({ key: "quality_report", detail: "quality-report.json 解析失败(损坏)" });
