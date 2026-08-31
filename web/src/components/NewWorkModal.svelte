@@ -11,7 +11,7 @@
   }: {
     open: boolean;
     onClose: () => void;
-    onCreate: (data: { title: string; type: string; contentCategory: string; videoSource: string; videoSearchQuery: string; topicHint: string }) => void;
+    onCreate: (data: { title: string; type: string; contentCategory: string; videoSource: string; videoSearchQuery: string; topicHint: string; evalMode: string }) => void;
     prefillTitle?: string;
     prefillTopicHint?: string;
   } = $props();
@@ -26,6 +26,7 @@
   let videoSource = $state("search");
   let videoSearchQuery = $state("");
   let topicHint = $state("");
+  let evalMode = $state("standard");
 
   // Apply prefill when modal opens
   $effect(() => {
@@ -48,6 +49,7 @@
       videoSource: selectedType === "short-video" ? videoSource : "",
       videoSearchQuery: videoSource === "search" ? videoSearchQuery : "",
       topicHint,
+      evalMode,
     });
     title = "";
     selectedType = "short-video";
@@ -56,6 +58,7 @@
     videoSource = "search";
     videoSearchQuery = "";
     topicHint = "";
+    evalMode = "standard";
   }
 
   function handleOverlayClick(e: MouseEvent) {
@@ -246,6 +249,30 @@
           placeholder={tt("topicHintPlaceholder")}
           rows="3"
         ></textarea>
+      </div>
+
+      <!-- Eval Mode: standard (per-stage LLM review) vs express (gates + single final review) -->
+      <div class="form-section">
+        <span class="form-label">{tt("evalModeLabel")}</span>
+        <div class="source-row">
+          <button
+            class="source-chip"
+            class:selected={evalMode === "standard"}
+            onclick={() => evalMode = "standard"}
+          >
+            {tt("evalStandard")}
+          </button>
+          <button
+            class="source-chip"
+            class:selected={evalMode === "express"}
+            onclick={() => evalMode = "express"}
+          >
+            {tt("evalExpress")}
+          </button>
+        </div>
+        <span class="source-hint">
+          {evalMode === "express" ? tt("evalExpressHint") : tt("evalStandardHint")}
+        </span>
       </div>
 
       <!-- Actions -->

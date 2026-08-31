@@ -277,6 +277,7 @@ export async function createWorkApi(input: {
   videoSearchQuery?: string;
   platforms?: string[];
   topicHint?: string;
+  evalMode?: "standard" | "express";
 }): Promise<Work> {
   return request<Work>("/api/works", {
     method: "POST",

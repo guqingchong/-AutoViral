@@ -92,6 +92,11 @@ const translations: Record<Language, Record<string, string>> = {
     titlePlaceholder: "Optional — AI generates if empty",
     topicHint: "Direction",
     topicHintPlaceholder: "What do you want to create? (optional)",
+    evalModeLabel: "Review Mode",
+    evalStandard: "Standard",
+    evalExpress: "Express",
+    evalStandardHint: "Independent LLM review at every stage",
+    evalExpressHint: "Machine gates still run; only one final LLM review on the finished piece",
 
     // Platforms
     xiaohongshu: "Xiaohongshu",
@@ -565,6 +570,11 @@ const translations: Record<Language, Record<string, string>> = {
     titlePlaceholder: "可选，不填则 AI 自动生成",
     topicHint: "创作方向",
     topicHintPlaceholder: "你想做什么内容？（可选）",
+    evalModeLabel: "评审模式",
+    evalStandard: "标准评审",
+    evalExpress: "极速模式",
+    evalStandardHint: "每阶段由独立 LLM 评审把关",
+    evalExpressHint: "机器门禁照跑，仅成片做一轮 LLM 终审",
 
     // Platforms
     xiaohongshu: "小红书",
