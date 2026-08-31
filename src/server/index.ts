@@ -236,6 +236,14 @@ export async function startServer(port: number): Promise<{ server: Server }> {
 
   const app = new Hono();
 
+  // 2026-08-31:统一 JSON 错误出口。此前未捕获异常走 Hono 默认 500 纯文本,
+  // 前端 res.json() 解析失败后错误消息退化为 "500 Internal Server Error",
+  // 叠加上层 alert 的吞错 bug,用户只能看到无信息量的字面量 "error"。
+  app.onError((err, c) => {
+    console.error("[api] unhandled error:", err);
+    return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+  });
+
   // 5. Mount Phase 5 analytics / comments / evolution routes (v2 kept first for specificity)
   app.route("/api/analytics/v2", analyticsApi);
   app.route("/api/analytics", analyticsRoutes);
