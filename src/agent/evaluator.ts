@@ -160,6 +160,16 @@ export async function runApiEvaluator(opts: ApiEvaluatorOpts): Promise<EvalResul
       result = parseEvalResultText(retry.resultText, step) as EvalResult & { __parseFailed?: boolean };
       if (result.__parseFailed) {
         // 2026-08-28 批次1.5:重出仍失败 → 显式错误进 eval_error 链,堵死兜底 pass 放水通道
+        // 2026-08-31 实测(dde/assembly):两轮解析失败无任何现场可复盘——落盘原文供诊断
+        try {
+          const { writeFileSync } = await import("node:fs");
+          const { join } = await import("node:path");
+          writeFileSync(
+            join(opts.workDir, `eval-parsefail-${step}-${Date.now()}.txt`),
+            `--- 首轮输出(前4000字) ---\n${resultText.slice(0, 4000)}\n\n--- 重出轮输出(前4000字) ---\n${retry.resultText.slice(0, 4000)}`,
+            "utf-8",
+          );
+        } catch { /* 落盘失败不阻断错误链 */ }
         throw new EvalParseError(step);
       }
     }
