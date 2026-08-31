@@ -3817,6 +3817,15 @@ apiRoutes.post("/api/topics/:id/convert", async (c) => {
   const account = accountId ? getAccount(accountId) : undefined;
   const genOpts = { toneProfile: account?.tone_profile };
 
+  const platform = platforms[0] ?? "douyin";
+
+  // 2026-08-31:先生成后建作品。此前先 createWork 再 await LLM 生成,
+  // 生成/落库失败会留下无任何产物的孤儿作品;现在生成失败直接抛错(由全局 onError 转 JSON),
+  // 不产生孤儿,前端也能看到真实错误消息。
+  const article = generateArticleFromTopic(topic, platform, genOpts);
+  const script = article.then((a) => generateScriptFromArticle(a, 180, genOpts));
+  const [a, s] = await Promise.all([article, script]);
+
   const work = await createWork({
     title: topic.title,
     type,
@@ -3826,18 +3835,9 @@ apiRoutes.post("/api/topics/:id/convert", async (c) => {
     topicHint: [topic.title, topic.description, `情绪：${topic.emotion_type}/${topic.emotion_subtype}`, `标签：${topic.tags.join(",")}`].filter(Boolean).join("\n"),
   });
 
-  const platform = platforms[0] ?? "douyin";
-  const article = generateArticleFromTopic(topic, platform, genOpts);
-  const script = article.then((a) => generateScriptFromArticle(a, 180, genOpts));
-
-  const [a, s] = await Promise.all([article, script]);
-  try {
-    createArticle({ work_id: work.id, topic_id: topic.id, title: a.title, content: a.content, platform, status: "ready" });
-    createScript({ work_id: work.id, content: s as unknown as Record<string, unknown>, duration: s.duration, status: "ready" });
-    updateTopic(topic.id, { status: "converted", work_id: work.id });
-  } catch (err) {
-    return c.json({ error: err instanceof Error ? err.message : "DB write failed" }, 500);
-  }
+  createArticle({ work_id: work.id, topic_id: topic.id, title: a.title, content: a.content, platform, status: "ready" });
+  createScript({ work_id: work.id, content: s as unknown as Record<string, unknown>, duration: s.duration, status: "ready" });
+  updateTopic(topic.id, { status: "converted", work_id: work.id });
 
   // Auto-start the pipeline: mark research as done (we already have the article+script)
   // and trigger the next step (plan)

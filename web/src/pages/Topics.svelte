@@ -324,8 +324,10 @@
     try {
       const res = await convertTopicToWork(topic.id, { platforms: [topic.platform || "douyin"], type: "short-video" });
       topic.status = "converted";
-    } catch {
-      alert(t("error") || "转换失败");
+    } catch (err) {
+      // 2026-08-31 修复:此前 alert(t("error")) 在不存在的 i18n key 上退化为显示字面量 "error",
+      // 真实错误被吞。直接展示后端返回的错误消息。
+      alert("转换失败：" + (err instanceof Error ? err.message : String(err)));
     }
   }
 
