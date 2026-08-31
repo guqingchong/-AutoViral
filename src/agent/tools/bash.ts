@@ -52,7 +52,7 @@ export function bashExecutor(blocklist?: string[]): ToolExecutor {
   return {
     def: {
       name: "Bash",
-      description: "执行 shell 命令（Git Bash 语义，支持管道/重定向/ffmpeg/curl/python3）。默认 120 秒超时。",
+      description: "执行 shell 命令（Git Bash 语义，支持管道/重定向/ffmpeg/curl/py -3）。默认 120 秒超时。",
       input_schema: {
         type: "object",
         properties: {
@@ -63,7 +63,7 @@ export function bashExecutor(blocklist?: string[]): ToolExecutor {
       },
     },
     async execute(input: Record<string, unknown>, ctx: ToolContext): Promise<string> {
-      const command = String(input.command ?? "");
+      let command = String(input.command ?? "");
       if (!command) throw new Error("Bash: command 必填");
       // 空操作守卫(2026-08-26 kimi-for-coding 实测):模型上下文受损(会话恢复/配对修复)
       // 后会退化为反复输出 Bash(":") 这类 no-op 占位——空输出反过来加剧迷茫,形成
@@ -89,6 +89,14 @@ export function bashExecutor(blocklist?: string[]): ToolExecutor {
             `外网抓取 HTML 页面的成功率极低且已被评审判定为无效路径,请改用上述通道。`
           );
         }
+      }
+      // 2026-08-31 实测实证:本机 Git Bash 的 python3 是损坏的启动器拷贝
+      // (exit 106 "failed to locate pyvenv.cfg"),agent 惯性敲 python3 必败,
+      // 失败后容易误入 curl 抓站等歪路。prompt 层"用 py -3"(批次2.3)是软约束,
+      // 工具层直接改写为硬保障。
+      if (/\bpython3\b/.test(command)) {
+        console.warn("[bash] python3 → py -3 自动改写");
+        command = command.replace(/\bpython3\b/g, "py -3");
       }
       for (const rule of rules) {
         if (rule.test(command)) throw new Error(`Bash: 命令被安全策略拦截: ${command.slice(0, 80)}`);
