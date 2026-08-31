@@ -3474,7 +3474,7 @@ apiRoutes.post("/api/works/:id/eval/force-pass", async (c) => {
     work.pipeline[forceNextStep].status = "active";
     work.pipeline[forceNextStep].startedAt = new Date().toISOString();
   }
-  await storeUpdateWork(id, { pipeline: work.pipeline, status: deriveStatusFromPipeline(work.pipeline, work.status) });
+  await storeUpdateWork(id, { pipeline: work.pipeline, status: deriveStatusFromPipeline(work.pipeline, work.status, { reviveFromFailed: true }) });
   broadcastPipelineUpdate(id, work.pipeline);
   return c.json({ ok: true, pipeline: work.pipeline });
 });
@@ -3489,7 +3489,8 @@ apiRoutes.post("/api/works/:id/eval/retry", async (c) => {
   if (!step) return c.json({ error: "step required" }, 400);
   work.pipeline[step].status = "active";
   const evalAttempts = { ...(work.evalAttempts ?? {}), [step]: 0 };
-  await storeUpdateWork(id, { pipeline: work.pipeline, evalAttempts, status: deriveStatusFromPipeline(work.pipeline, work.status) } as any);
+  // reviveFromFailed:人工 retry 是 failed 粘性的合法复活通道(否则重开后卡片仍显示"失败")
+  await storeUpdateWork(id, { pipeline: work.pipeline, evalAttempts, status: deriveStatusFromPipeline(work.pipeline, work.status, { reviveFromFailed: true }) } as any);
   broadcastPipelineUpdate(id, work.pipeline);
   if (wsBridge && guidance) {
     await wsBridge.sendMessage(id, `## 用户指导\n\n${guidance}\n\n请根据以上指导修改当前阶段的产出，完成后重新提交。`);
