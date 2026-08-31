@@ -207,30 +207,51 @@ export class OpenAICompatProvider implements LlmProvider {
         ? AbortSignal.any([req.signal, stallCtrl.signal].filter(Boolean) as AbortSignal[])
         : (req.signal ?? stallCtrl.signal);
 
-    let res: Response;
-    try {
-      res = await fetch(`${this.opts.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${this.opts.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: req.model,
-        messages: toOpenAiMessages(req.system, req.messages, new Set(req.tools.filter((t) => t.builtin).map((t) => t.name)), req.allowImages !== false, this.opts.passReasoningBack === true),
-        tools: req.tools.length ? toOpenAiTools(req.tools) : undefined,
-        max_tokens: req.maxTokens,
-        stream: true,
-        stream_options: { include_usage: true },
-      }),
-      signal: combinedSignal,
-    });
-    } catch (err) {
-      // 停滞中止(TTFB 阶段)区别于用户中止:转专用错误,便于日志/重试语义区分
-      if (stallCtrl.signal.aborted) throw new StallTimeoutError(stallPhase, FIRST_DELTA_TIMEOUT_MS);
-      // 用户/回合中止不可重试(否则 abort 后还会空转 3 次退避 ~50s)
-      if (req.signal?.aborted) throw noRetry(err as Error);
-      throw err;
+    // 请求体独立成变量:支持 max_tokens 超供应商上限时收敛重试(见下方 400 处理)
+    const reqBody: Record<string, unknown> = {
+      model: req.model,
+      messages: toOpenAiMessages(req.system, req.messages, new Set(req.tools.filter((t) => t.builtin).map((t) => t.name)), req.allowImages !== false, this.opts.passReasoningBack === true),
+      tools: req.tools.length ? toOpenAiTools(req.tools) : undefined,
+      max_tokens: req.maxTokens,
+      stream: true,
+      stream_options: { include_usage: true },
+    };
+    const postOnce = async (): Promise<Response> => {
+      try {
+        return await fetch(`${this.opts.baseUrl}/chat/completions`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${this.opts.apiKey}`,
+          },
+          body: JSON.stringify(reqBody),
+          signal: combinedSignal,
+        });
+      } catch (err) {
+        // 停滞中止(TTFB 阶段)区别于用户中止:转专用错误,便于日志/重试语义区分
+        if (stallCtrl.signal.aborted) throw new StallTimeoutError(stallPhase, FIRST_DELTA_TIMEOUT_MS);
+        // 用户/回合中止不可重试(否则 abort 后还会空转 3 次退避 ~50s)
+        if (req.signal?.aborted) throw noRetry(err as Error);
+        throw err;
+      }
+    };
+    let res: Response = await postOnce();
+    // 2026-08-31 实测实证:deepseek-v4-flash-vision-exp 等模型 max_tokens 上限仅 2048
+    // (错误码 1210 "限制数值范围[1,2048]"),loop 层提到 32768 后评审三轮 400 全灭,
+    // a4d 成片终审被冤杀。400 且报文指明上限时自动收敛到上限重试一次——
+    // 比逐模型维护上限表皮实(新模型接入即自愈)。
+    if (!res.ok && res.status === 400) {
+      const peek = await res.clone().text().catch(() => "");
+      if (/max_tokens/i.test(peek)) {
+        const capMatch = peek.match(/\[\s*1\s*,\s*(\d+)\s*\]/)
+          ?? peek.match(/(?:上限|最大|不得超过|maximum|limit)\D{0,12}(\d{3,6})/i);
+        const cap = capMatch ? Number(capMatch[1]) : 0;
+        if (cap > 0 && Number(reqBody.max_tokens) > cap) {
+          console.warn(`[llm] max_tokens ${reqBody.max_tokens} 超出 ${this.name}/${req.model} 上限 ${cap},收敛后重试一次`);
+          reqBody.max_tokens = cap;
+          res = await postOnce();
+        }
+      }
     }
     if (!res.ok) {
       const body = await res.text().catch(() => "");
