@@ -219,7 +219,7 @@
     return parts.join("\n");
   }
 
-  async function handleCreateWork(data: { title: string; type: string; contentCategory: string; videoSource: string; videoSearchQuery: string; topicHint: string }) {
+  async function handleCreateWork(data: { title: string; type: string; contentCategory: string; videoSource: string; videoSearchQuery: string; topicHint: string; evalMode: string }) {
     showNewWorkModal = false;
     prefillTitle = "";
     prefillTopicHint = "";
@@ -232,6 +232,7 @@
         videoSearchQuery: data.videoSearchQuery || undefined,
         platforms: ["douyin", "xiaohongshu"],
         topicHint: data.topicHint || undefined,
+        evalMode: data.evalMode === "express" ? "express" : undefined,
       });
       initialPrompt = buildInitialPrompt(data);
       currentWorkId = newWork.id;

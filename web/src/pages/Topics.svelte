@@ -38,6 +38,8 @@
   let batchVoiceMode = $state<"cloned" | "ai">("ai");
   // 质量评审闸门：默认开（每阶段完成后由独立评审会话把关,不合格打回重做）
   let batchEvaluation = $state<boolean>(true);
+  // 评审分级(批次10.2):standard=每阶段 LLM 评审;express=机器门禁照跑+仅成片单轮终审
+  let batchEvalMode = $state<"standard" | "express">("standard");
   // ── 用途驱动(04 方案):预设从 /api/purposes 拉取,一处定义前后端共用 ──
   interface PurposeOption { key: string; label: string; icon: string; goal: string; strategy: string; forms: string[]; defaults: { duration: number; assetForm: string; assetSource: string; assetBudget: string }; skillCount: number; }
   let purposeOptions = $state<PurposeOption[]>([]);
@@ -408,6 +410,7 @@
           voiceStyle: isVideo ? batchVoiceStyle : undefined,
           voiceMode: isVideo ? batchVoiceMode : undefined,
           evaluationMode: batchEvaluation,
+          evalMode: batchEvalMode === "express" ? "express" : undefined,
         }),
       });
       const data = await res.json();
@@ -990,6 +993,15 @@
               <input type="checkbox" bind:checked={batchEvaluation} />
               质量评审(每阶段由独立评审把关,不合格自动打回重做,强烈建议开启)
             </label>
+            {#if batchEvaluation}
+              <label class="batch-eval-toggle" style="display:flex;align-items:center;gap:6px;margin:4px 0;cursor:pointer;">
+                评审模式
+                <select bind:value={batchEvalMode} style="margin-left:4px;">
+                  <option value="standard">标准(每阶段 LLM 评审)</option>
+                  <option value="express">极速(机器门禁照跑,仅成片单轮终审)</option>
+                </select>
+              </label>
+            {/if}
             <p class="batch-hint">出片后自动执行质量门禁(时长/黑帧/静音/字幕覆盖率机器检测),低级错误拦截在发布前。</p>
             <p class="batch-auto-notice"><strong>全自动模式</strong>：本入口创建的作品一律由 AI 无人值守执行完整流水线（不会向你提问，所有创意决策按 skills 推荐方案自主拍板），本窗口实时显示每个选题的制作进度。模板/数字人为可选项，不影响模式。</p>
           </div>

@@ -1,1 +1,6 @@
 public/
+
+# 运行时渲染产物(worker.mjs 每次渲染重写,批次 8 误收后清理)
+out/
+src/generated/
+src/custom/current.tsx

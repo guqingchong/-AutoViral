@@ -191,7 +191,8 @@ publish-account 2 个测试按"禁重发"新契约更新)。
 
 - [x] 10.2 M8 评审分级:migration v33 works.eval_mode(standard|express);express =
   机器门禁照跑 + 仅 assembly 单轮 LLM 终审,其余阶段门禁过后直接推进;
-  batch 弹窗/单作品创建 API 均可指定;UI 选择器留实测后接(NewWorkModal)
+  batch 弹窗/单作品创建 API 均可指定;UI 选择器已于 2026-08-31 实测准备时接通
+  (NewWorkModal 评审模式 chip + Topics 批量弹窗 select,默认 standard)
 - [x] 10.3 M18 无超时清零:minimax tts/music/voice-clone×3、nanobanana、stock 下载、
   asset-library、memory.ts、template-clone×2、login-health×3、5 家官方发布商主链路
   (发布商多行异形 fetch 有少量残留未覆盖,务实收尾);M14 事故卡(services/incidents.ts,
@@ -204,4 +205,12 @@ publish-account 2 个测试按"禁重发"新契约更新)。
 
 ## 已完成的模型选项任务(2026-08-28,独立于批次)
 
-- [x] 设置页新增 glm-5.3-flash 与 deepseek-v4-flash-vision-exp(4 文件,已暂存待 commit)
+- [x] 设置页新增 glm-5.3-flash 与 deepseek-v4-flash-vision-exp(commit 4f5142f)
+
+## 实测前准备(2026-08-31)
+
+- [x] code-scene 运行时产物移出 git:packages/code-scene/.gitignore 新增
+  out/、src/generated/、src/custom/current.tsx;git rm --cached 45 个误收文件
+  (worker.mjs 渲染时重写,无源码/测试依赖,安全)
+- [x] express 评审模式 UI 接通:NewWorkModal 加"评审模式"chip(i18n 中英)、
+  Topics 批量弹窗加模式 select(仅在质量评审开启时显示),App.svelte/web api.ts 透传 evalMode
