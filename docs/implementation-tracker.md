@@ -214,3 +214,18 @@ publish-account 2 个测试按"禁重发"新契约更新)。
   (worker.mjs 渲染时重写,无源码/测试依赖,安全)
 - [x] express 评审模式 UI 接通:NewWorkModal 加"评审模式"chip(i18n 中英)、
   Topics 批量弹窗加模式 select(仅在质量评审开启时显示),App.svelte/web api.ts 透传 evalMode
+
+## 实测首日修复与语音通知(2026-08-31)
+
+- [x] "error" 弹窗根因修复:Topics convert 的 alert(t("error")) 在不存在的 i18n key
+  上退化为字面量;改显真实 err.message。叠加防线:Hono 全局 onError 统一 JSON 错误
+  (此前未捕获异常返回纯文本 500,前端只剩 statusText);convert 端点改先生成后建作品,
+  失败不留孤儿
+- [x] 语音/声音双通道通知(services/voice-notify.ts):
+  服务端 Windows SAPI 系统语音(网页关闭也响,base64 传文本避编码坑,
+  同文本 3min 防抖聚合+每分钟 4 条限速,AUTOVIRAL_VOICE_NOTIFY=0 可关,测试环境静默);
+  浏览器 speechSynthesis 中文语音+Notification 桌面通知(App.svelte,首次点击申请权限)
+  播报范围:关键阻塞(failVisible/eval_blocked/awaiting_human/eco 拦截/H3 离线/系统级 warn)
+  + 完成通知(announceReviewReady:作品进 reviewing,两处落定挂点+全局 notify)
+  自检端点:POST /api/notify/test-voice
+  ⚠️ 后端部分需重启服务生效(等实测作品到终态后重启,避免打断会话)

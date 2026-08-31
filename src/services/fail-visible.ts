@@ -8,6 +8,7 @@
 
 import { log } from "../logger.js";
 import { broadcastProgress } from "./progress-events.js";
+import { voiceNotify } from "./voice-notify.js";
 
 export function failVisible(
   scope: { workId?: string; stage?: string },
@@ -18,9 +19,13 @@ export function failVisible(
     stage: scope.stage,
     reason: reason.slice(0, 300),
   });
+  const text = `❌ ${scope.stage ? `${scope.stage} ` : ""}失败:${reason.slice(0, 120)}`;
   broadcastProgress({
     workId: scope.workId,
     kind: "system",
-    text: `❌ ${scope.stage ? `${scope.stage} ` : ""}失败:${reason.slice(0, 120)}`,
+    text,
   });
+  // 2026-08-31:关键失败加系统语音播报(voice-notify 内部有同文本 3min 防抖聚合,
+  // watchdog 启动批量告警不会连环播报)
+  voiceNotify(`${scope.stage ?? "系统"}失败:${reason.slice(0, 60)}`, `fail:${scope.stage ?? "system"}:${reason.slice(0, 40)}`);
 }

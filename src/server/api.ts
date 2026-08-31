@@ -28,6 +28,7 @@ import { MemoryClient } from "../memory.js";
 import { EvalTimeoutError, EvalParseError } from "../agent/evaluator.js";
 import { registerProgressBroadcaster } from "../services/progress-events.js";
 import { failVisible } from "../services/fail-visible.js";
+import { voiceNotify } from "../services/voice-notify.js";
 import { MAX_PLAN_DURATION_S } from "../services/quality-gate.js";
 import type { WsBridge } from "../ws-bridge.js";
 import { getProvider, getDefaultProvider, listProviders } from "../providers/registry.js";
@@ -199,6 +200,7 @@ export function setWsBridge(bridge: WsBridge): void {
     } else {
       // 无归属作品的系统事件(配额冷却/队列级故障)→ 全局通知通道
       bridge.broadcastGlobal("notify", { level: "warn", kind: ev.kind, text: ev.text });
+      voiceNotify(ev.text.slice(0, 80), `sys:${ev.kind}`);
     }
   });
 }
@@ -213,6 +215,12 @@ apiRoutes.get("/api/status", async (c) => {
     model: config.model,
     port: config.port,
   });
+});
+
+// POST /api/notify/test-voice —— 2026-08-31:系统语音播报自检(实测通道验证)
+apiRoutes.post("/api/notify/test-voice", async (c) => {
+  voiceNotify("语音提醒测试。如果你听到这句话,说明 AutoViral 系统语音已就绪。", "test-voice");
+  return c.json({ ok: true, platform: process.platform, enabled: process.env.AUTOVIRAL_VOICE_NOTIFY !== "0" });
 });
 
 function flattenAnalytics(cfg: import("../config.js").Config) {
@@ -638,6 +646,17 @@ apiRoutes.post("/api/works", async (c) => {
   }
 });
 
+/** 2026-08-31:作品到达待审核 = 用户最关心的"完成"事件。
+ *  全局 toast + 系统语音双通道播报(语音侧有 per-work 防抖)。 */
+function announceReviewReady(workId: string): void {
+  getWork(workId).then((w) => {
+    const title = (w?.title ?? workId).slice(0, 24);
+    const text = `作品「${title}」已完成全部制作,进入待审核,请前往验收`;
+    wsBridge?.broadcastGlobal("notify", { level: "info", kind: "work_review_ready", text, workId });
+    voiceNotify(`作品 ${title} 已完成制作,请前往验收`, `review-ready:${workId}`);
+  }).catch(() => {});
+}
+
 // GET /api/works/:id
 apiRoutes.get("/api/works/:id", async (c) => {
   const id = c.req.param("id");
@@ -973,6 +992,8 @@ apiRoutes.post("/api/generate/video", async (c) => {
   if (genWork?.assetBudget === "eco") {
     if (provider.name !== "local-h3") {
       log("warn", "api", "eco_cloud_blocked", workId, { provider: provider.name });
+      // 2026-08-31:eco 拦截意味着流水线即将卡住,语音播报让用户离开电脑也能听到
+      voiceNotify(`作品 ${workId} 为 eco 成本档,禁止使用云端视频生成,流水线将阻塞,请检查素材配置`, `eco-blocked:${workId}`);
       return c.json({
         success: false,
         error: `本作品为 eco 成本档,禁止使用云端视频生成(${provider.name})。请改用 local-h3(AutoDL 实例);若实例离线,请在 AutoDL 控制台开机后重试。`,
@@ -985,6 +1006,8 @@ apiRoutes.post("/api/generate/video", async (c) => {
       const { assertH3Ready } = await import("../services/h3-instance-service.js");
       await assertH3Ready();
     } catch (err) {
+      // 2026-08-31:H3 离线阻塞是本次实测最需要"听得见"的提醒(需用户开机 AutoDL)
+      voiceNotify(`作品 ${workId} 需要本地 H3 生成视频,但 AutoDL 实例离线。请开机 AutoDL 实例后重试`, `h3-offline:${workId}`);
       return c.json({ success: false, error: (err as Error).message, code: "INSTANCE_OFFLINE" }, 503);
     }
   }
@@ -2655,14 +2678,17 @@ async function markEvalBlocked(workId: string, completedStep: string, broadcastD
     data: { workId, step: completedStep, minorOnly, ...broadcastData },
   });
   // 批次4.6:全局通知(不再只覆盖正盯着该作品页的用户)
+  const blockedText = minorOnly
+    ? `作品 ${workId} 的 ${completedStep} 阶段仅剩 minor 问题,已转人工待决(可强制通过或指导重评)`
+    : `作品 ${workId} 评审受阻(${completedStep}),需人工处置`;
   wsBridge.broadcastGlobal("notify", {
     level: minorOnly ? "warn" : "error",
     kind: minorOnly ? "awaiting_human" : "eval_blocked",
-    text: minorOnly
-      ? `作品 ${workId} 的 ${completedStep} 阶段仅剩 minor 问题,已转人工待决(可强制通过或指导重评)`
-      : `作品 ${workId} 评审受阻(${completedStep}),需人工处置`,
+    text: blockedText,
     workId,
   });
+  // 2026-08-31:评审阻塞属"必须人来处理"类事件,系统语音同步播报
+  voiceNotify(blockedText, `eval-blocked:${workId}:${completedStep}`);
   const session = wsBridge.getSession(workId);
   if (session) saveWorkChat(workId, { blocks: session.messageHistory }).catch(() => {});
 }
@@ -2856,6 +2882,7 @@ export async function runEvaluation(workId: string, completedStep: string, nextS
         broadcastPipelineUpdate(workId, freshWork.pipeline);
         if (derivedAfterEval === "reviewing") {
           notifyWorkSettled(workId, "reviewing");
+          announceReviewReady(workId);
           // 双产物派生（同 advance 路径，失败不阻塞）
           if (freshWork.dualOutput) {
             deriveDualOutputs(workId).catch((err) =>
@@ -3393,6 +3420,7 @@ apiRoutes.post("/api/works/:id/pipeline/advance", async (c) => {
     // notifyWorkSettled 仅在该作品处于队列 running 状态时生效，未入队作品调用无副作用。
     if (derivedStatus === "reviewing") {
       notifyWorkSettled(id, "reviewing");
+      announceReviewReady(id);
       // 双产物派生：dual_output 作品进 reviewing 时异步派生图文产物
       // （文章接线验证 + 小红书卡片渲染）；失败不阻塞 reviewing，仅记日志。
       if (work.dualOutput) {

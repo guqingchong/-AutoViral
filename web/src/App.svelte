@@ -385,14 +385,48 @@
     setTimeout(() => { toasts = toasts.filter((t) => t.id !== id); }, 12000);
   }
 
+  // 2026-08-31:toast 语音播报+桌面通知(用户不时刻盯作品页)。
+  // 浏览器侧播报要求页面至少打开着(可在后台);服务端另有系统语音兜底(网页关闭也响)。
+  let lastSpoken = { text: "", at: 0 };
+  function speakToast(text: string) {
+    const now = Date.now();
+    if (!text || (text === lastSpoken.text && now - lastSpoken.at < 30_000)) return;
+    lastSpoken = { text, at: now };
+    try {
+      const u = new SpeechSynthesisUtterance(`AutoViral 提醒:${text}`);
+      u.lang = "zh-CN";
+      u.rate = 1.1;
+      speechSynthesis.speak(u);
+    } catch { /* 浏览器不支持或被自动播放策略拦截时静默 */ }
+  }
+  function desktopNotify(text: string) {
+    try {
+      if (Notification.permission === "granted") new Notification("AutoViral", { body: text });
+    } catch { /* 忽略 */ }
+  }
+
   onMount(async () => {
     const current = document.documentElement.getAttribute("data-theme") as "light" | "dark" | null;
     theme = current ?? "dark";
     const unsub = subscribe(() => { lang = getLanguage(); });
     await loadSettings();
+    // 桌面通知权限:等用户第一次点击页面时再申请(浏览器要求用户手势上下文)
+    const askNotifyPermission = () => {
+      try { if (Notification.permission === "default") Notification.requestPermission(); } catch { /* 忽略 */ }
+    };
+    window.addEventListener("pointerdown", askNotifyPermission, { once: true });
     // 批次4.6:全局通知通道(配额冷却/评审受阻/作品失败,不再依赖"正盯着该作品页")
     const globalWs = createWsConnection((event, data) => {
-      if (event === "notify") pushToast(data?.level ?? "info", data?.text ?? "");
+      if (event === "notify") {
+        const level = data?.level ?? "info";
+        const text = data?.text ?? "";
+        pushToast(level, text);
+        // 播报范围:关键阻塞(warn/error)+ 完成通知(work_review_ready);其余 info 静默
+        if (level !== "info" || data?.kind === "work_review_ready") {
+          speakToast(text);
+          desktopNotify(text);
+        }
+      }
     });
     return () => {
       unsub();
