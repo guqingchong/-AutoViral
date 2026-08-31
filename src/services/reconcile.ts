@@ -133,6 +133,13 @@ export async function reconcileWorkStates(trigger: "startup" | "periodic" = "per
         result.details.push(`${w.id} 跳过转正(最近 assembly 评审 fail,待返工/重审)`);
         continue;
       }
+      // 2026-08-31 实测实证(a4d):评审开启但 assembly 从未产出 pass verdict
+      // (评审自身出错,如 LLM 400)+ 服务重启 → 对账转正绕过终审直接 reviewing。
+      // 评审流没跑完 ≠ 无评审参与——留 active,会话恢复后 agent 重新 advance 触发重审。
+      if (w.evaluation_mode && lastVerdict !== "pass") {
+        result.details.push(`${w.id} 跳过转正(评审开启且 assembly 无 pass 记录,留待重新送审)`);
+        continue;
+      }
       const activeRender = listRenderJobs("running", w.id).length + listRenderJobs("pending", w.id).length;
       if (activeRender === 0) {
         // 关键时序判定：只当"成品产生于本轮 assembly 开始之后"才转正。
