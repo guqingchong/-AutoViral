@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { readFile, writeFile, appendFile, mkdir, readdir, rm, rename, unlink, stat, copyFile } from "node:fs/promises";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -3254,6 +3254,32 @@ apiRoutes.post("/api/works/:id/pipeline/advance", async (c) => {
     // 进展即清零恢复计数(2026-08-19 P1):每次合法推进都是存活进展证据,
     // resume_attempts 只应统计"连续无进展的死亡恢复"
     workQueueRepo.resetResumeAttempts(id);
+
+    // ── 打回空转拦截(2026-08-31 实测,dde plan 连打 5 轮)────────────────
+    // 打回后 issue 指向的文件没改就重提,白烧整轮 LLM 评审。上轮 fail 的 issue
+    // 带 file 字段且所有指向文件自上轮评审以来都没变(不存在视为没变)→ 400 拦回。
+    if (work.evaluationMode) {
+      try {
+        const prevResults = await loadAllEvalResults(id, completedStep);
+        const last = prevResults[prevResults.length - 1];
+        if (last?.verdict === "fail" && last.timestamp) {
+          const refFiles = [...new Set((last.issues ?? []).map((i) => i.file).filter((f): f is string => !!f))];
+          if (refFiles.length) {
+            const evalAt = Date.parse(last.timestamp);
+            const changed = refFiles.filter((f) => {
+              try { return statSync(f).mtimeMs > evalAt; } catch { return false; }
+            });
+            if (changed.length === 0) {
+              log("info", "api", "advance_no_change_blocked", id, { step: completedStep, files: refFiles.length });
+              return c.json({
+                error: `上轮评审指出的 ${refFiles.length} 个问题文件自上轮以来均未改动,原样重提只会得到同样结果。请先实际修改: ${refFiles.map((f) => basename(f)).join(", ")}`,
+                unchangedFiles: refFiles,
+              }, 400);
+            }
+          }
+        }
+      } catch { /* 校验自身失败不阻断主流程 */ }
+    }
 
     // ── A1/B2 机器门禁(P2-T3):assembly 推进前强制交付物校验,拦截在评审之前 ──
     if (completedStep === "assembly" && work.type !== "image-text") {
