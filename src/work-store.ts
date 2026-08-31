@@ -574,9 +574,13 @@ export function statusOrder(s: WorkStatus): number {
 export function deriveStatusFromPipeline(
   pipeline: Record<string, PipelineStep>,
   current: WorkStatus,
+  opts: { reviveFromFailed?: boolean } = {},
 ): WorkStatus {
-  // approved（待发布）同样是用户确认态，流水线派生不得把它回退为 reviewing
-  if (current === "published" || current === "failed" || current === "approved") return current;
+  // published/approved（用户确认态）与 failed 都是粘性状态,流水线派生不得回退/复活。
+  // 唯一例外:人工通道(eval/retry、eval/force-pass)显式复活时传 reviveFromFailed——
+  // 2026-08-31 实测:retry 重开步骤后卡片仍显示"失败"(假状态),根因就是这里的粘性。
+  if (current === "published" || current === "approved") return current;
+  if (current === "failed" && !opts.reviveFromFailed) return current;
   const steps = Object.entries(pipeline);
   if (steps.length === 0) return current;
 
