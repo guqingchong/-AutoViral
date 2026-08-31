@@ -381,7 +381,8 @@ export class WsBridge {
   · quote-card(金句卡): {"quote":"≤40字","author":"可省","source":"可省"}
   · checklist(清单打勾): {"title":"≤12字","items":["≤18字"] ×2-6}
   · bar-compare(条形对比): {"title":"≤12字","bars":[{"label":"≤10字","value":数字}] ×2-5,"unit":"可省"}
-  可选: "duration":1-30(秒,默认6)、"theme":"finance_dark|warm_gold|ink_green|minimal_light"(与作品模板色系统一)
+  可选: "duration":1-30(秒,默认6)、"theme":"finance_dark|warm_gold|ink_green|minimal_light"(与作品模板色系统一;不传 theme 时系统自动继承作品模板的设计令牌,不要自行猜测)
+  竖版安全区:画面底部 y≥1390 为卡拉 OK 字幕带,场景内容不得进入(2026-08-31 实测:字幕压内容)
 - assembly 阶段的 advance 有机器门禁,以下缺一即被 400 拦截(提前备齐):
   ① output/ 下文件名含 final 的成片视频 ② output/publish-text.md(发布文案)
   ③ output/quality-report.json——对当前成片跑质量门禁生成,videoPath 指向该片且生成时间不早于成片 ④ output/ 下 .ass 字幕(单可视行 ≤15 字、CPS ≤8)

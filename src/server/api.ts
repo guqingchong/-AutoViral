@@ -1258,6 +1258,26 @@ apiRoutes.post("/api/assets/data-card", async (c) => {
 apiRoutes.post("/api/assets/code-scene", async (c) => {
   const body = await c.req.json().catch(() => null);
   if (!body) return c.json({ success: false, error: "invalid JSON body" }, 400);
+  // 2026-08-31 实测发现(a4d):agent 直调本端点时主题靠自由文本猜测,批次8.2 的
+  // 模版设计令牌注入只覆盖 video-factory 渲染路径——结果模版深色底而素材全白。
+  // 缺省时自动继承作品模版的 designTokens(无 designTokens 则退用模版画布底色);
+  // agent 显式传 theme/themeTokens 时尊重其选择。
+  if (body.workId) {
+    try {
+      const w = await getWork(body.workId);
+      const tpl = w?.templateId ? getTemplate(w.templateId) : undefined;
+      const layer0 = (tpl?.layers?.[0] ?? {}) as Record<string, unknown>;
+      const tokens = (layer0.designTokens && typeof layer0.designTokens === "object")
+        ? layer0.designTokens
+        : (tpl?.canvas?.backgroundColor ? { background: tpl.canvas.backgroundColor } : undefined);
+      if (tokens) {
+        const targetParams = body.template ? (body.template.params ??= {}) : (body.params ??= {});
+        if (!(targetParams as Record<string, unknown>).themeTokens) {
+          (targetParams as Record<string, unknown>).themeTokens = tokens;
+        }
+      }
+    } catch { /* 令牌继承失败不阻断渲染 */ }
+  }
   const { renderCodeScene, validateCodeSceneInput } = await import("../services/code-scene.js");
   const errors = validateCodeSceneInput(body);
   if (errors.length) return c.json({ success: false, error: errors.join("; "), code: "INVALID_PARAMS" }, 400);
@@ -1283,7 +1303,7 @@ apiRoutes.get("/api/assets/code-scene/templates", (c) => {
     ],
     themes: ["finance_dark", "warm_gold", "ink_green", "minimal_light"],
     duration: "1-30s(keynote-leather 整片 1-600s,建议跟随数字人源片时长),镜头模板建议 4-8s;为目标时长——场景入场动画约 2s 保持干脆,不足目标时长时末帧定格补齐,超出不裁短",
-    note: "精确数据镜头仍走 /api/assets/chart|data-card;本端点服务结构/流程/逻辑镜头;keynote-leather 为 1920×1080 横屏整片模板(默认时长 8s),其余模板按 1080x1920 竖版设计,非默认尺寸可能导致布局错位",
+    note: "精确数据镜头仍走 /api/assets/chart|data-card;本端点服务结构/流程/逻辑镜头;keynote-leather 为 1920×1080 横屏整片模板(默认时长 8s),其余模板按 1080x1920 竖版设计,非默认尺寸可能导致布局错位。竖版画面底部 y≥1390 为字幕安全区(烤卡拉 OK 字幕带),场景内容/装饰不得进入该区域,否则与字幕重叠(2026-08-31 实测实证)",
   });
 });
 
@@ -3101,6 +3121,7 @@ function buildEvalPrompt(work: Work, step: string, attempt: number, historyText:
 - 当前阶段: ${stepName}
 - 评审轮次: 第${attempt}轮
 - **作品目录: ${workDir}**
+${work.templateId ? `- **绑定模板: ${work.templateId}**(${getTemplate(work.templateId)?.name ?? "未知"})——模版约束(视觉呈现)属硬性评审项,见评审标准` : "- 未绑定模板"}
 ${work.purpose ? purposeEvalFocusBlock(work.purpose) : ""}
 ${buildExplicitParamsBlock(work)}
 
