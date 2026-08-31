@@ -116,6 +116,19 @@ export async function assertH3Ready(): Promise<void> {
   }
 }
 
+// ── H3 用量跟踪(2026-08-31 实测需求):AutoDL 按时计费,用户需要两个精确时点提醒——
+// ①真正开始生成时提醒开机(在 /api/generate/video 503 处,不在开工时);
+// ②素材阶段 AI 视频全部生成完时提醒关机。此处按作品记录"是否用过 H3"。
+const h3UsedWorks = new Set<string>();
+
+export function markH3UsedForWork(workId: string): void {
+  h3UsedWorks.add(workId);
+}
+
+export function h3WasUsedForWork(workId: string): boolean {
+  return h3UsedWorks.has(workId);
+}
+
 /** 服务启动时调用：立即探测一次 + 每 30 秒探测（unref 不阻塞进程退出） */
 export function startH3HealthLoop(): void {
   if (healthLoop || !getConfig().h3) return;

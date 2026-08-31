@@ -10,7 +10,7 @@ import { readFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { dataDir, getConfig } from '../config.js'
 import { downloadFile } from './_volcengine-cv.js'
-import { checkH3Health, recordH3Activity } from '../services/h3-instance-service.js'
+import { checkH3Health, recordH3Activity, markH3UsedForWork } from '../services/h3-instance-service.js'
 import { ensureH3Tunnel } from '../services/h3-tunnel-service.js'
 import { acquireGpuLock } from '../services/gpu-lock.js'
 import type { GenerateProvider, ImageOpts, VideoOpts, GenerateResult } from './base.js'
@@ -291,6 +291,7 @@ export class LocalH3Provider implements GenerateProvider {
               const assetPath = join(dataDir, 'works', workId, 'assets', filename)
               await this.downloadOutput(output, assetPath)
               recordH3Activity()
+              markH3UsedForWork(workId)
               return {
                 success: true,
                 assetPath,
