@@ -200,6 +200,14 @@ export class AgentLoop {
     // 批次6.6 软着陆:到期前 5min 注入收尾指令,agent 有一步机会主动落盘写断点,
     // 不再到点硬杀全回合作废(恢复时只能靠恢复 prompt 猜断点)
     let softLandingWarned = false;
+    // 2026-08-31 实测修复:8192 上限下长规划 thinking 被 max_tokens 截断 → 纯 thinking
+    // 残片下回合被协议清洗剔除 → auto_continue 后模型失忆从零重新规划 → 再截断,
+    // 死循环每 2 分钟白烧 8k token(dde 作品 plan 阶段实证 3 连截断)。
+    // 修复双管齐下:①maxTokens 提至 32768(8192 对 thinking 模型太小);
+    // ②max_tokens 且无 tool_use 时回合内续写(≤2 次),"停止长考、直接行动",
+    // 把思考转化为产出,而不是回合死亡后从零重想。
+    let maxTokensContinuations = 0;
+    const turnMaxTokens = Number(process.env.AUTOVIRAL_LOOP_MAX_TOKENS ?? 32768) || 32768;
     try {
       for (let step = 0; ; step++) {
         if (step > maxSteps) throw new LoopGuardError(`回合工具步数超过 ${maxSteps}，判定死循环`);
@@ -252,7 +260,7 @@ export class AgentLoop {
               ...Object.values(this.deps.tools).map((t) => t.def),
               ...(this.deps.builtinTools ?? []),
             ],
-            maxTokens: 8192,
+            maxTokens: turnMaxTokens,
             signal: this.abort.signal,
           },
           (ev) => {
@@ -263,6 +271,20 @@ export class AgentLoop {
         );
 
         this.messages.push(assistant);
+
+        // max_tokens 截断且本轮无任何工具产出:回合内续写,把思考逼成行动
+        if (stopReason === "max_tokens"
+          && !assistant.content.some((b) => b.type === "tool_use")
+          && maxTokensContinuations < 2) {
+          maxTokensContinuations++;
+          console.warn(`[agent-loop] max_tokens 截断(第 ${maxTokensContinuations} 次续写)`);
+          this.deps.onLoopEvent({ type: "tool_progress", text: "输出达长度上限,回合内续写(已提示直接行动)" });
+          this.messages.push({
+            role: "user",
+            content: [{ type: "text", text: "(系统:上一段输出达到长度上限被截断,未产生任何可见内容。请立即停止长篇内部思考,用简洁文字直接给出结论,或立刻调用工具开始行动。)" }],
+          });
+          continue;
+        }
 
         if (stopReason !== "tool_use") {
           const resultText = assistant.content

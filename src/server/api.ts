@@ -29,6 +29,7 @@ import { EvalTimeoutError, EvalParseError } from "../agent/evaluator.js";
 import { registerProgressBroadcaster } from "../services/progress-events.js";
 import { failVisible } from "../services/fail-visible.js";
 import { voiceNotify } from "../services/voice-notify.js";
+import { buildExplicitParamsBlock } from "./explicit-params.js";
 import { MAX_PLAN_DURATION_S } from "../services/quality-gate.js";
 import type { WsBridge } from "../ws-bridge.js";
 import { getProvider, getDefaultProvider, listProviders } from "../providers/registry.js";
@@ -3060,20 +3061,9 @@ ${repeatNotes.map((n) => `- ${n}`).join("\n")}
 }
 
 /** 用户显式要求段(2026-08-28 批次5.8,v2-M1):最高优先级事实源。
- *  创作侧与评审侧共用——评审不得以通用规则压低用户显式指定的参数 */
-export function buildExplicitParamsBlock(work: Work): string {
-  const params = work.explicitParams;
-  if (!params || Object.keys(params).length === 0) return "";
-  const lines: string[] = ["## 用户显式要求(最高优先级事实源,优先级高于一切通用规则与预设)"];
-  for (const [k, v] of Object.entries(params)) {
-    if (k === "duration") {
-      lines.push(`- 时长: 用户明确要求约 ${v} 秒。创作与评审都必须以该值为准绳——成片时长达标于此值即合格,禁止套用"短视频 ≤3 分钟"的通用规则判 critical/major。`);
-    } else {
-      lines.push(`- ${k}: ${v}(用户显式指定,不得以通用规则压低)`);
-    }
-  }
-  return lines.join("\n");
-}
+ *  创作侧与评审侧共用——评审不得以通用规则压低用户显式指定的参数。
+ *  2026-08-31 实现迁至 ./explicit-params.js(ws-bridge 复用),此处保持导出兼容。 */
+export { buildExplicitParamsBlock } from "./explicit-params.js";
 
 function buildEvalPrompt(work: Work, step: string, attempt: number, historyText: string, prevResultsText: string, workDir: string): string {
   const stepName = work.pipeline[step]?.name ?? step;
