@@ -3284,7 +3284,8 @@ apiRoutes.post("/api/works/:id/pipeline/advance", async (c) => {
     // ── A1/B2 机器门禁(P2-T3):assembly 推进前强制交付物校验,拦截在评审之前 ──
     if (completedStep === "assembly" && work.type !== "image-text") {
       const { assertAssemblyDeliverables } = await import("../services/quality-gate.js");
-      const gateIssues = assertAssemblyDeliverables(join(dataDir, "works", id));
+      // 批次11.4:传入模板/作品信息,启用模板段入片校验
+      const gateIssues = assertAssemblyDeliverables(join(dataDir, "works", id), { templateId: work.templateId, workId: id });
       if (gateIssues.length) {
         log("info", "api", "assembly_gate_blocked", id, { count: gateIssues.length });
         return c.json({
@@ -4230,7 +4231,7 @@ async function runBatchConvert(
         // 幻觉选题直进生产烧全链路成本(v2 病根 0)。抽查信源/事实锚点/题文一致性,
         // 不过则 item 标 error 不推进(不走评审的会话依赖,用 eval 档一次性 JSON 判定)
         try {
-          const check = await runJsonPrompt<{ ok: boolean; problems?: string[] }>([
+          const spotcheckPrompt = [
             `你是数据真实性审查员。检查以下批量自动生成的调研产物是否可信:`,
             `选题标题: ${topic.title}`,
             `选题描述: ${(topic.description ?? "").slice(0, 400)}`,
@@ -4242,7 +4243,17 @@ async function runBatchConvert(
             `②文案中的事实性断言(具体数字/政策名/事件/人名)不得有明显虚构迹象;`,
             `③文案主题与选题必须一致。`,
             `只输出 JSON: {"ok": true|false, "problems": ["问题1","问题2"]}`,
-          ].join("\n"), { stage: "eval", timeoutMs: 60_000, maxAttempts: 2 });
+          ].join("\n");
+          // 批次11.1:eval 档未配置时回退 script 档(2026-08-31 实测:抽查因 eval 档
+          // 缺失整天静默空转,等于没有闸)。回退也失败才走 catch 留痕。
+          let check: { ok: boolean; problems?: string[] };
+          try {
+            check = await runJsonPrompt<{ ok: boolean; problems?: string[] }>(spotcheckPrompt, { stage: "eval", timeoutMs: 60_000, maxAttempts: 2 });
+          } catch (err) {
+            if (!/未配置模型/.test((err as Error).message)) throw err;
+            log("warn", "api", "batch_research_spotcheck_fallback", workId, { from: "eval", to: "script" });
+            check = await runJsonPrompt<{ ok: boolean; problems?: string[] }>(spotcheckPrompt, { stage: "script", timeoutMs: 60_000, maxAttempts: 2 });
+          }
           if (!check.ok) {
             item.stage = "error";
             item.error = `调研真实性抽查未通过: ${((check.problems ?? []).join("; ") || "未说明").slice(0, 150)}`;

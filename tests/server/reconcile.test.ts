@@ -131,13 +131,27 @@ describe("reconcile 会话感知回归(A4)", () => {
     expect(r.details.join()).not.toContain("转正");
   });
 
-  it("无活跃会话 + 新鲜 final.mp4 → 转正 reviewing", async () => {
+  it("无活跃会话 + 新鲜 final.mp4 + 评审关闭 → 转正 reviewing", async () => {
     const id = await makeAssemblingWorkWithFinal();
+    // 批次11(2026-08-31):评审开启的作品无 pass verdict 不转正(留待重审)。
+    // 本用例覆盖"评审本就没开"的作品——对账转正是为它们准备的恢复通道
+    const { updateWork } = await import("../../src/work-store.js");
+    await updateWork(id, { evaluationMode: false } as never);
     const rec = await import("../../src/services/reconcile.js");
     rec.initReconcile(() => false);
     await rec.reconcileWorkStates("periodic");
     const { getWork } = await import("../../src/work-store.js");
     expect((await getWork(id))?.status).toBe("reviewing");
+  });
+
+  it("评审开启 + 无 verdict(评审自身出错) + 新鲜 final.mp4 → 不转正,留待重审(2026-08-31 a4d 实证)", async () => {
+    const id = await makeAssemblingWorkWithFinal();
+    // createWork 默认 evaluationMode=true,无任何评审结论文件
+    const rec = await import("../../src/services/reconcile.js");
+    rec.initReconcile(() => false);
+    await rec.reconcileWorkStates("periodic");
+    const { getWork } = await import("../../src/work-store.js");
+    expect((await getWork(id))?.status).toBe("assembling");
   });
 
   it("最近 assembly 评审 fail + final.mp4 存在 → 不转正(2026-08-18 事故回归)", async () => {

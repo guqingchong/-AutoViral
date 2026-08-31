@@ -229,3 +229,47 @@ publish-account 2 个测试按"禁重发"新契约更新)。
   + 完成通知(announceReviewReady:作品进 reviewing,两处落定挂点+全局 notify)
   自检端点:POST /api/notify/test-voice
   ⚠️ 后端部分需重启服务生效(等实测作品到终态后重启,避免打断会话)
+- [x] max_tokens 截断死循环修复(实测 dde plan 阶段实证):maxTokens 8192→32768
+  (AUTOVIRAL_LOOP_MAX_TOKENS 可覆盖);max_tokens 且无 tool_use 时回合内续写 ≤2 次
+  (此前:截断→纯 thinking 残片被协议清洗→失忆重规划→再截断,每 2min 白烧 8k token)
+- [x] 显式参数宪法漏注修复:buildExplicitParamsBlock 抽为 src/server/explicit-params.ts
+  (api.ts re-export 兼容),ws-bridge buildSystemPrompt 注入(此前 startWorkSession 路径
+  漏注,agent 把用户显式 300s 当成该压 180s 的对象);plan 预检时长行按显式值豁免
+
+## 实测收官(2026-08-31 晚,两作品均 reviewing)
+
+- a4d(express):终审一轮 pass(8-9 分);dde(standard):assembly 第 2 轮 pass
+  (黑帧清零,模板还原度 8 分,289s≈显式 300s)
+- 当日新增修复(14 commit,全部未 push):错误消息可见性/语音双通道/截断死循环/
+  显式参数注入/python3 硬改写/H3 开关机时点/failed 粘性复活/max_tokens 供应商上限收敛/
+  对账转正评审守卫/模版约束三连修/解析失败落盘/QC createdAt 门禁/打回空转拦截
+- 用户审查 a4d 发现:模版绕开(渲染后弃用)、程序化素材观感单调、字幕压内容、
+  中间版本音字错位(终版已对齐,ASR 三点实证)
+- 留待批次 11 候选:code-scene 模板视觉升级+字幕安全区版式、DB 脚本与成片文案同源、
+  人工复活回队列、机器可算项移出 LLM 评审、创作合同自检留痕强制化、标点孤行
+
+## 批次 11:源头质量与耗时治理 【🔵 进行中 2026-08-31 晚】
+
+起因:实测收官审查(用户四点):①批次 4-6 立项 ②两个片子都没被模版完全约束
+③旁白断句碎(逗号碎片)④express 也要 4.7h——计时端点数据:LLM 耗时仅占
+22%(express)/36%(standard),大头是串行渲染/串行下载/重烧返工。
+
+- [x] 11.1 抽查通道降级修复:batch 真实性抽查在 eval 档未配置时回退 script 档
+  (不再静默空转);注:用户已于当日下午配置 eval=glm:glm-5.3-flash,双保险
+- [x] 11.2 机器可算项:plan criteria 的"总时长超 3 分钟 = critical"地雷拆除
+  (dde 想砍用户 300s 的元凶行);时长由门禁实算,评审只评节奏
+  (批次 6.1 的"机器项引用门禁结果"约定已在,本次补漏洞行)
+- [x] 11.3 自检留痕:评估后**不另搞自检文件**——门禁本身即零 LLM 成本的强制校验,
+  自检文件是重复仪式;真正的漏洞(时长 critical 文案)已在 11.2 拆除
+- [x] 11.4 模版全片约束 v1:assembly 门禁新增第 ⑤ 项——绑定模板的作品,模板渲染段
+  必须在合成清单(assembly-plan.json/concat.txt)中实际引用("渲染了但弃用"=拦截,
+  a4d 实证);apiContract 同步。全片 overlay 皮肤(品牌框/调色 LUT 覆盖全素材)
+  记为 v2 设计项(模版格式需扩展 skin 定义)
+- [x] 11.5 旁白流畅度:根因=旁白被写成字幕碎片("每句≤20 字"被误读为逗号碎片)。
+  script-structure.md 补"完整成句+旁白断句≠字幕断行"规则(含 a4d 反面教材)、
+  content-generator 批量脚本 prompt 同步、plan criteria 新增 critical 示例
+- [x] 11.6 耗时治理:①code-scene 渲染串行队列改并发池(模板场景 2 路并行,
+  customScene 独占;worker 本就独立进程+随机 vite 端口,线程安全)②stock-assets
+  新增 /download-batch 批量端点(3 路并发,单批 ≤20 项)③assembly 预检前置:
+  评估后不动——门禁在 advance 已零 LLM 成本,a4d 四次重烧的根因(QC 刷时间)
+  已由 6bf17c5 修复
