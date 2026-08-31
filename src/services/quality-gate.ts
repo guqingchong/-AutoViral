@@ -15,6 +15,7 @@ import { promisify } from "node:util";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, basename } from "node:path";
 import { probeMedia } from "../video/ffmpeg.js";
+import { listRenderJobs } from "../db/render-jobs-repo.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -343,8 +344,9 @@ export function checkAssSubtitles(assContent: string): string[] {
  * 检查:① output/*final*.mp4 存在 ② publish-text.md 存在
  * ③ quality-report.json 存在且 videoPath 指向 final 且报告不早于 final(QC 未跑在旧片上)
  * ④ 字幕 ass 单行 ≤15 字、CPS ≤8
+ * ⑤(批次11.4)绑定模板的作品:模板渲染段必须实际进入成片(渲染了但弃用 = 绕开模板契约)
  */
-export function assertAssemblyDeliverables(workDir: string): DeliverableIssue[] {
+export function assertAssemblyDeliverables(workDir: string, opts?: { templateId?: string; workId?: string }): DeliverableIssue[] {
   const issues: DeliverableIssue[] = [];
   const outDir = join(workDir, "output");
   if (!existsSync(outDir)) {
@@ -399,6 +401,32 @@ export function assertAssemblyDeliverables(workDir: string): DeliverableIssue[] 
     const violations = checkAssSubtitles(readFileSync(join(outDir, assFile), "utf-8"));
     for (const v of violations.slice(0, 5)) issues.push({ key: "subtitles", detail: v });
     if (violations.length > 5) issues.push({ key: "subtitles", detail: `……另有 ${violations.length - 5} 条字幕违规` });
+  }
+
+  // ── ⑤ 模板契约(批次11.4,2026-08-31 实测 a4d):绑定模板的作品,模板渲染段必须实际入片。
+  // a4d 渲染了 6s 模板片头却弃用——"渲染过" ≠ "用了"。以合成清单(assembly-plan.json
+  // 或 norm/concat.txt)是否引用模板渲染产物文件名为准。
+  if (opts?.templateId && opts?.workId) {
+    try {
+      const tplJobs = listRenderJobs("completed", opts.workId)
+        .filter((j) => j.template_id === opts.templateId && j.output_path);
+      if (tplJobs.length === 0) {
+        issues.push({ key: "template_skin", detail: `作品绑定了模板(${opts.templateId})但从未渲染模板段——模板契约要求模板视觉呈现实际进入成片` });
+      } else {
+        const jobFiles = new Set(tplJobs.map((j) => basename(j.output_path!).toLowerCase()));
+        const manifestTexts: string[] = [];
+        for (const p of [join(workDir, "assets", "assembly-plan.json"), join(workDir, "assets", "norm", "concat.txt")]) {
+          if (existsSync(p)) manifestTexts.push(readFileSync(p, "utf-8").toLowerCase());
+        }
+        const used = manifestTexts.length > 0 && [...jobFiles].some((f) => manifestTexts.some((t) => t.includes(f)));
+        if (!used) {
+          issues.push({
+            key: "template_skin",
+            detail: `模板段已渲染(${tplJobs.length} 个)但未进入成片合成清单——禁止"渲染了但弃用"。请将模板段(片头/片尾/模版卡)接入 concat/assembly-plan,或说明模板为何不适用并解除绑定`,
+          });
+        }
+      }
+    } catch { /* 模板校验自身失败不阻断 */ }
   }
 
   return issues;

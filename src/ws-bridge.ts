@@ -385,7 +385,8 @@ export class WsBridge {
   竖版安全区:画面底部 y≥1390 为卡拉 OK 字幕带,场景内容不得进入(2026-08-31 实测:字幕压内容)
 - assembly 阶段的 advance 有机器门禁,以下缺一即被 400 拦截(提前备齐):
   ① output/ 下文件名含 final 的成片视频 ② output/publish-text.md(发布文案)
-  ③ output/quality-report.json——对当前成片跑质量门禁生成,videoPath 指向该片且生成时间不早于成片 ④ output/ 下 .ass 字幕(单可视行 ≤15 字、CPS ≤8)
+  ③ output/quality-report.json——对当前成片跑质量门禁生成,videoPath 指向该片且内容时间(createdAt)不早于成片(复制旧报告刷时间会被拦)
+  ④ output/ 下 .ass 字幕(单可视行 ≤15 字、CPS ≤8) ⑤ 绑定模板的作品:模板渲染段必须在合成清单(assembly-plan.json/concat.txt)中实际引用,渲染了但弃用会被拦
 - plan 阶段的 advance 有机器预检,命中即被 400 拦截(提交前逐项自检):
   ① 分镜表时长合计 ${work.explicitParams?.duration ? `≤${work.explicitParams.duration}s(用户显式时长,豁免通用 ${MAX_PLAN_DURATION_S}s 上限——以显式值为准绳)` : `≤${MAX_PLAN_DURATION_S}s`} ② 旁白单句 ≤20 字 ③ 不得引用 material-candidates.md 剔除区素材
   ④ 标题/封面极限词(最/第一/唯一/首个)必须加「之一」限定
@@ -466,6 +467,7 @@ ${buildExplicitParamsBlock(work)}
 - 素材库检索（Pexels/Pixabay，key 由服务端持有——直接调用即可，禁止自行读取 config 找 key、禁止直连 api.pexels.com）：
   搜索：curl "http://localhost:${port}/api/stock-assets/search?q=英文关键词&type=video|image&perPage=10"（英文关键词命中最好，竖版 height>width 优先）
   下载：curl -X POST http://localhost:${port}/api/stock-assets/download -H "Content-Type: application/json" -d '{"url":"ITEM_URL","provider":"pexels","mediaType":"video","category":"scenes","name":"shot-NN.mp4","description":"...","author":"...","license":"...","duration":12}'
+  **批量下载(多个素材时必须用,3 路并发,比逐个调快 3 倍)**:POST /api/stock-assets/download-batch body:{"items":[{同上字段},{...}]}——先把 JSON 写成 UTF-8 文件再 --data-binary @file
 - **Windows 中文编码铁律（2026-08-19，违反必出乱码）**：任何含中文的 POST body 禁止 curl -d 内联 JSON——Git Bash 会损坏中文编码（code-scene 中文乱码成片事故真凶）。必须先用 Write 工具把 JSON 写成 UTF-8 文件，再 curl --data-binary @文件名.json。纯 ASCII 的 body 才可内联。
 - 流水线管理：调用 curl -X POST http://localhost:${port}/api/works/${work.id}/pipeline/advance 更新流水线状态
 

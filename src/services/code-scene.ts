@@ -155,8 +155,36 @@ export interface CodeSceneResult {
   code?: "TIMEOUT" | "RENDER_FAILED" | "INVALID_PARAMS";
 }
 
-// 串行队列:本地单 Edge 实例渲染,并发无收益且会互相覆盖 custom/current.tsx
-let queue: Promise<unknown> = Promise.resolve();
+// 渲染并发池(批次11.6,2026-08-31 实测:dde assets 阶段 3.4h,20+ 模板镜头串行渲染是主因):
+// 每个任务本就是独立 worker 进程 + 独立 project 文件,模板场景之间无共享状态,允许并行;
+// customScene 会写共享的 src/custom/current.tsx(批次8 已证互踩),仍独占整个池。
+// 路数保守取 2(Edge 渲染吃 CPU),可用 AUTOVIRAL_CODE_SCENE_PARALLEL 覆盖。
+const MAX_PARALLEL = Math.max(1, Number(process.env.AUTOVIRAL_CODE_SCENE_PARALLEL ?? 2) || 2);
+let running = 0;
+let customRunning = false;
+const waitQueue: Array<{ custom: boolean; grant: () => void }> = [];
+
+function pumpQueue(): void {
+  if (customRunning) return;
+  while (running < MAX_PARALLEL && waitQueue.length) {
+    const next = waitQueue[0];
+    if (next.custom && running > 0) break; // custom 需要独占,等模板任务排空
+    waitQueue.shift();
+    running++;
+    if (next.custom) customRunning = true;
+    next.grant();
+  }
+}
+
+function acquireRenderSlot(custom: boolean): Promise<void> {
+  return new Promise((resolve) => { waitQueue.push({ custom, grant: resolve }); pumpQueue(); });
+}
+
+function releaseRenderSlot(custom: boolean): void {
+  running--;
+  if (custom) customRunning = false;
+  pumpQueue();
+}
 
 export async function renderCodeScene(input: CodeSceneInput): Promise<CodeSceneResult> {
   const errors = validateCodeSceneInput(input);
@@ -164,9 +192,13 @@ export async function renderCodeScene(input: CodeSceneInput): Promise<CodeSceneR
   if (!existsSync(join(WORKER_DIR, "node_modules"))) {
     return { success: false, error: "code-scene 子项目未安装依赖,请先执行: cd packages/code-scene && npm install", code: "RENDER_FAILED" };
   }
-  const job = queue.then(() => doRender(input));
-  queue = job.catch(() => {});
-  return job;
+  const isCustom = !!input.customScene;
+  await acquireRenderSlot(isCustom);
+  try {
+    return await doRender(input);
+  } finally {
+    releaseRenderSlot(isCustom);
+  }
 }
 
 async function doRender(input: CodeSceneInput): Promise<CodeSceneResult> {

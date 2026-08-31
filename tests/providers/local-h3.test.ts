@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 vi.mock("../../src/services/h3-instance-service.js", () => ({
   checkH3Health: vi.fn(),
   recordH3Activity: vi.fn(),
+  markH3UsedForWork: vi.fn(),
 }));
 vi.mock("../../src/services/h3-tunnel-service.js", () => ({
   ensureH3Tunnel: vi.fn(),
