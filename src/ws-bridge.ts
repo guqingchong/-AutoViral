@@ -107,6 +107,9 @@ interface NdjsonMessage {
  *  在此期间无 cliProcess 属正常,宽限期内仍视为活跃,防止 queue/watchdog 误判假死重复 spawn */
 const ACTIVITY_GRACE_MS = 120_000;
 
+/** 2026-08-31:eco+H3 离线的主动告知按"每进程每作品一次"去重(会话可能多次重建) */
+const h3OfflineNotified = new Set<string>();
+
 export class WsBridge {
   private sessions: Map<string, WsSession> = new Map();
   private eventListeners: Map<string, Set<(event: string, data: unknown) => void>> = new Map();
@@ -361,7 +364,19 @@ export class WsBridge {
           // 此前此处统一说"用即梦替代",与 eco 门禁(/api/generate/video 代码级 403)直接互斥
           ? `- H3 本地生成(ComfyUI ${h3Base}):**已配置但当前离线**。本作品为 eco 成本档——禁止使用云端视频生成(即梦/Seedance,系统已在 API 层拦截 403),素材规划改用素材库/程序化渲染;确需 AI 视频镜头时阻塞并在交付说明中显著提醒"H3 离线,请开机后重试该镜头"`
           : `- H3 本地生成(ComfyUI ${h3Base}):**已配置但当前离线**(AutoDL 实例未启动或隧道断开)。本作品素材规划不要依赖 H3;用素材库/即梦/程序化渲染替代,并在最终交付说明中明确注明"H3 离线,已降级"。若后续恢复在线可改用。`;
-      if (!h3Online) console.warn(`[ws-bridge] H3 离线降级声明已注入:workId=${work.id}`);
+      if (!h3Online) {
+        console.warn(`[ws-bridge] H3 离线降级声明已注入:workId=${work.id}`);
+        // 2026-08-31 实测用户反馈:eco+H3 离线时 agent 可能整片绕开 AI 视频而用户
+        // 毫不知情("按需阻塞"只在真的调 /api/generate/video 时才提醒)。会话启动即
+        // 主动告知一次(每进程每作品一次),把"绕开"从静默降级变成显式知情。
+        if (work.assetBudget === "eco" && !h3OfflineNotified.has(work.id)) {
+          h3OfflineNotified.add(work.id);
+          const noticeText = `作品「${work.title.slice(0, 20)}」为 eco 成本档且 AutoDL 实例离线:AI 视频镜头将改用素材库/程序化素材替代;若你希望保留 AI 生成镜头,请开机 AutoDL 实例`;
+          const { voiceNotify } = await import("./services/voice-notify.js");
+          voiceNotify(noticeText, `h3-offline-notice:${work.id}`);
+          this.broadcastGlobal("notify", { level: "warn", kind: "h3_offline", text: noticeText, workId: work.id });
+        }
+      }
     }
 
     // 内部 API 契约(P2 提速 B,2026-08-17):agent 猜 code-scene 契约曾空转 35 分钟——
