@@ -421,8 +421,8 @@
         const level = data?.level ?? "info";
         const text = data?.text ?? "";
         pushToast(level, text);
-        // 播报范围:关键阻塞(warn/error)+ 完成通知(work_review_ready);其余 info 静默
-        if (level !== "info" || data?.kind === "work_review_ready") {
+        // 播报范围:关键阻塞(warn/error)+ 完成/关机型通知(work_review_ready/h3_shutdown_ok);其余 info 静默
+        if (level !== "info" || data?.kind === "work_review_ready" || data?.kind === "h3_shutdown_ok") {
           speakToast(text);
           desktopNotify(text);
         }

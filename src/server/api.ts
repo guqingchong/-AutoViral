@@ -658,6 +658,17 @@ function announceReviewReady(workId: string): void {
   }).catch(() => {});
 }
 
+/** 2026-08-31 实测需求②:assets 阶段完成且本作品用过 H3 → 提醒可以关机(AutoDL 按时计费)。
+ *  挂点:assets 标 done 的两条路径(直接推进 + 评审通过后推进)。 */
+function announceH3ShutdownIfUsed(workId: string): void {
+  import("../services/h3-instance-service.js").then(({ h3WasUsedForWork }) => {
+    if (!h3WasUsedForWork(workId)) return;
+    const text = `作品 ${workId} 的 AI 视频镜头已全部生成完毕,AutoDL 实例现在可以关机了`;
+    wsBridge?.broadcastGlobal("notify", { level: "info", kind: "h3_shutdown_ok", text, workId });
+    voiceNotify(`AI 视频镜头已全部生成完毕,可以关闭 AutoDL 实例`, `h3-shutdown:${workId}`);
+  }).catch(() => {});
+}
+
 // GET /api/works/:id
 apiRoutes.get("/api/works/:id", async (c) => {
   const id = c.req.param("id");
@@ -994,7 +1005,9 @@ apiRoutes.post("/api/generate/video", async (c) => {
     if (provider.name !== "local-h3") {
       log("warn", "api", "eco_cloud_blocked", workId, { provider: provider.name });
       // 2026-08-31:eco 拦截意味着流水线即将卡住,语音播报让用户离开电脑也能听到
-      voiceNotify(`作品 ${workId} 为 eco 成本档,禁止使用云端视频生成,流水线将阻塞,请检查素材配置`, `eco-blocked:${workId}`);
+      const ecoText = `作品 ${workId} 为 eco 成本档,禁止使用云端视频生成,流水线将阻塞,请检查素材配置`;
+      voiceNotify(ecoText, `eco-blocked:${workId}`);
+      wsBridge?.broadcastGlobal("notify", { level: "warn", kind: "eco_blocked", text: ecoText, workId });
       return c.json({
         success: false,
         error: `本作品为 eco 成本档,禁止使用云端视频生成(${provider.name})。请改用 local-h3(AutoDL 实例);若实例离线,请在 AutoDL 控制台开机后重试。`,
@@ -1007,8 +1020,12 @@ apiRoutes.post("/api/generate/video", async (c) => {
       const { assertH3Ready } = await import("../services/h3-instance-service.js");
       await assertH3Ready();
     } catch (err) {
-      // 2026-08-31:H3 离线阻塞是本次实测最需要"听得见"的提醒(需用户开机 AutoDL)
-      voiceNotify(`作品 ${workId} 需要本地 H3 生成视频,但 AutoDL 实例离线。请开机 AutoDL 实例后重试`, `h3-offline:${workId}`);
+      // 2026-08-31:H3 离线阻塞是本次实测最需要"听得见"的提醒(需用户开机 AutoDL)。
+      // 时机纪律:只在真正发起 AI 视频生成时提醒(用户明确要求,不在开工时提醒,
+      // 避免浪费开机计费时间)。语音+全局 toast 双通道。
+      const h3Text = `作品 ${workId} 需要本地 H3 生成视频,但 AutoDL 实例离线。请开机 AutoDL 实例,流水线将在实例就绪后继续`;
+      voiceNotify(h3Text, `h3-offline:${workId}`);
+      wsBridge?.broadcastGlobal("notify", { level: "error", kind: "h3_offline", text: h3Text, workId });
       return c.json({ success: false, error: (err as Error).message, code: "INSTANCE_OFFLINE" }, 503);
     }
   }
@@ -2854,6 +2871,7 @@ export async function runEvaluation(workId: string, completedStep: string, nextS
       if (freshWork) {
         freshWork.pipeline[completedStep].status = "done";
         freshWork.pipeline[completedStep].completedAt = new Date().toISOString();
+        if (completedStep === "assets") announceH3ShutdownIfUsed(workId);
         effectiveNextStep = resolveEffectiveNextStep(freshWork.pipeline, nextStep);
         // 与 advance 普通路径一致：自动补齐 pending 的前序阶段(可选步骤跳过场景)。
         // active/evaluating 的前序阶段不可能出现——advance 入口守卫已拦截越级推进
@@ -3337,6 +3355,7 @@ apiRoutes.post("/api/works/:id/pipeline/advance", async (c) => {
     if (work.pipeline[completedStep]) {
       work.pipeline[completedStep].status = "done";
       work.pipeline[completedStep].completedAt = new Date().toISOString();
+      if (completedStep === "assets") announceH3ShutdownIfUsed(id);
     }
 
     const stepKeys = Object.keys(work.pipeline);
