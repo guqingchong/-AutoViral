@@ -1,0 +1,61 @@
+/* 设计令牌系统(2026-09-01 视觉升级 05 方案 S2)
+ * web 模板唯一视觉事实源:模板只引用变量,禁写死颜色/阴影/圆角。
+ * 主题切换 = 渲染器注入对应 [data-theme] 块。
+ * --safe-zone-h 与 layout.ts SUBTITLE_ZONE(864-720=144)一致,safe-zone.test.ts 校验。
+ */
+
+:root[data-theme="finance_dark"] {
+  --bg: #0f1b2d;            --bg-grid: rgba(148, 163, 184, 0.05);
+  --accent: #3b82f6;        --accent-2: #60a5fa;
+  --text: #f1f5f9;          --text-sub: #94a3b8;
+  --shadow-lg: 0 24px 64px rgba(2, 8, 23, 0.55);
+  --radius-card: 24px;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --font-display: "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+  --safe-zone-h: 144px;
+}
+
+:root[data-theme="warm_gold"] {
+  --bg: #161311;            --bg-grid: rgba(212, 175, 55, 0.05);
+  --accent: #d4af37;        --accent-2: #e8c56b;
+  --text: #f5efe0;          --text-sub: #a89968;
+  --shadow-lg: 0 24px 64px rgba(0, 0, 0, 0.6);
+  --radius-card: 24px;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --font-display: "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+  --safe-zone-h: 144px;
+}
+
+:root[data-theme="ink_green"] {
+  --bg: #0d1f1a;            --bg-grid: rgba(63, 214, 143, 0.05);
+  --accent: #3fd68f;        --accent-2: #2dd4bf;
+  --text: #e8f5ee;          --text-sub: #8fbc9f;
+  --shadow-lg: 0 24px 64px rgba(1, 12, 8, 0.55);
+  --radius-card: 24px;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --font-display: "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+  --safe-zone-h: 144px;
+}
+
+:root[data-theme="minimal_light"] {
+  --bg: #fafaf7;            --bg-grid: rgba(28, 25, 23, 0.05);
+  --accent: #2563eb;        --accent-2: #60a5fa;
+  --text: #1c1917;          --text-sub: #78716c;
+  --shadow-lg: 0 24px 64px rgba(28, 25, 23, 0.12);
+  --radius-card: 24px;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --font-display: "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+  --safe-zone-h: 144px;
+}
+
+/* 杂志编辑风(2026-09-01 新增):米白底 + 粗黑标题 + 点睛红 + 细分隔线 */
+:root[data-theme="magazine_light"] {
+  --bg: #fafaf7;            --bg-grid: rgba(28, 25, 23, 0.04);
+  --accent: #dc2626;        --accent-2: #1c1917;
+  --text: #1c1917;          --text-sub: #57534e;
+  --shadow-lg: 0 24px 64px rgba(28, 25, 23, 0.10);
+  --radius-card: 4px;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --font-display: "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+  --safe-zone-h: 144px;
+}
