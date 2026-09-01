@@ -99,8 +99,8 @@
           <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
           <div
             class="step-item {statusClass(status, key)}"
-            class:step-clickable={status === "done" || status === "aborted" || key === currentStep}
-            onclick={() => { if ((status === "done" || status === "aborted" || key === currentStep) && onSelectStep) onSelectStep(key); }}
+            class:step-clickable={status === "done" || status === "aborted" || status === "eval_blocked" || status === "awaiting_human" || key === currentStep}
+            onclick={() => { if ((status === "done" || status === "aborted" || status === "eval_blocked" || status === "awaiting_human" || key === currentStep) && onSelectStep) onSelectStep(key); }}
           >
             <span class="step-indicator" class:pulse={status === "active" || status === "evaluating"}>
               {#if isDone(status)}
@@ -144,6 +144,8 @@
               <span class="step-redo-hint">{tt("redoStep")}</span>
             {:else if status === "aborted"}
               <span class="step-redo-hint">{tt("resumeTask")}</span>
+            {:else if status === "eval_blocked" || status === "awaiting_human"}
+              <span class="step-redo-hint">点击处置</span>
             {/if}
           </div>
         </div>

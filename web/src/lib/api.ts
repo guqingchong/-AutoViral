@@ -208,6 +208,8 @@ export interface WorkSummary {
   pipeline?: Array<{ key: string; name: string; status: string }>;
   /** 最近活动时间（步骤 started/completed 与 updatedAt 的最大值），进度三态数据源 */
   lastActivityAt?: string | null;
+  /** 最近一次失败原因（批次12c，failVisible 落库；复活/推进成功后后端清空） */
+  lastError?: string;
   updatedAt: string;
 }
 
