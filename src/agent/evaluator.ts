@@ -154,7 +154,10 @@ export async function runApiEvaluator(opts: ApiEvaluatorOpts): Promise<EvalResul
 
   // 硬超时:到期 abortTurn(abort 信号一路传到 chatStream/Bash,清理链现成);
   // runTurn 随后以 throw 或 stopReason="aborted" 返回,两种形态都由 timedOut 标志统一转 EvalTimeoutError
-  const evalTimeoutMs = (config.llm?.guard?.evalTimeoutMinutes ?? 15) * 60_000;
+  // 2026-09-01 批次12b(系统审查实证):assembly/assets 评审要看几十条素材+抽帧,
+  // 15min 常态不够(dde/a4d 各触发一次超时白烧 25min)——按阶段放宽,其余阶段不变
+  const stepTimeoutFloor = ["assembly", "assets"].includes(step) ? 25 : 0;
+  const evalTimeoutMs = Math.max(config.llm?.guard?.evalTimeoutMinutes ?? 15, stepTimeoutFloor) * 60_000;
   let timedOut = false;
   const hardTimer = setTimeout(() => {
     timedOut = true;

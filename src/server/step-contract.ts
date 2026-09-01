@@ -57,7 +57,11 @@ export function buildAssetConstraintSection(assetForm?: string, assetSource?: st
       `政策/网页原文快照 POST /api/assets/snapshot-card;图标 GET /api/assets/icons。主题配色须与作品模板一致,数据来源必须署名。` +
       `快照卡必须传 highlights 红框标注关键条款/段落(禁止整页裸截,截正文区避开广告与侧栏);` +
       `图表数值与旁白口径必须一致——旁白说"超六成",图表须标">60%"或"超60%",禁止写成精确值 60%;` +
-      `结构/流程/逻辑镜头调用 POST /api/assets/code-scene 生成程序化动画(十模板:structure-growth/flow-steps/logic-chain/big-number/compare-split/timeline/pyramid/quote-card/checklist/bar-compare,先 GET /api/assets/code-scene/templates 查参数);` +
+      `结构/流程/逻辑镜头调用 POST /api/assets/code-scene 生成程序化动画(模板清单与参数先 GET /api/assets/code-scene/templates,竖屏 9 款+横屏 11 款 -wide 按成片画幅选);` +
+      `**多个镜头必须批量提交(2026-09-01 起,消灭轮询空等)**: 把全部镜头 spec 写进一个 JSON,` +
+      `\`curl -X POST http://localhost:3271/api/assets/code-scene/batch --data-binary @renders.json\` 一次提交(renders.json: {"workId":"本作品id","renders":[{...镜头1},{...镜头2}]}),` +
+      `立即返回 taskId;服务端 2 路并发渲染,完成时系统会推送通知;其间你去做别的事(写文案/备字幕),` +
+      `收到完成通知或 60s 后查一次 GET /api/long-tasks/<taskId> 即可。禁止单条渲染循环、禁止 sleep 轮询渲染产物;` +
       `凡 POST body 含中文(code-scene/chart/snapshot-card 的参数都含),必须先把 JSON 写成 UTF-8 文件再 --data-binary @file,禁止 curl -d 内联(Windows 下必乱码);`,
   );
   // smart 精品混合:按镜头内容路由到最优来源,是"出品即精品"的默认策略
@@ -163,11 +167,13 @@ export function buildMaterialSearchInstruction(work: { id: string; title: string
     `   \`yt-dlp -f "bestvideo[height<=720]+bestaudio/best[height<=720]" --merge-output-format mp4 -o "clips/option-NN.mp4" "URL"\``,
     `   ⚠️ 题材含具体地名/机构/事件等专有实体(如"上海张园""北京劲松")时,本通道是主力——`,
     `   通用素材库几乎没有中国特定地标素材,硬用通用素材凑数必被评审打回(2026-08-26 五轮实证)。`,
+    `   ⚠️ 本机网络只保证 B站/抖音等国内源可达;YouTube 不可达——不要对 youtube.com 链接跑 yt-dlp(每次空探白等 65s 超时),搜到油管结果直接换源。`,
     `2. **合规素材库(Pexels 优先,英文关键词命中最好)**:`,
     `   搜索: \`curl -s "http://localhost:3271/api/stock-assets/search?q=英文关键词&type=video&perPage=10"\`(要图片则 type=image)`,
-    `   下载: body 含中文,必须先写 JSON 文件再提交(Windows Git Bash 内联 -d 必坏中文):`,
-    `   \`curl -X POST http://localhost:3271/api/stock-assets/download -H "Content-Type: application/json" --data-binary @download.json\``,
-    `   (download.json 内容: {"url":"ITEM_URL","provider":"pexels","mediaType":"video","category":"scenes","name":"shot-NN.mp4","description":"...","author":"...","license":"...","duration":12})`,
+    `   **批量下载(必选,2026-09-01 起)**: 多个候选写进一个 JSON 数组,一次调用全下完:`,
+    `   \`curl -X POST http://localhost:3271/api/stock-assets/download-batch -H "Content-Type: application/json" --data-binary @downloads.json\``,
+    `   (downloads.json 内容: {"items":[{"url":"ITEM_URL","provider":"pexels","mediaType":"video","category":"scenes","name":"shot-NN.mp4","description":"...","author":"...","license":"...","duration":12}, ...]},服务端 3 路并发)`,
+    `   单个下载端点 /api/stock-assets/download 仍在但仅限补单条;禁止逐条循环调用。`,
     `   禁止直连 api.pexels.com / api.pixabay.com——你本地没有 key,直连必然 401,走上面两个服务端端点即可。`,
     ``,
     `## 执行要求(与验收标准一一对应)`,
