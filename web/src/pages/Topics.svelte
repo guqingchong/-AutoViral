@@ -40,6 +40,8 @@
   let batchEvaluation = $state<boolean>(true);
   // 评审分级(批次10.2):standard=每阶段 LLM 评审;express=机器门禁照跑+仅成片单轮终审
   let batchEvalMode = $state<"standard" | "express">("standard");
+  // 画幅(批次12c-A):竖屏 9:16 缺省 / 横屏 16:9(镜头模板选 -wide 款)
+  let batchAspect = $state<"portrait" | "landscape">("portrait");
   // ── 用途驱动(04 方案):预设从 /api/purposes 拉取,一处定义前后端共用 ──
   interface PurposeOption { key: string; label: string; icon: string; goal: string; strategy: string; forms: string[]; defaults: { duration: number; assetForm: string; assetSource: string; assetBudget: string }; skillCount: number; }
   let purposeOptions = $state<PurposeOption[]>([]);
@@ -413,6 +415,7 @@
           voiceMode: isVideo ? batchVoiceMode : undefined,
           evaluationMode: batchEvaluation,
           evalMode: batchEvalMode === "express" ? "express" : undefined,
+          aspect: isVideo ? batchAspect : undefined,
         }),
       });
       const data = await res.json();
@@ -881,6 +884,13 @@
                   {#each visibleContentForms() as o}
                     <option value={o.value}>{o.label}（{o.desc}）</option>
                   {/each}
+                </select>
+              </div>
+              <div class="batch-field">
+                <label>画幅</label>
+                <select bind:value={batchAspect}>
+                  <option value="portrait">竖屏 9:16（抖音/小红书）</option>
+                  <option value="landscape">横屏 16:9（B 站等，镜头模板用 -wide 款）</option>
                 </select>
               </div>
             {/if}

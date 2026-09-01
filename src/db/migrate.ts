@@ -864,6 +864,24 @@ CREATE INDEX IF NOT EXISTS idx_long_tasks_work ON long_tasks(work_id);
 ALTER TABLE works ADD COLUMN eval_mode TEXT;
 `,
   },
+  {
+    version: 34,
+    name: "work_last_error",
+    sql: `
+-- 2026-09-01 批次12c:作品级最近失败原因,failVisible 落库,作品列表卡片可见
+ALTER TABLE works ADD COLUMN last_error TEXT;
+`,
+  },
+  {
+    version: 35,
+    name: "works_aspect",
+    sql: `
+-- 2026-09-01 批次12c-A(画幅选择):作品画幅 portrait(竖屏 9:16,默认)/
+-- landscape(横屏 16:9)。新建/批量弹窗可选,流水线 prompt 按此动态生成,
+-- 镜头模板按画幅选 -wide 款。
+ALTER TABLE works ADD COLUMN aspect TEXT DEFAULT 'portrait';
+`,
+  },
 ];
 
 export function migrate(): void {

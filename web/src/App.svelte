@@ -180,7 +180,7 @@
 
   let initialPrompt = $state("");
 
-  function buildInitialPrompt(data: { title: string; type: string; contentCategory: string; videoSource: string; videoSearchQuery: string; topicHint: string }): string {
+  function buildInitialPrompt(data: { title: string; type: string; contentCategory: string; videoSource: string; videoSearchQuery: string; topicHint: string; aspect?: string }): string {
     const categoryMap: Record<string, string> = {
       anxiety: "危机感/焦虑",
       conflict: "观点分歧/愤怒",
@@ -199,6 +199,10 @@
     if (hasInfo) {
       parts.push(`开始创作。`);
       parts.push(`内容形式：${typeMap[data.type] ?? data.type}`);
+      // 批次12c-A:横屏选择在初始指令里同步声明(画幅已落库 works.aspect,流水线 prompt 亦按此动态)
+      if (data.type === "short-video" && data.aspect === "landscape") {
+        parts.push(`画幅：横屏 16:9（1920×1080），镜头模板选 -wide 横屏款，素材优先横版`);
+      }
       if (data.contentCategory !== "other") {
         parts.push(`情绪品类：${categoryMap[data.contentCategory] ?? data.contentCategory}`);
       }
@@ -219,7 +223,7 @@
     return parts.join("\n");
   }
 
-  async function handleCreateWork(data: { title: string; type: string; contentCategory: string; videoSource: string; videoSearchQuery: string; topicHint: string; evalMode: string }) {
+  async function handleCreateWork(data: { title: string; type: string; contentCategory: string; videoSource: string; videoSearchQuery: string; topicHint: string; evalMode: string; aspect: string }) {
     showNewWorkModal = false;
     prefillTitle = "";
     prefillTopicHint = "";
@@ -233,6 +237,7 @@
         platforms: ["douyin", "xiaohongshu"],
         topicHint: data.topicHint || undefined,
         evalMode: data.evalMode === "express" ? "express" : undefined,
+        aspect: data.aspect === "landscape" ? "landscape" : undefined,
       });
       initialPrompt = buildInitialPrompt(data);
       currentWorkId = newWork.id;

@@ -621,6 +621,8 @@ apiRoutes.post("/api/works", async (c) => {
       digitalHumanId?: string;
       /** 批次5.8:用户显式参数(如 duration 秒)——最高优先级事实源,评审不得压低 */
       duration?: number;
+      /** 批次12c-A:作品画幅 portrait(缺省,竖屏 9:16)|landscape(横屏 16:9) */
+      aspect?: "portrait" | "landscape";
     }>();
     if (!body.title || !body.type || !body.platforms) {
       return c.json({ error: "title, type, and platforms are required" }, 400);
@@ -640,6 +642,7 @@ apiRoutes.post("/api/works", async (c) => {
       digitalHumanId: body.digitalHumanId,
       explicitParams: Object.keys(explicitParams).length ? explicitParams : undefined,
       evalMode: (body as any).evalMode === "express" ? "express" : undefined,
+      aspect: body.aspect === "landscape" ? "landscape" : "portrait",
     });
     return c.json(work, 201);
   } catch (err) {
@@ -1964,9 +1967,18 @@ export async function startWorkSession(id: string, extraInstruction?: string): P
   // 不再用模板/数字人推断——深度介入作品也可以选模板,批量作品也可以不选模板。
   const isUnattended = !!work.autoMode;
 
+  // 批次12c-A:画幅声明(works.aspect)——会话启动即告知成片画幅与镜头模板选款规则,
+  // agent 全程按此取素材(横/竖版优先)与选程序化镜头模板(-wide = 横屏款)
+  const aspectLine = work.type === "short-video"
+    ? work.aspect === "landscape"
+      ? `画幅: 横屏 16:9(1920×1080)——程序化镜头模板(GET /api/assets/code-scene/templates)必须选 -wide 横屏款(片头 cover-title-wide,数字人整片 keynote-leather);素材优先横版(width>height)`
+      : `画幅: 竖屏 9:16(1080×1920)——程序化镜头模板用竖屏款(不带 -wide 后缀);素材优先竖版(height>width)`
+    : "";
+
   const prompt = [
     `你是一个内容创作助手。你正在帮助用户创作: "${work.title}" (类型: ${work.type})。`,
     `目标平台: ${work.platforms.map((p: any) => typeof p === "string" ? p : p.platform).join(", ")}。`,
+    aspectLine,
     work.topicHint ? `选题方向: ${work.topicHint}` : "",
     // 素材三维约束（批量制作传入并落库 works.asset_*，会话启动时拼入指令）
     buildAssetConstraintSection(work.assetForm, work.assetSource, work.assetBudget, hasDigitalHuman),
@@ -2087,10 +2099,18 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
         ].join("\n")
       : "";
 
+    // 批次12c-A:画幅(works.aspect)——本步骤 prompt 顶部声明,素材/合成段按此动态
+    const isLandscape = work.type === "short-video" && work.aspect === "landscape";
+
     const promptParts = [
       `You are working on a content piece: "${work.title}" (type: ${work.type}).`,
       work.contentCategory ? `Content category: ${work.contentCategory}.` : "",
       `Platforms: ${work.platforms.map((p: any) => typeof p === "string" ? p : p.platform).join(", ")}.`,
+      work.type === "short-video"
+        ? isLandscape
+          ? `画幅: 横屏 16:9(1920×1080)。程序化镜头模板必须选 -wide 横屏款(cover-title-wide/keynote-leather);素材优先横版。`
+          : `画幅: 竖屏 9:16(1080×1920)。程序化镜头模板用竖屏款(不带 -wide 后缀);素材优先竖版。`
+        : "",
       work.topicHint ? `Topic hint: ${work.topicHint}` : "",
       buildExplicitParamsBlock(work),
       work.templateId ? buildTemplateSection(work.templateId) : "",
@@ -2326,7 +2346,7 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
           `   （如需图片素材把 type=video 换成 type=image）`,
           `3. 从结果中为该镜头选最优素材，打分维度（按重要性排序）：`,
           `   - **语义贴合**：主体/动作/场景与镜头脚本一致（由你判断，一票否决）`,
-          `   - **画幅方向**：最终输出 9:16 竖版，竖版（height>width）素材最佳；横版可用但合成时需裁剪，优先级降低`,
+          `   - **画幅方向**：最终输出 ${isLandscape ? "16:9 横版（1920×1080），横版（width>height）素材最佳；竖版可用但合成时需裁剪，优先级降低" : "9:16 竖版（1080×1920），竖版（height>width）素材最佳；横版可用但合成时需裁剪，优先级降低"}`,
           `   - **分辨率**：width ≥ 1080 优先`,
           `   - **时长**：duration 最好 ≥ 镜头所需时长 + 1 秒`,
           `4. 下载选中素材（自动进入合规素材库，带授权记录）：`,
@@ -2370,23 +2390,46 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
         } else {
         promptParts.push(
           ``,
-          `## CRITICAL: Horizontal-to-Vertical Video Conversion`,
-          `The final output MUST be 9:16 vertical (1080x1920). If any source clip is horizontal (wider than tall):`,
-          ``,
-          `**Strategy A (preferred): Full-screen crop — NO black bars**`,
-          `\`ffmpeg -i input.mp4 -vf "crop=ih*9/16:ih:(iw-ih*9/16)/2:0,scale=1080:1920" ...\``,
-          `Use this when the subject stays in the center and won't be cut off.`,
-          ``,
-          `**Strategy B: Width-match with vertical centering — subject too wide to crop**`,
-          `\`ffmpeg -i input.mp4 -vf "scale=1080:-2,pad=1080:1920:0:(oh-ih)/2:black" ...\``,
-          `This scales width to 1080, then pads top and bottom EQUALLY to center vertically.`,
-          `The formula \`(oh-ih)/2\` is critical — it puts equal black bars on top and bottom.`,
-          ``,
-          `**VERIFY**: After producing the final video, extract a frame and confirm:`,
-          `- No content is off-center vertically`,
-          `- If black bars exist, they must be EQUAL top and bottom`,
-          `- Subject is not cropped unless Strategy A was deliberately chosen`,
-          `\`ffmpeg -i final.mp4 -ss 3 -frames:v 1 -y /tmp/verify.png\``,
+          // 批次12c-A:画幅按 works.aspect 动态——横屏作品反向教学(竖版素材→横屏),不再硬编码 9:16
+          ...(isLandscape
+            ? [
+                `## CRITICAL: Vertical-to-Horizontal Video Conversion`,
+                `The final output MUST be 16:9 horizontal (1920x1080). If any source clip is vertical (taller than wide):`,
+                ``,
+                `**Strategy A (preferred): Full-screen crop — NO black bars**`,
+                `\`ffmpeg -i input.mp4 -vf "crop=iw:iw*9/16:0:(ih-iw*9/16)/2,scale=1920:1080" ...\``,
+                `Use this when the subject stays near the vertical center and won't be cut off.`,
+                ``,
+                `**Strategy B: Height-match with horizontal centering — subject too tall to crop**`,
+                `\`ffmpeg -i input.mp4 -vf "scale=-2:1080,pad=1920:1080:(ow-iw)/2:0:black" ...\``,
+                `This scales height to 1080, then pads left and right EQUALLY to center horizontally.`,
+                `The formula \`(ow-iw)/2\` is critical — it puts equal black bars on left and right.`,
+                ``,
+                `**VERIFY**: After producing the final video, extract a frame and confirm:`,
+                `- No content is off-center horizontally`,
+                `- If black bars exist, they must be EQUAL left and right`,
+                `- Subject is not cropped unless Strategy A was deliberately chosen`,
+                `\`ffmpeg -i final.mp4 -ss 3 -frames:v 1 -y /tmp/verify.png\``,
+              ]
+            : [
+                `## CRITICAL: Horizontal-to-Vertical Video Conversion`,
+                `The final output MUST be 9:16 vertical (1080x1920). If any source clip is horizontal (wider than tall):`,
+                ``,
+                `**Strategy A (preferred): Full-screen crop — NO black bars**`,
+                `\`ffmpeg -i input.mp4 -vf "crop=ih*9/16:ih:(iw-ih*9/16)/2:0,scale=1080:1920" ...\``,
+                `Use this when the subject stays in the center and won't be cut off.`,
+                ``,
+                `**Strategy B: Width-match with vertical centering — subject too wide to crop**`,
+                `\`ffmpeg -i input.mp4 -vf "scale=1080:-2,pad=1080:1920:0:(oh-ih)/2:black" ...\``,
+                `This scales width to 1080, then pads top and bottom EQUALLY to center vertically.`,
+                `The formula \`(oh-ih)/2\` is critical — it puts equal black bars on top and bottom.`,
+                ``,
+                `**VERIFY**: After producing the final video, extract a frame and confirm:`,
+                `- No content is off-center vertically`,
+                `- If black bars exist, they must be EQUAL top and bottom`,
+                `- Subject is not cropped unless Strategy A was deliberately chosen`,
+                `\`ffmpeg -i final.mp4 -ss 3 -frames:v 1 -y /tmp/verify.png\``,
+              ]),
           ``,
           `## BGM 配乐与混音红线（强制）`,
           `- BGM 只能来自：公共素材库 music、/api/generate/music（MiniMax music-2.6，duration 参数自动补齐时长）、yt-dlp 免版权音乐。**禁止用 ffmpeg 合成正弦波/白噪声/棕噪声充当 BGM**——属于静默降质`,
@@ -2404,7 +2447,7 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
           `  1. 统一调色：所有实拍素材混入前做基础色彩统一（\`eq=contrast=1.06:saturation=0.92:brightness=-0.02\` + 轻微冷色偏移 \`colorbalance=bs=0.06\`），避免各来源素材色温/曝光打架；与深蓝模板同片时画面整体偏冷`,
           `  2. 转场：镜头间用 0.3–0.5s 交叉淡化（xfade），禁止全片生硬硬切（hook 后的第一次切换可硬切保留冲击感）`,
           `  3. 收尾：结尾 0.8–1s 画面与音频同步淡出（fade=t=out + afade），禁止戛然而止`,
-          `  4. 实拍素材过暗/过灰必须先校正再用；横版素材竖屏裁切时主体必须在画面中上 2/3 区域`,
+          `  4. 实拍素材过暗/过灰必须先校正再用；${isLandscape ? "竖版素材横屏裁切时主体必须在画面水平中央区域" : "横版素材竖屏裁切时主体必须在画面中上 2/3 区域"}`,
           ``,
           `## REQUIRED: Generate Publishing Copytext & Tags`,
           `After producing the final video, you MUST also generate a publishing copytext file.`,
@@ -3520,7 +3563,8 @@ apiRoutes.post("/api/works/:id/pipeline/advance", async (c) => {
     // 打回重做闭环：流水线再次全部完成（回 reviewing）时清除审核意见，
     // 避免下次会话启动重复注入已处理的旧意见
     const clearReview = derivedStatus === "reviewing" && work.reviewComment ? { reviewComment: "" } : {};
-    await storeUpdateWork(id, { pipeline: work.pipeline, status: derivedStatus, ...clearReview });
+    // 批次12c:推进成功即清最近失败原因(作品已恢复流转)
+    await storeUpdateWork(id, { pipeline: work.pipeline, status: derivedStatus, lastError: "", ...clearReview });
 
     // 队列闭环：作品到达终态时通知 runner 出队并启动下一个排队作品。
     // notifyWorkSettled 仅在该作品处于队列 running 状态时生效，未入队作品调用无副作用。
@@ -3590,7 +3634,7 @@ apiRoutes.post("/api/works/:id/eval/force-pass", async (c) => {
     work.pipeline[forceNextStep].status = "active";
     work.pipeline[forceNextStep].startedAt = new Date().toISOString();
   }
-  await storeUpdateWork(id, { pipeline: work.pipeline, status: deriveStatusFromPipeline(work.pipeline, work.status, { reviveFromFailed: true }) });
+  await storeUpdateWork(id, { pipeline: work.pipeline, status: deriveStatusFromPipeline(work.pipeline, work.status, { reviveFromFailed: true }), lastError: "" });
   broadcastPipelineUpdate(id, work.pipeline);
   // 复活回队列(2026-09-01 语义缝隙修复):此前只改状态不驱动执行,
   // 死会话作品状态恢复后无人拉起,永久悬空。reject 路径同款 afterRunning 位次。
@@ -3610,15 +3654,20 @@ apiRoutes.post("/api/works/:id/eval/retry", async (c) => {
   // 2026-09-01 终审 I3:状态白名单——只对评审受阻/待人工步骤开放 retry;
   // 对 done 步骤会把已完成阶段回退 active(状态回归),对不存在步骤会 TypeError
   if (!work.pipeline[step]) return c.json({ error: `Unknown step: ${step}` }, 400);
-  if (!["eval_blocked", "awaiting_human"].includes(work.pipeline[step].status as string)) {
-    return c.json({ error: `Step ${step} 当前状态(${work.pipeline[step].status})不可 retry——仅 eval_blocked/awaiting_human 可重试` }, 400);
+  // 白名单:eval_blocked/awaiting_human 随时可 retry;作品级 failed 时 active/pending 步骤
+  // 也可 retry(那是崩溃死作品的唯一复活通道);其余(如 done)回退即状态回归,拒绝
+  const stepSt = work.pipeline[step].status as string;
+  const allowed = ["eval_blocked", "awaiting_human"].includes(stepSt)
+    || (work.status === "failed" && ["active", "pending", "evaluating"].includes(stepSt));
+  if (!allowed) {
+    return c.json({ error: `Step ${step} 当前状态(${stepSt})不可 retry——eval_blocked/awaiting_human 可重试;failed 作品的未完成步骤可复活` }, 400);
   }
   work.pipeline[step].status = "active";
   const evalAttempts = { ...(work.evalAttempts ?? {}), [step]: 0 };
   // reviveFromFailed:人工 retry 是 failed 粘性的合法复活通道(否则重开后卡片仍显示"失败")
   // 指导同步落 reviewComment:会话已死时 sendMessage 无处投递,
   // runner 重建会话后由 startWorkSession 注入(与 reject 路径同源,2026-09-01 修复)
-  await storeUpdateWork(id, { pipeline: work.pipeline, evalAttempts, ...(guidance ? { reviewComment: guidance } : {}), status: deriveStatusFromPipeline(work.pipeline, work.status, { reviveFromFailed: true }) } as any);
+  await storeUpdateWork(id, { pipeline: work.pipeline, evalAttempts, ...(guidance ? { reviewComment: guidance } : {}), status: deriveStatusFromPipeline(work.pipeline, work.status, { reviveFromFailed: true }), lastError: "" } as any);
   broadcastPipelineUpdate(id, work.pipeline);
   if (wsBridge && guidance) {
     await wsBridge.sendMessage(id, `## 用户指导\n\n${guidance}\n\n请根据以上指导修改当前阶段的产出，完成后重新提交。`);
@@ -4096,6 +4145,8 @@ interface BatchConvertOptions {
   evalMode?: "standard" | "express";
   /** 用途（04 方案）：六用途之一；决定默认参数/技能包注入/评审关注点 */
   purpose?: string;
+  /** 批次12c-A:作品画幅 portrait(缺省,竖屏 9:16)|landscape(横屏 16:9) */
+  aspect?: "portrait" | "landscape";
 }
 
 // 2026-08-18 04 方案：标签全集改由 purpose-presets.CONTENT_FORMS 提供(13 种)
@@ -4212,6 +4263,10 @@ async function runBatchConvert(
   }
   if (workType === "short-video") {
     controlLines.push(`视频时长: 约${duration}秒`);
+    // 批次12c-A:画幅显式声明(落库 works.aspect,同时注入 topicHint 直达 agent)
+    controlLines.push(body.aspect === "landscape"
+      ? `画幅: 横屏 16:9(1920×1080)——程序化镜头模板选 -wide 横屏款,素材优先横版`
+      : `画幅: 竖屏 9:16(1080×1920)——程序化镜头模板用竖屏款(不带 -wide 后缀)`);
     if (body.contentForm) controlLines.push(`视频风格: ${CONTENT_FORM_LABELS[body.contentForm] ?? body.contentForm}`);
     // 旧 videoSource 字段的"素材样式"行仅在没有新 assetSource 时输出,避免与素材约束段语义冲突
     if (body.videoSource && !assetSource) controlLines.push(`素材样式: ${body.videoSource === "ai-generate" ? "AI 生成素材" : "素材库搜索"}`);
@@ -4260,6 +4315,7 @@ async function runBatchConvert(
           // 批次5.8:用户在批量弹窗显式给的时长 = 最高优先级事实源(评审与门禁豁免依据)
           explicitParams: body.duration && body.duration > 0 ? { duration: body.duration } : undefined,
           evalMode: body.evalMode === "express" ? "express" : undefined,
+          aspect: body.aspect === "landscape" ? "landscape" : "portrait",
         });
         item.workId = work.id;
       }
@@ -4438,6 +4494,8 @@ apiRoutes.post("/api/topics/batch-convert", async (c) => {
     assetForm?: string;
     assetSource?: string;
     assetBudget?: string;
+    /** 批次12c-A:画幅 portrait(缺省)|landscape */
+    aspect?: "portrait" | "landscape";
   }>().catch(() => ({ topicIds: [] } as any));
 
   if (!body.topicIds?.length) return c.json({ error: "topicIds is required" }, 400);

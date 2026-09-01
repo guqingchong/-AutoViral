@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { deleteTemplateApi, renderPreview, updateTemplateApi, createBrief, chatBrief, generateFromBrief, type Template, type DesignBrief } from "../lib/api.js";
+  import { deleteTemplateApi, renderPreview, updateTemplateApi, createBrief, chatBrief, generateFromBrief, fetchCodeSceneTemplates, type Template, type DesignBrief, type CodeSceneTemplate } from "../lib/api.js";
   import { t } from "../lib/i18n.js";
   import TemplateEditor from "./TemplateEditor.svelte";
 
@@ -31,6 +31,58 @@
   let briefLoading = $state(false);
   let briefDiff = $state("");
   let briefImageData = $state<{ data: string; mediaType: string; name: string } | null>(null);
+
+  // ── 镜头模板（kind=web 程序化动画场景，2026-09-01 批次12c-A）──
+  // 数据来自 GET /api/assets/code-scene/templates（agent 发现入口同款清单），只读展示
+  let sceneTemplates = $state<CodeSceneTemplate[]>([]);
+  let sceneThemes = $state<string[]>([]);
+  let sceneNote = $state("");
+  let sceneLoading = $state(true);
+
+  /** 模板名 → 图标 + 主题（静态视觉用主题色板，不嵌样片视频） */
+  const SCENE_META: Record<string, { icon: string; theme: string }> = {
+    "structure-growth": { icon: "🌐", theme: "finance_dark" },
+    "flow-steps": { icon: "🪜", theme: "ink_green" },
+    "logic-chain": { icon: "🔗", theme: "warm_gold" },
+    "big-number": { icon: "🔢", theme: "finance_dark" },
+    "compare-split": { icon: "⚖️", theme: "magazine_light" },
+    timeline: { icon: "🕒", theme: "minimal_light" },
+    pyramid: { icon: "🔺", theme: "ink_green" },
+    "quote-card": { icon: "💬", theme: "magazine_light" },
+    checklist: { icon: "✅", theme: "minimal_light" },
+    "bar-compare": { icon: "📊", theme: "warm_gold" },
+    "cover-title-wide": { icon: "🎬", theme: "finance_dark" },
+    "keynote-leather": { icon: "🎤", theme: "warm_gold" },
+  };
+  const SCENE_THEME_COLORS: Record<string, { bg: string; fg: string; accent: string }> = {
+    finance_dark: { bg: "#0e1a2b", fg: "#e8eef6", accent: "#4d9fff" },
+    warm_gold: { bg: "#191307", fg: "#f3e8cf", accent: "#d4a62a" },
+    ink_green: { bg: "#0d1f18", fg: "#e2f0e8", accent: "#3ecf8e" },
+    minimal_light: { bg: "#f4f1ea", fg: "#2b2b28", accent: "#b0792e" },
+    magazine_light: { bg: "#faf7f2", fg: "#1a1a1a", accent: "#c23b22" },
+  };
+  function sceneMeta(tpl: CodeSceneTemplate) {
+    const base = tpl.name.replace(/-wide$/, "");
+    return SCENE_META[tpl.name] ?? SCENE_META[base] ?? { icon: "🎞️", theme: "finance_dark" };
+  }
+  function sceneColors(tpl: CodeSceneTemplate) {
+    return SCENE_THEME_COLORS[sceneMeta(tpl).theme] ?? SCENE_THEME_COLORS.finance_dark;
+  }
+  function isWideScene(tpl: CodeSceneTemplate) {
+    return tpl.name.endsWith("-wide") || tpl.name === "keynote-leather";
+  }
+  async function loadSceneTemplates() {
+    sceneLoading = true;
+    try {
+      const data = await fetchCodeSceneTemplates();
+      sceneTemplates = data.templates ?? [];
+      sceneThemes = data.themes ?? [];
+      sceneNote = data.note ?? "";
+    } catch {
+      sceneTemplates = [];
+    }
+    sceneLoading = false;
+  }
 
   // ── 模板要素（2026-08-03 要素化生成）──
   let elLayout = $state<string>("");
@@ -503,6 +555,7 @@
     await load();
     await autoGeneratePosters();
     loadSkillCount();
+    loadSceneTemplates();
     // Check if there's a running generation job (page re-entry after switching)
     try {
       const res = await fetch("/api/templates/generate/active");
@@ -753,6 +806,45 @@
       {/if}
     </header>
 
+    <!-- 镜头模板分组(2026-09-01 批次12c-A):kind=web 程序化动画模板,agent 渲染镜头时经 API 选用,此处只读展示 -->
+    <section class="scene-section">
+      <div class="scene-head">
+        <h2>镜头模板<span class="scene-count">{sceneTemplates.length} 款（竖屏 + 横屏 -wide）</span></h2>
+        {#if sceneThemes.length}
+          <span class="scene-themes">主题：{sceneThemes.join(" / ")}</span>
+        {/if}
+      </div>
+      {#if sceneNote}<p class="scene-note">{sceneNote}</p>{/if}
+      {#if sceneLoading}
+        <p class="empty">{t("loading")}</p>
+      {:else if sceneTemplates.length === 0}
+        <p class="empty">暂无镜头模板</p>
+      {:else}
+        <div class="template-grid">
+          {#each sceneTemplates as st}
+            {@const colors = sceneColors(st)}
+            <article class="template-card">
+              <div
+                class="preview scene-swatch"
+                class:scene-wide={isWideScene(st)}
+                style="background:{colors.bg};color:{colors.fg}"
+              >
+                <span class="scene-icon">{sceneMeta(st).icon}</span>
+                <span class="scene-swatch-label" style="color:{colors.accent}">{st.label}</span>
+              </div>
+              <div class="meta">
+                <span class="kind-badge">镜头</span>
+                {#if isWideScene(st)}<span class="wide-badge">横屏 16:9</span>{/if}
+              </div>
+              <h3>{st.label}</h3>
+              <p class="dims">{st.bestFor}</p>
+              <p class="scene-params" title={st.params}>{st.params}</p>
+            </article>
+          {/each}
+        </div>
+      {/if}
+    </section>
+
     {#if loading}
       <p class="empty">{t("loading")}</p>
     {:else if templates.length === 0}
@@ -867,6 +959,19 @@
   .brief-diff { font-size: var(--size-xs); color: var(--accent); }
   .brief-actions { display: flex; gap: 0.5rem; }
   .brief-upload { cursor: pointer; }
+  /* ── 镜头模板分组 ── */
+  .scene-section { margin-bottom: 2rem; }
+  .scene-head { display: flex; align-items: baseline; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.25rem; }
+  .scene-head h2 { font-family: var(--font-display); font-size: var(--size-lg); margin: 0; }
+  .scene-count { font-size: var(--size-xs); color: var(--text-muted); margin-left: 0.5rem; }
+  .scene-themes { font-size: var(--size-xs); color: var(--text-dim); }
+  .scene-note { font-size: var(--size-xs); color: var(--text-muted); margin: 0.25rem 0 0.75rem; line-height: 1.5; }
+  .scene-swatch { display: flex; flex-direction: column; gap: 0.45rem; align-items: center; justify-content: center; }
+  .scene-swatch.scene-wide { aspect-ratio: 16 / 9; }
+  .scene-icon { font-size: 2rem; line-height: 1; }
+  .scene-swatch-label { font-size: var(--size-sm); font-weight: 600; text-align: center; padding: 0 0.6rem; }
+  .wide-badge { font-size: var(--size-xs); padding: 0.15rem 0.4rem; border-radius: 3px; background: var(--accent); color: var(--accent-text); }
+  .scene-params { font-size: var(--size-xs); color: var(--text-dim); margin: 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
   .brief-image-clear {
     padding: 2px 6px;
     font-size: 12px;

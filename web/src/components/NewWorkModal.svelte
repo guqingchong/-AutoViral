@@ -11,7 +11,7 @@
   }: {
     open: boolean;
     onClose: () => void;
-    onCreate: (data: { title: string; type: string; contentCategory: string; videoSource: string; videoSearchQuery: string; topicHint: string; evalMode: string }) => void;
+    onCreate: (data: { title: string; type: string; contentCategory: string; videoSource: string; videoSearchQuery: string; topicHint: string; evalMode: string; aspect: string }) => void;
     prefillTitle?: string;
     prefillTopicHint?: string;
   } = $props();
@@ -27,6 +27,8 @@
   let videoSearchQuery = $state("");
   let topicHint = $state("");
   let evalMode = $state("standard");
+  // 画幅（批次12c-A）：竖屏 9:16 缺省 / 横屏 16:9，仅短视频有意义
+  let aspect = $state<"portrait" | "landscape">("portrait");
 
   // Apply prefill when modal opens
   $effect(() => {
@@ -50,6 +52,7 @@
       videoSearchQuery: videoSource === "search" ? videoSearchQuery : "",
       topicHint,
       evalMode,
+      aspect: selectedType === "short-video" ? aspect : "portrait",
     });
     title = "";
     selectedType = "short-video";
@@ -59,6 +62,7 @@
     videoSearchQuery = "";
     topicHint = "";
     evalMode = "standard";
+    aspect = "portrait";
   }
 
   function handleOverlayClick(e: MouseEvent) {
@@ -250,6 +254,32 @@
           rows="3"
         ></textarea>
       </div>
+
+      <!-- Aspect Ratio: only meaningful for short-video（批次12c-A） -->
+      {#if selectedType === "short-video"}
+        <div class="form-section">
+          <span class="form-label">{tt("aspectLabel")}</span>
+          <div class="source-row">
+            <button
+              class="source-chip"
+              class:selected={aspect === "portrait"}
+              onclick={() => aspect = "portrait"}
+            >
+              {tt("aspectPortrait")}
+            </button>
+            <button
+              class="source-chip"
+              class:selected={aspect === "landscape"}
+              onclick={() => aspect = "landscape"}
+            >
+              {tt("aspectLandscape")}
+            </button>
+          </div>
+          {#if aspect === "landscape"}
+            <span class="source-hint">{tt("aspectLandscapeHint")}</span>
+          {/if}
+        </div>
+      {/if}
 
       <!-- Eval Mode: standard (per-stage LLM review) vs express (gates + single final review) -->
       <div class="form-section">

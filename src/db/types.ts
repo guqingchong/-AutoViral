@@ -40,6 +40,7 @@ export interface DbWork {
   estimated_cost?: number;         // PRD: 预估成本
   actual_cost?: number;            // PRD: 实际成本
   review_comment?: string;         // 发布中心最近一次打回的审核意见
+  last_error?: string;             // 最近一次失败原因(failVisible 落库,批次12c)
   asset_form?: string;             // 素材形态：video-mix | image-carousel | slides | auto（迁移 v19）
   asset_source?: string;           // 素材来源：stock | ai | user | auto | smart（迁移 v19，smart 为 2026-08-14 精品混合路由）
   asset_budget?: string;           // 成本档：eco（禁 AI 视频生成）| premium（迁移 v19）
@@ -51,6 +52,8 @@ export interface DbWork {
   explicit_params?: string;
   /** 评审分级(迁移 v33,批次10.2):'standard'(默认/NULL)|'express'(机器门禁+assembly 单轮终审) */
   eval_mode?: string;
+  /** 作品画幅(迁移 v35,批次12c-A):'portrait'(竖屏 9:16,默认)|'landscape'(横屏 16:9) */
+  aspect?: string;
   created_at: string;
   updated_at: string;
 }

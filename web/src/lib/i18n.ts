@@ -97,6 +97,10 @@ const translations: Record<Language, Record<string, string>> = {
     evalExpress: "Express",
     evalStandardHint: "Independent LLM review at every stage",
     evalExpressHint: "Machine gates still run; only one final LLM review on the finished piece",
+    aspectLabel: "Aspect Ratio",
+    aspectPortrait: "Portrait 9:16",
+    aspectLandscape: "Landscape 16:9",
+    aspectLandscapeHint: "For landscape platforms (e.g. Bilibili); shot templates use the -wide variants",
 
     // Platforms
     xiaohongshu: "Xiaohongshu",
@@ -575,6 +579,10 @@ const translations: Record<Language, Record<string, string>> = {
     evalExpress: "极速模式",
     evalStandardHint: "每阶段由独立 LLM 评审把关",
     evalExpressHint: "机器门禁照跑，仅成片做一轮 LLM 终审",
+    aspectLabel: "画幅",
+    aspectPortrait: "竖屏 9:16",
+    aspectLandscape: "横屏 16:9",
+    aspectLandscapeHint: "适合 B 站等横屏场景；镜头模板自动选 -wide 横屏款",
 
     // Platforms
     xiaohongshu: "小红书",
