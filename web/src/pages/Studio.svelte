@@ -106,8 +106,20 @@
 
   // --- Evaluation state ---
   let evaluationMode = $state(false);
-  let evalBlocked = $state<{ step: string; attempt: number } | null>(null);
+  // 批次12c-B:kind 区分 eval_blocked / awaiting_human(横幅文案不同);
+  // 打开作品时从 pipeline 恢复,不限于当次 WS 事件
+  let evalBlocked = $state<{ step: string; attempt: number; kind?: string } | null>(null);
   let guidanceText = $state("");
+
+  /** 从 pipeline 推导受阻状态（作品加载/WS pipeline_updated 时调用） */
+  function syncEvalBlockedFromPipeline(pipeline: Record<string, { status: string }>, evalAttempts?: Record<string, number>) {
+    const blockedKey = Object.keys(pipeline).find((k) => ["eval_blocked", "awaiting_human"].includes(pipeline[k].status));
+    if (blockedKey) {
+      evalBlocked = { step: blockedKey, attempt: evalAttempts?.[blockedKey] ?? 3, kind: pipeline[blockedKey].status };
+    } else if (evalBlocked && pipeline[evalBlocked.step] && !["eval_blocked", "awaiting_human"].includes(pipeline[evalBlocked.step].status)) {
+      evalBlocked = null; // 受阻步骤已恢复流转
+    }
+  }
 
   // --- Attachment system ---
   let rightPanelWidth = $state(480);
@@ -237,15 +249,29 @@
     const stepKeys = Object.keys(work.pipeline);
     const idx = stepKeys.indexOf(evalBlocked.step);
     const nextStep = idx < stepKeys.length - 1 ? stepKeys[idx + 1] : undefined;
-    await forcePassEval(workId, evalBlocked.step, nextStep);
-    evalBlocked = null;
+    try {
+      const result = await forcePassEval(workId, evalBlocked.step, nextStep);
+      if (result?.pipeline) {
+        work.pipeline = result.pipeline;
+        work = { ...work };
+      }
+      evalBlocked = null;
+    } catch (err) {
+      alert(`强制通过失败：${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   async function handleRetryWithGuidance() {
     if (!work || !evalBlocked || !guidanceText.trim()) return;
-    await retryWithGuidance(workId, evalBlocked.step, guidanceText);
-    evalBlocked = null;
-    guidanceText = "";
+    try {
+      await retryWithGuidance(workId, evalBlocked.step, guidanceText);
+      evalBlocked = null;
+      guidanceText = "";
+      // 刷新作品状态（WS 断线时也能反映步骤已回到 active）
+      try { work = await fetchWork(workId); } catch { /* ignore */ }
+    } catch (err) {
+      alert(`重试失败：${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   function handleCanvasSend(text: string) {
@@ -482,6 +508,7 @@
     if (event === "pipeline_updated" && data.pipeline && work) {
       work.pipeline = data.pipeline;
       work = { ...work };
+      syncEvalBlockedFromPipeline(data.pipeline, (work as any).evalAttempts);
       const activeKey = Object.keys(data.pipeline).find((k: string) => data.pipeline[k].status === "active");
       if (activeKey) {
         currentStep = activeKey;
@@ -580,11 +607,11 @@
         scrollToBottom();
         break;
       case "eval_blocked":
-        evalBlocked = { step: data.step, attempt: data.attempt };
+        evalBlocked = { step: data.step, attempt: data.attempt, kind: "eval_blocked" };
         break;
       case "awaiting_human":
         // 批次7.1 熔断软化:仅剩 minor 问题,转人工待决(复用受阻横幅与处置按钮)
-        evalBlocked = { step: data.step, attempt: data.attempt };
+        evalBlocked = { step: data.step, attempt: data.attempt, kind: "awaiting_human" };
         break;
       case "turn_complete":
         if (inactivityTimer) clearTimeout(inactivityTimer);
@@ -619,8 +646,12 @@
       if (work?.pipeline) {
         const keys = Object.keys(work.pipeline);
         const activeKey = keys.find(k => work!.pipeline[k].status === "active");
+        // 批次12c-B:打开作品时若存在评审受阻/待人工步骤,直接恢复处置面板(不必等 WS 事件)
+        syncEvalBlockedFromPipeline(work.pipeline, (work as any).evalAttempts);
         if (activeKey) {
           currentStep = activeKey;
+        } else if (evalBlocked) {
+          currentStep = evalBlocked.step;
         } else if (keys.length > 0) {
           currentStep = keys[0];
         }
@@ -751,7 +782,15 @@
         workTitle={work?.title ?? ""}
         topicHint={work?.topicHint ?? ""}
         onNextStep={triggerStep}
-        onSelectStep={(key) => { if (!streaming) triggerStep(key); }}
+        onSelectStep={(key) => {
+          // 批次12c-B:受阻/待人工步骤点击 = 打开处置面板,而非触发重做
+          const st = work?.pipeline?.[key]?.status;
+          if (st === "eval_blocked" || st === "awaiting_human") {
+            evalBlocked = { step: key, attempt: (work as any)?.evalAttempts?.[key] ?? 3, kind: st };
+            return;
+          }
+          if (!streaming) triggerStep(key);
+        }}
         canAdvance={showNextStep && !streaming}
       />
     </div>
@@ -920,7 +959,11 @@
         <div class="eval-blocked-panel">
           <div class="eval-blocked-header">
             <span class="eval-blocked-icon">⚠️</span>
-            <span>评审已达最大迭代次数 ({evalBlocked.attempt}/3)</span>
+            {#if evalBlocked.kind === "awaiting_human"}
+              <span>评审仅剩轻微问题，待人工拍板（可强制通过或带指导重试）</span>
+            {:else}
+              <span>评审已达最大迭代次数 ({evalBlocked.attempt}/3)</span>
+            {/if}
           </div>
           <div class="eval-blocked-actions">
             <button class="eval-btn eval-btn-pass" onclick={handleForcePass}>强制通过</button>

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { t, getLanguage, subscribe } from "../lib/i18n";
-  import { fetchWorks, deleteWorkApi, fetchQueue, queueAction, deleteQueueWork, type WorkSummary, type QueueItemInfo } from "../lib/api";
+  import { fetchWorks, deleteWorkApi, fetchQueue, queueAction, deleteQueueWork, forcePassEval, retryWithGuidance, type WorkSummary, type QueueItemInfo } from "../lib/api";
   import InterestTags from "../components/InterestTags.svelte";
   import AssetLibrary from "../components/AssetLibrary.svelte";
 
@@ -279,6 +279,55 @@
       await deleteWorkApi(workId);
       works = works.filter(w => w.id !== workId);
     } catch { /* ignore */ }
+  }
+
+  // ── 批次12c-B:失败作品复活（重试/强制通过） ──
+  let reviveBusy: Record<string, boolean> = $state({});
+
+  /** 找 pipeline 中评审受阻/待人工的步骤（复活端点只接受这两类状态） */
+  function findBlockedStep(w: WorkSummary): { key: string; name: string } | null {
+    const s = w.pipeline?.find((p) => p.status === "eval_blocked" || p.status === "awaiting_human");
+    return s ? { key: s.key, name: s.name } : null;
+  }
+
+  function truncateError(msg: string, max = 80): string {
+    return msg.length > max ? msg.slice(0, max) + "…" : msg;
+  }
+
+  async function handleRevive(e: MouseEvent, w: WorkSummary, mode: "retry" | "force") {
+    e.stopPropagation(); // Don't open studio
+    if (reviveBusy[w.id]) return;
+    const blocked = findBlockedStep(w);
+    let stepKey: string | null = blocked?.key ?? null;
+    if (mode === "force" && !stepKey) {
+      alert("该作品没有评审受阻/待人工的步骤，无法强制通过——可改用「重试」。");
+      return;
+    }
+    if (!stepKey) {
+      // 纯 failed（无 eval_blocked 步骤）：退而求其次，对最后一个未完成步骤发起重试
+      const candidate = [...(w.pipeline ?? [])].reverse().find((p) => p.status !== "done" && p.status !== "skipped");
+      if (!candidate) {
+        alert("该作品没有可重试的步骤。");
+        return;
+      }
+      stepKey = candidate.key;
+    }
+    let guidance = "";
+    if (mode === "retry") {
+      const g = prompt(`请输入重试指导（将直达 AI，驱动「${blocked?.name ?? stepKey}」阶段重做）：`);
+      if (g === null) return; // 用户取消
+      guidance = g.trim();
+    }
+    reviveBusy = { ...reviveBusy, [w.id]: true };
+    try {
+      if (mode === "force") await forcePassEval(w.id, stepKey);
+      else await retryWithGuidance(w.id, stepKey, guidance);
+      await loadWorks(true);
+    } catch (err) {
+      alert(`操作失败：${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      reviveBusy = { ...reviveBusy, [w.id]: false };
+    }
   }
 
   function cardGradient(id: string): string {
@@ -770,6 +819,9 @@
               {#each w.platforms as p}
                 <span class="card-tag">{platformLabel(p)}</span>
               {/each}
+              {#if w.reviewComment}
+                <span class="card-tag tag-rework" title={`审核意见：${w.reviewComment}`}>打回重做中</span>
+              {/if}
             </div>
             {#if queuePositionOf(w.id) || (w.pipeline && w.pipeline.length > 0 && w.pipeline.some((s) => s.status !== "done" && s.status !== "skipped"))}
               {@const prog = progressLabel(w)}
@@ -786,6 +838,25 @@
                   {/each}
                 </div>
                 <span class="pp-label" class:pp-stalled={prog.stalled}>{prog.text}</span>
+              </div>
+            {/if}
+            {#if w.status === "failed"}
+              {#if w.lastError}
+                <p class="fail-reason" title={w.lastError}>失败原因：{truncateError(w.lastError)}</p>
+              {/if}
+              <div class="revive-actions">
+                <button
+                  class="revive-btn"
+                  disabled={!!reviveBusy[w.id]}
+                  title="带指导重试受阻/未完成阶段（指导直达 AI）"
+                  onclick={(e) => handleRevive(e, w, "retry")}
+                >{reviveBusy[w.id] ? "处理中…" : "重试"}</button>
+                <button
+                  class="revive-btn revive-btn-pass"
+                  disabled={!!reviveBusy[w.id]}
+                  title="跳过评审，强制通过受阻阶段"
+                  onclick={(e) => handleRevive(e, w, "force")}
+                >强制通过</button>
               </div>
             {/if}
             <span class="card-date">{new Date(w.updatedAt).toLocaleDateString()}</span>
@@ -1335,6 +1406,60 @@
     color: var(--text-dim);
     border: 1px dashed var(--border);
     background: transparent;
+  }
+  .card-tag.tag-rework {
+    color: var(--warning, #f59e0b);
+    background: color-mix(in srgb, var(--warning, #f59e0b) 12%, transparent);
+    font-weight: 600;
+  }
+
+  /* ── 批次12c-B:失败原因 + 复活入口 ── */
+  .fail-reason {
+    margin: 0.3rem 0 0;
+    font-size: 10px;
+    line-height: 1.45;
+    color: var(--error, #ef4444);
+    word-break: break-all;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .revive-actions {
+    display: flex;
+    gap: 0.3rem;
+    margin-top: 0.35rem;
+  }
+  .revive-btn {
+    flex: 1;
+    padding: 0.22rem 0.4rem;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--bg-elevated);
+    color: var(--text-secondary);
+    font-family: var(--font-body);
+    font-size: 10px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.12s;
+    white-space: nowrap;
+  }
+  .revive-btn:hover:not(:disabled) {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  .revive-btn-pass {
+    color: var(--warning, #f59e0b);
+    border-color: color-mix(in srgb, var(--warning, #f59e0b) 45%, transparent);
+    background: color-mix(in srgb, var(--warning, #f59e0b) 8%, transparent);
+  }
+  .revive-btn-pass:hover:not(:disabled) {
+    border-color: var(--warning, #f59e0b);
+    color: var(--warning, #f59e0b);
+  }
+  .revive-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
   }
   .pipeline-progress { margin-top: 0.45rem; display: flex; align-items: center; gap: 0.5rem; }
   .pp-bar { flex: 1; display: flex; gap: 2px; height: 4px; }
