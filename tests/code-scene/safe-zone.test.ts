@@ -9,4 +9,20 @@ describe("字幕安全区三方一致性(2026-09-01 视觉升级)", () => {
     expect(src).toContain("MARGIN = 96");
     expect(src).toContain("CONTENT_TOP = -816");
   });
+
+  it("design-tokens.css 五套主题齐备且变量完整", () => {
+    const css = readFileSync("packages/code-scene/src/design-tokens.css", "utf-8");
+    const themes = ["finance_dark", "warm_gold", "ink_green", "minimal_light", "magazine_light"];
+    const vars = ["--bg:", "--bg-grid:", "--accent:", "--accent-2:", "--text:", "--text-sub:",
+      "--shadow-lg:", "--radius-card:", "--ease-out:", "--font-display:", "--safe-zone-h: 144px"];
+    for (const t of themes) {
+      expect(css, `缺主题 ${t}`).toContain(`[data-theme="${t}"]`);
+    }
+    for (const v of vars) {
+      for (const t of themes) {
+        const block = css.split(`[data-theme="${t}"]`)[1]?.split("}")[0] ?? "";
+        expect(block, `主题 ${t} 缺变量 ${v}`).toContain(v);
+      }
+    }
+  });
 });
