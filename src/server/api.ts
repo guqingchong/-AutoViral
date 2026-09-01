@@ -3,7 +3,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { readFile, writeFile, appendFile, mkdir, readdir, rm, rename, unlink, stat, copyFile } from "node:fs/promises";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { join, extname, basename, resolve, sep } from "node:path";
+import { join, extname, basename, resolve, sep, isAbsolute } from "node:path";
 import { homedir } from "node:os";
 import yaml from "js-yaml";
 import { loadConfig, saveConfig, dataDir, getConfigDir, HEYGEM_TUNNEL_DEFAULTS, H3_TUNNEL_DEFAULTS, type AnalyticsSource, type HeygemTunnelConfig, type H3TunnelConfig, type LlmConfig, type LlmProviderConfig } from "../config.js";
@@ -2743,8 +2743,7 @@ async function markEvalBlocked(workId: string, completedStep: string, broadcastD
 
 /** 评审超时标记落盘(批次1.2 纪律:超时事件必须在磁盘上可审计,"挂起不可见"是 5e3 的教训)。
  *  返回该步骤累计超时次数。 */
-async function recordEvalTimeout(workId: string, step: string, detail: string): Promise<number> {
-  const workDir = join(dataDir, "works", workId);
+async function recordEvalTimeout(workId: string, step: string, detail: string): Promise<number> {  const workDir = join(dataDir, "works", workId);
   let count = 0;
   try {
     count = (await readdir(workDir)).filter((f) => f.startsWith(`eval-timeout-${step}-`)).length + 1;
@@ -2756,6 +2755,19 @@ async function recordEvalTimeout(workId: string, step: string, detail: string): 
     console.warn(`[eval] 超时标记落盘失败(不阻断): ${(err as Error).message}`);
   }
   return count;
+}
+
+/** 2026-09-01 终审 M1:评审通过/人工复活后清理该步骤的超时标记——
+ *  标记只增不减会预支降级链预算(重做后首轮超时就 count=2 直接跳换模型) */
+async function clearEvalTimeoutMarkers(workId: string, step: string): Promise<void> {
+  const workDir = join(dataDir, "works", workId);
+  try {
+    const files = await readdir(workDir);
+    await Promise.all(
+      files.filter((f) => f.startsWith(`eval-timeout-${step}-`))
+        .map((f) => rm(join(workDir, f), { force: true })),
+    );
+  } catch { /* 清理失败不阻断 */ }
 }
 
 /** 降级链"换模型"段:选一个与当前 eval 档不同的可用 provider 模型 */
@@ -2872,6 +2884,17 @@ export async function runEvaluation(workId: string, completedStep: string, nextS
     // Save result
     await saveEvalResult(workId, completedStep, attempt, evalResult);
 
+    // 2026-09-01 终审 I3 竞态防护:评审在途(最长 15min+)期间人工通道
+    // (eval/force-pass、eval/retry)可能已把步骤置为 done/active——过期结论回写会
+    // 静默推翻人工决定(把 done 打回 active、甚至把作品置 failed)。
+    // 结论已 saveEvalResult 留档可审计,此处只丢弃状态回写。
+    const guardWork = await getWork(workId);
+    const stepStatusNow = guardWork?.pipeline[completedStep]?.status;
+    if (stepStatusNow !== "evaluating") {
+      log("info", "api", "eval_stale_discarded", workId, { step: completedStep, verdict: evalResult.verdict, stepStatusNow });
+      return;
+    }
+
     // Update attempts
     const evalAttempts = { ...(work.evalAttempts ?? {}), [completedStep]: attempt };
     // Also persist evalSessionId
@@ -2894,6 +2917,7 @@ export async function runEvaluation(workId: string, completedStep: string, nextS
       // Clean up eval session for this step
       const cleanedEvalSessionIds = { ...evalSessionIds };
       delete cleanedEvalSessionIds[completedStep];
+      clearEvalTimeoutMarkers(workId, completedStep).catch(() => {}); // M1:pass 后清超时标记,不预支降级链预算
 
       const freshWork = await getWork(workId);
       // nextStep 可能已被批量转换等路径预先标 done——直接激活会造成状态回归,
@@ -2928,6 +2952,9 @@ export async function runEvaluation(workId: string, completedStep: string, nextS
           status: derivedAfterEval,
           evalSessionIds: cleanedEvalSessionIds,
           evalAttempts: { ...(freshWork.evalAttempts ?? {}), [completedStep]: 0 },
+          // 2026-09-01 终审 I1:评审 pass 即清 reviewComment——打回意见/人工指导是针对
+          // 本阶段的,已过审即已消费完毕;永驻会让后续会话(复活/重发布/派生)反复收到过期指令
+          reviewComment: "",
         } as any);
         broadcastPipelineUpdate(workId, freshWork.pipeline);
         if (derivedAfterEval === "reviewing") {
@@ -3268,7 +3295,9 @@ apiRoutes.post("/api/works/:id/pipeline/advance", async (c) => {
 
     // ── 打回空转拦截(2026-08-31 实测,dde plan 连打 5 轮)────────────────
     // 打回后 issue 指向的文件没改就重提,白烧整轮 LLM 评审。上轮 fail 的 issue
-    // 带 file 字段且所有指向文件自上轮评审以来都没变(不存在视为没变)→ 400 拦回。
+    // 带 file 字段且所有指向文件自上轮评审以来都没变 → 400 拦回。
+    // 2026-09-01 终审 I2 修误判:相对路径按作品目录解析;已删除的文件视为"已处理"
+    // (删除是合法修复);换新文件的场景由"原文件已不存在"放行。
     if (work.evaluationMode) {
       try {
         const prevResults = await loadAllEvalResults(id, completedStep);
@@ -3276,11 +3305,13 @@ apiRoutes.post("/api/works/:id/pipeline/advance", async (c) => {
         if (last?.verdict === "fail" && last.timestamp) {
           const refFiles = [...new Set((last.issues ?? []).map((i) => i.file).filter((f): f is string => !!f))];
           if (refFiles.length) {
+            const workDir = join(dataDir, "works", id);
             const evalAt = Date.parse(last.timestamp);
-            const changed = refFiles.filter((f) => {
-              try { return statSync(f).mtimeMs > evalAt; } catch { return false; }
+            const handled = refFiles.filter((f) => {
+              const abs = isAbsolute(f) ? f : join(workDir, f);
+              try { return statSync(abs).mtimeMs > evalAt; } catch { return true; } // 不存在=已删除/已替换,视为已处理
             });
-            if (changed.length === 0) {
+            if (handled.length === 0) {
               log("info", "api", "advance_no_change_blocked", id, { step: completedStep, files: refFiles.length });
               return c.json({
                 error: `上轮评审指出的 ${refFiles.length} 个问题文件自上轮以来均未改动,原样重提只会得到同样结果。请先实际修改: ${refFiles.map((f) => basename(f)).join(", ")}`,
@@ -3563,6 +3594,7 @@ apiRoutes.post("/api/works/:id/eval/force-pass", async (c) => {
   broadcastPipelineUpdate(id, work.pipeline);
   // 复活回队列(2026-09-01 语义缝隙修复):此前只改状态不驱动执行,
   // 死会话作品状态恢复后无人拉起,永久悬空。reject 路径同款 afterRunning 位次。
+  clearEvalTimeoutMarkers(id, step).catch(() => {}); // M1
   enqueueWork(id, { afterRunning: true });
   return c.json({ ok: true, pipeline: work.pipeline });
 });
@@ -3575,6 +3607,12 @@ apiRoutes.post("/api/works/:id/eval/retry", async (c) => {
   if (!work) return c.json({ error: "Work not found" }, 404);
   const { step, guidance } = body;
   if (!step) return c.json({ error: "step required" }, 400);
+  // 2026-09-01 终审 I3:状态白名单——只对评审受阻/待人工步骤开放 retry;
+  // 对 done 步骤会把已完成阶段回退 active(状态回归),对不存在步骤会 TypeError
+  if (!work.pipeline[step]) return c.json({ error: `Unknown step: ${step}` }, 400);
+  if (!["eval_blocked", "awaiting_human"].includes(work.pipeline[step].status as string)) {
+    return c.json({ error: `Step ${step} 当前状态(${work.pipeline[step].status})不可 retry——仅 eval_blocked/awaiting_human 可重试` }, 400);
+  }
   work.pipeline[step].status = "active";
   const evalAttempts = { ...(work.evalAttempts ?? {}), [step]: 0 };
   // reviveFromFailed:人工 retry 是 failed 粘性的合法复活通道(否则重开后卡片仍显示"失败")
@@ -3586,6 +3624,7 @@ apiRoutes.post("/api/works/:id/eval/retry", async (c) => {
     await wsBridge.sendMessage(id, `## 用户指导\n\n${guidance}\n\n请根据以上指导修改当前阶段的产出，完成后重新提交。`);
   }
   // 复活回队列:死会话作品靠 runner 拉起(存活会话则 startWork 返回 already_running,无副作用)
+  clearEvalTimeoutMarkers(id, step).catch(() => {}); // M1
   enqueueWork(id, { afterRunning: true });
   return c.json({ ok: true });
 });

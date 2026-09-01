@@ -47,14 +47,24 @@ export function syncFinalNarrationToScript(workDir: string, scriptId?: number | 
 
   let text = "";
   let source = "";
+  // 2026-09-01 终审 M3:时效校验——narration-final.md 若早于成片 final.mp4,
+  // 是上一轮的旧稿(重渲染后未重写),降级走 ass 兜底
+  const finalVideo = existsSync(outDir)
+    ? readdirSync(outDir).filter((f) => /^final/i.test(f) && /\.(mp4|mov|webm)$/i.test(f))
+        .map((f) => join(outDir, f)).sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0]
+    : undefined;
+  const finalMtime = finalVideo ? statSync(finalVideo).mtimeMs : 0;
+
   const finalMd = join(outDir, "narration-final.md");
-  if (existsSync(finalMd)) {
+  if (existsSync(finalMd) && statSync(finalMd).mtimeMs >= finalMtime) {
     text = readFileSync(finalMd, "utf-8").trim();
     source = "narration-final.md";
   }
   if (!text && existsSync(outDir)) {
-    const newestAss = readdirSync(outDir)
-      .filter((f) => f.toLowerCase().endsWith(".ass"))
+    // M3:ass 优先取与成片同族的 final*.ass(实际烧录版),其次才按 mtime 最新
+    const assFiles = readdirSync(outDir).filter((f) => f.toLowerCase().endsWith(".ass"));
+    const finalAss = assFiles.filter((f) => /^final/i.test(f));
+    const newestAss = (finalAss.length ? finalAss : assFiles)
       .map((f) => join(outDir, f))
       .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0];
     if (newestAss) {

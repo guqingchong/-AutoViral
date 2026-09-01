@@ -42,6 +42,23 @@ describe("parseEvalResultText", () => {
     const good = parseEvalResultText("{\"verdict\":\"pass\"}", "plan") as { __parseFailed?: boolean };
     expect(good.__parseFailed).toBeUndefined();
   });
+
+  // 2026-09-01 终审 M2:verdict 机器复核
+  it("M2: scores 含 <6 分但 verdict 写 pass → 改判 fail(幻觉 pass 防线)", () => {
+    const r = parseEvalResultText('{"verdict":"pass","scores":{"内容":9,"结构":4},"issues":[]}', "plan");
+    expect(r.verdict).toBe("fail");
+  });
+  it("M2: 含 critical 问题但 verdict 写 pass → 改判 fail", () => {
+    const r = parseEvalResultText('{"verdict":"pass","scores":{"a":9},"issues":[{"severity":"critical","description":"x"}]}', "plan");
+    expect(r.verdict).toBe("fail");
+  });
+  it("M2: verdict 大小写/空格归一化", () => {
+    expect(parseEvalResultText('{"verdict":" Pass ","scores":{"a":9}}', "plan").verdict).toBe("pass");
+    expect(parseEvalResultText('{"verdict":"PASS","scores":{"a":9}}', "plan").verdict).toBe("pass");
+  });
+  it("M2: scores 全过 + verdict fail → 不翻案(误拒是安全方向)", () => {
+    expect(parseEvalResultText('{"verdict":"fail","scores":{"a":9},"issues":[]}', "plan").verdict).toBe("fail");
+  });
 });
 
 describe("resolveVision", () => {
