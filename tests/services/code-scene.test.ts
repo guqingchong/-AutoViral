@@ -12,9 +12,15 @@ describe("validateCodeSceneInput", () => {
     const errs = validateCodeSceneInput({ ...base, template: { name: "hologram", params: {} } } as any);
     expect(errs.join()).toContain("未知场景模板");
   });
-  it("template 与 customScene 二选一", () => {
-    expect(validateCodeSceneInput({ workId: "w", filename: "f" } as any).join()).toContain("二选一");
-    expect(validateCodeSceneInput({ ...base, customScene: "x" } as any).join()).toContain("二选一");
+  it("template / customScene / customHtml 三选一(2026-09-01 customHtml 开放)", () => {
+    expect(validateCodeSceneInput({ workId: "w", filename: "f" } as any).join()).toContain("三选一");
+    expect(validateCodeSceneInput({ ...base, customScene: "x" } as any).join()).toContain("三选一");
+    // customHtml 合法最小形态
+    expect(validateCodeSceneInput({ workId: "w", filename: "f", customHtml: "<!DOCTYPE html><html><body><div>hi</div></body></html>" } as any)).toEqual([]);
+    // 非 HTML 内容被拒
+    expect(validateCodeSceneInput({ workId: "w", filename: "f", customHtml: "just text" } as any).join()).toContain("HTML");
+    // 超 200KB 被拒
+    expect(validateCodeSceneInput({ workId: "w", filename: "f", customHtml: "<html>" + "x".repeat(200_001) } as any).join()).toContain("200KB");
   });
   it("flow-steps 步数越界报错", () => {
     const tooMany = { ...base, template: { name: "flow-steps", params: { title: "t", steps: Array.from({ length: 6 }, (_, i) => ({ title: `s${i}` })) } } };

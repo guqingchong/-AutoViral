@@ -1287,23 +1287,30 @@ apiRoutes.post("/api/assets/code-scene", async (c) => {
 
 // GET /api/assets/code-scene/templates - 可用场景模板清单(agent 发现入口)
 apiRoutes.get("/api/assets/code-scene/templates", (c) => {
+  // 竖屏 9 款(2026-09-01 起全部为 kind=web HTML 渲染,Revideo 版已退役)
+  const portrait = [
+    { name: "structure-growth", label: "中心辐射结构图", params: "title, center, branches[2-4]{label,items[]}", bestFor: "中心-分支结构(资金闭环/三段论)" },
+    { name: "flow-steps", label: "流程步骤推进", params: "title, steps[2-5]{title,desc?}", bestFor: "流程/标准/步骤(退出三标准)" },
+    { name: "logic-chain", label: "逻辑链条递进", params: "title, chain[2-4]{text,label?}", bestFor: "因果/递进链条(政策→影响→应对)" },
+    { name: "big-number", label: "大数字冲击", params: "title, value(数字), format?(plain/percent/wan/yi), unit?, caption?, kicker?, source?", bestFor: "关键数据呈现(债务规模/增速/占比)" },
+    { name: "compare-split", label: "对比对照", params: "title, left{label,points[2-4]}, right{label,points[2-4]}, verdict?, kicker?, source?", bestFor: "政策前后/方案 PK/新旧对比" },
+    { name: "timeline", label: "时间轴", params: "title, events[2-5]{time,text}, kicker?, source?", bestFor: "政策沿革/事件脉络/发展历程" },
+    { name: "pyramid", label: "金字塔层级", params: "title, levels[2-5]{text,desc?}(自下而上,塔底在前), kicker?, source?", bestFor: "体系结构/层级关系/需求层次" },
+    { name: "quote-card", label: "金句卡", params: "quote(≤60字), title?, kicker?, source?", bestFor: "金句/原话引用/核心论断" },
+    { name: "checklist", label: "清单打勾", params: "title, items[2-6]{text,done?}, kicker?, source?", bestFor: "要点清单/避坑清单/条件罗列" },
+    { name: "bar-compare", label: "条形数据对比", params: "title, bars[2-5]{label,value}, unit?, source?", bestFor: "轻量数据排行/量级对比(复杂图表仍走 /api/assets/chart)" },
+  ];
+  // 横屏 11 款(1920×1080):9 款的 -wide 变体 + cover-title-wide 片头 + keynote-leather 整片
+  const wideExtras = [
+    { name: "cover-title-wide", label: "封面片头(横屏原生)", params: "title, accent?(渐变高亮词), kicker?, subtitle?, source?", bestFor: "横屏片头/章节页" },
+    { name: "keynote-leather", label: "横屏数字人口播(苹果风×深色皮革)", params: "title(≤18字), kicker?, subtitleCn?(≤40字), subtitleEn?(≤80字符), videoSrc?, videoRatio?", bestFor: "横屏整片口播" },
+  ];
+  const wide = portrait.map((t) => ({ ...t, name: t.name + "-wide", label: t.label + "(横屏)" }));
   return c.json({
-    templates: [
-      { name: "structure-growth", label: "中心辐射结构图", params: "title, center, branches[2-4]{text,label,color?}", bestFor: "中心-分支结构(资金闭环/三段论)" },
-      { name: "flow-steps", label: "流程步骤推进", params: "title, steps[2-5]{title,desc?}", bestFor: "流程/标准/步骤(退出三标准)" },
-      { name: "logic-chain", label: "逻辑链条递进", params: "title, chain[2-4]string", bestFor: "因果/递进链条(政策→影响→应对)" },
-      { name: "big-number", label: "大数字冲击", params: "title, value(数字), format?(plain/percent/wan/yi), unit?, caption?, kicker?, source?", bestFor: "关键数据呈现(债务规模/增速/占比)" },
-      { name: "compare-split", label: "对比对照", params: "title, left{label,points[2-4]}, right{label,points[2-4]}, verdict?, kicker?, source?", bestFor: "政策前后/方案 PK/新旧对比" },
-      { name: "timeline", label: "时间轴", params: "title, events[2-5]{time,label}, kicker?, source?", bestFor: "政策沿革/事件脉络/发展历程" },
-      { name: "pyramid", label: "金字塔层级", params: "title, levels[2-5]string(自下而上,塔底在前), kicker?, source?", bestFor: "体系结构/层级关系/需求层次" },
-      { name: "quote-card", label: "金句卡", params: "quote(≤40字), author?, source?", bestFor: "金句/原话引用/核心论断" },
-      { name: "checklist", label: "清单打勾", params: "title, items[2-6]string, kicker?, source?", bestFor: "要点清单/避坑清单/条件罗列" },
-      { name: "bar-compare", label: "条形数据对比", params: "title, bars[2-5]{label,value}, unit?, highlightIndex?, source?", bestFor: "轻量数据排行/量级对比(复杂图表仍走 /api/assets/chart)" },
-      { name: "keynote-leather", label: "横屏数字人口播(苹果风×深色皮革)", params: "title(≤18字), kicker?, subtitleCn?(≤40字), subtitleEn?(≤80字符), videoSrc?(数字人源片本地路径,缺省渲染占位玻璃窗), videoRatio?(源片宽高比,缺省自动探测)", bestFor: "横屏整片口播:标题+数字人圆角辉光窗+中英双语字幕" },
-    ],
-    themes: ["finance_dark", "warm_gold", "ink_green", "minimal_light"],
-    duration: "1-30s(keynote-leather 整片 1-600s,建议跟随数字人源片时长),镜头模板建议 4-8s;为目标时长——场景入场动画约 2s 保持干脆,不足目标时长时末帧定格补齐,超出不裁短",
-    note: "精确数据镜头仍走 /api/assets/chart|data-card;本端点服务结构/流程/逻辑镜头;keynote-leather 为 1920×1080 横屏整片模板(默认时长 8s),其余模板按 1080x1920 竖版设计,非默认尺寸可能导致布局错位。竖版画面底部 y≥1390 为字幕安全区(烤卡拉 OK 字幕带),场景内容/装饰不得进入该区域,否则与字幕重叠(2026-08-31 实测实证)",
+    templates: [...portrait, ...wide, ...wideExtras],
+    themes: ["finance_dark", "warm_gold", "ink_green", "minimal_light", "magazine_light"],
+    duration: "1-30s(keynote-leather 整片 1-600s,建议跟随数字人源片时长),镜头模板建议 4-8s;web 支路按目标时长精确出片(动画时序自适应,短镜头自动压缩)",
+    note: "精确数据镜头仍走 /api/assets/chart|data-card;本端点服务结构/流程/逻辑镜头。竖屏模板 1080×1920,内容避让底部字幕带 y∈[1418,1562];横屏(-wide/keynote-leather)1920×1080,内容下缘不超过 y=880(字幕带 900-1000)。模板已内建避让,正常传参即可。",
   });
 });
 
@@ -4089,6 +4096,7 @@ export function buildTemplateSection(templateId?: string): string {
     lines.push(`- 执行规则:`);
     lines.push(`  1. 模板覆盖"文字信息卡"类镜头(标题卡/章节卡/要点卡/总结卡)：这些镜头的版式/配色/动效严格按模板,禁止自由发挥`);
     lines.push(`  2. 模板管不了也不该管的镜头,按素材路由走专门管线并独立渲染：数据→/api/assets/chart|data-card；结构/流程/逻辑→/api/assets/code-scene(程序化动画,优先于静态卡)；原文证据→snapshot-card；实拍/氛围→Pexels或AI生成。这些分段与模板分段按分镜顺序 ffmpeg concat 混排——混排是标准做法,不算"自由合成"。含中文的 POST body 一律写 JSON 文件 + --data-binary @file,禁止 curl -d 内联(Windows 必乱码)`);
+    lines.push(`  3. 若 GET /api/assets/code-scene/templates 清单里没有合适的模板,可以传 customHtml 自写程序性动画(2026-09-01 开放):单个自包含 HTML 文件(≤200KB),动画全部用 WAAPI(element.animate,fill:'both'),动态文本挂 window.__seek(t秒),主题用 var(--accent) 等变量(fallback 到 finance_dark),内容避开底部字幕带(竖屏 y∈[1418,1562]/横屏 y∈[900,1000])。参照 packages/code-scene/templates-web/ 下既有模板的写法。渲染产物与 html 源码都会留在 assets/clips/code/,优质自定义场景经人工确认后沉淀进模板库。`);
     lines.push(`  3. 模板分段必须调用模板渲染引擎 POST /api/works/{workId}/render 产出,把素材映射进变量槽位；混排成片的视觉统一靠全片统一调色(见合成阶段调色规范),而不是全片只用模板`);
     lines.push(`  4. 完整模板 JSON: curl -s http://localhost:3271/api/templates/${t.id}`);
     // 2026-08-19 "假窗口"事故:tpl_5e5d1f71 的窗口色块+提示文字被当成视频窗口,

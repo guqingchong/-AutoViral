@@ -472,7 +472,7 @@ curl "http://localhost:3271/api/assets/icons/mdi/trending-up.svg?color=%233b82f6
 |---|---|
 | 数据/对比/趋势/占比 | **data-card / chart**(禁 AI 生图) |
 | 政策文件/新闻原文 | **snapshot-card**(禁 AI 生图) |
-| 结构图/流程图/逻辑示意 | **代码动画场景 POST /api/assets/code-scene**(structure-growth/flow-steps/logic-chain 三模板,参数即文案;模板清单 GET /api/assets/code-scene/templates) |
+| 结构图/流程图/逻辑示意 | **代码动画场景 POST /api/assets/code-scene**(竖屏 9 款 + 横屏 11 款 -wide 模板,参数即文案;完整清单与参数 schema 以 GET /api/assets/code-scene/templates 为准——每次用前先拉,清单会随模板库扩充) |
 | 口播/讲解人 | 数字人 / H3 t2v(dialogue) |
 | 氛围/场景感画面 | AI 生图 → i2v(broll/hero) |
 | 真实事件画面 | 素材库搜索 → 用户上传兜底 |
