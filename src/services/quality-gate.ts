@@ -366,14 +366,17 @@ export function assertAssemblyDeliverables(workDir: string, opts?: { templateId?
     issues.push({ key: "publish_text", detail: "output/publish-text.md 缺失(发布文案未产出)" });
   }
 
-  // ③ 质检报告时效
+  // ③ 质检报告时效 + 结论(2026-09-01 终审 C2:此前只验存在性,passed=false 的黑片可过闸)
   const reportFile = files.find((f) => f === "quality-report.json");
   if (!reportFile) {
     issues.push({ key: "quality_report", detail: "output/quality-report.json 缺失(成片未过质量门禁)" });
   } else if (finalVideo) {
     try {
-      const report = JSON.parse(readFileSync(join(outDir, reportFile), "utf-8")) as { videoPath?: string; createdAt?: string };
-      if (!report.videoPath || basename(report.videoPath) !== finalVideo) {
+      const report = JSON.parse(readFileSync(join(outDir, reportFile), "utf-8")) as { videoPath?: string; createdAt?: string; passed?: boolean; issues?: Array<{ level?: string; message?: string }> };
+      if (report.passed === false) {
+        const fails = (report.issues ?? []).filter((i) => i.level === "fail" || i.level === "critical").map((i) => i.message ?? "").filter(Boolean).slice(0, 3);
+        issues.push({ key: "quality_report", detail: `质量门禁结论为 fail——成片带病,请修复后重跑 QC${fails.length ? `(fail 项: ${fails.join("; ")})` : ""}` });
+      } else if (!report.videoPath || basename(report.videoPath) !== finalVideo) {
         issues.push({ key: "quality_report", detail: `quality-report.json 的 videoPath(${report.videoPath ?? "空"})不指向当前成片 ${finalVideo}——QC 跑在了旧文件上` });
       } else {
         const finalMtime = statSync(join(outDir, finalVideo)).mtimeMs;
