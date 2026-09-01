@@ -18,7 +18,7 @@ import { probeMedia } from "../video/ffmpeg.js";
 // (如 autocode start 从用户主目录启动,cwd 下没有 packages/,2026-08-14 live e2e 实测踩中)
 const WORKER_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "packages", "code-scene");
 const RENDER_TIMEOUT_MS = 180_000;
-const VALID_THEMES = new Set(["finance_dark", "warm_gold", "ink_green", "minimal_light"]);
+const VALID_THEMES = new Set(["finance_dark", "warm_gold", "ink_green", "minimal_light", "magazine_light"]);
 
 // 时长上限按模板类型区分(2026-08-24 长口播支持):竖屏镜头模板是 4-8s 素材片段,
 // 30s 封顶;keynote-leather 是整片口播,时长跟随数字人源片,600s 封顶
@@ -61,6 +61,13 @@ const TEMPLATE_LIMITS: Record<string, { items?: string; min?: number; max?: numb
   "keynote-leather": {},
 };
 
+/** kind=web HTML 模板注册表(2026-09-01 05 方案 S3):
+ *  名字命中此处 → doRender 走 web-worker.mjs(Playwright 截帧),不再查 Revideo 场景表。
+ *  schema 语义与 TEMPLATE_LIMITS 相同,校验复用同一套规则。 */
+export const WEB_TEMPLATES: Record<string, { items?: string; min?: number; max?: number }> = {
+  "big-number": {},
+};
+
 /** 纯校验:返回错误列表(空数组=合法) */
 export function validateCodeSceneInput(input: CodeSceneInput): string[] {
   const errors: string[] = [];
@@ -73,9 +80,9 @@ export function validateCodeSceneInput(input: CodeSceneInput): string[] {
     errors.push("template 与 customScene 必须二选一");
   } else if (hasTemplate) {
     const t = input.template!;
-    const limit = TEMPLATE_LIMITS[t.name];
+    const limit = WEB_TEMPLATES[t.name] ?? TEMPLATE_LIMITS[t.name];
     if (!limit) {
-      errors.push(`未知场景模板: ${t.name}(可选: ${Object.keys(TEMPLATE_LIMITS).join("/")})`);
+      errors.push(`未知场景模板: ${t.name}(可选: ${Object.keys({ ...WEB_TEMPLATES, ...TEMPLATE_LIMITS }).join("/")})`);
     } else {
       const p = t.params ?? {};
       // quote-card 以 quote 为主参数,其余模板以 title 为主参数
@@ -250,11 +257,23 @@ async function doRender(input: CodeSceneInput): Promise<CodeSceneResult> {
   await writeFile(specPath, JSON.stringify(spec), "utf-8");
 
   const outputPath = join(outDirAbs, outFile);
+  // web 支路(2026-09-01 05 方案 S3):模板名命中 WEB_TEMPLATES → 一律走 web-worker.mjs
+  // (Playwright 截帧),不再查 Revideo 场景注册表;spec 增补 templatePath/theme/ffmpegPath
+  const isWeb = !!input.template && input.template.name in WEB_TEMPLATES;
+  if (isWeb) {
+    const { getFFmpegPath } = await import("../video/ffmpeg.js");
+    Object.assign(spec, {
+      templatePath: join(WORKER_DIR, "templates-web", `${input.template!.name}.html`),
+      theme: input.theme ?? (input.template!.params.theme as string | undefined) ?? "finance_dark",
+      ffmpegPath: await getFFmpegPath(),
+    });
+    await writeFile(specPath, JSON.stringify(spec), "utf-8"); // 重写增补后的 spec
+  }
   try {
     // 渲染前清掉同名旧产物:渲染器对已有 outFile 可能跳过重渲染(实测 18:24 旧 3.8s
     // 产物原地复用),残留旧文件会污染补时判定与"成功但产物陈旧"的假象
     await rm(outputPath, { force: true });
-    await runWorkerWithRetry(specPath, renderTimeoutMs(targetDuration));
+    await runWorkerWithRetry(specPath, renderTimeoutMs(targetDuration), isWeb ? "web-worker.mjs" : "worker.mjs");
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : String(err), code: err instanceof WorkerTimeout ? "TIMEOUT" : "RENDER_FAILED" };
   } finally {
@@ -269,7 +288,8 @@ async function doRender(input: CodeSceneInput): Promise<CodeSceneResult> {
   // duration 参数生效化(2026-08-19 根因修复):场景自然时长与 spec.duration 无关,
   // 不足目标时长时 tpad 克隆末帧补齐(详见 decidePadSeconds 注释)
   const pad = decidePadSeconds(info.duration, targetDuration);
-  if (pad > 0) {
+  // web 支路产物时长恒等于 targetDuration(截帧帧数即目标),跳过补时
+  if (!isWeb && pad > 0) {
     await padWithLastFrame(outputPath, pad);
     info = await probeMedia(outputPath);
   }
@@ -375,20 +395,20 @@ export async function padWithLastFrame(outputPath: string, padSeconds: number): 
  * "Navigation timeout"——这是瞬时故障,重试(新进程+新端口)即可恢复;
  * 其他错误(参数/代码问题)重试无意义,直接抛出。
  */
-async function runWorkerWithRetry(specPath: string, timeoutMs: number): Promise<void> {
+async function runWorkerWithRetry(specPath: string, timeoutMs: number, workerFile = "worker.mjs"): Promise<void> {
   try {
-    await runWorker(specPath, timeoutMs);
+    await runWorker(specPath, timeoutMs, workerFile);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (err instanceof WorkerTimeout || !/navigation timeout/i.test(msg)) throw err;
     console.warn("[code-scene] navigation timeout,重试一次(新端口)");
-    await runWorker(specPath, timeoutMs);
+    await runWorker(specPath, timeoutMs, workerFile);
   }
 }
 
-function runWorker(specPath: string, timeoutMs: number): Promise<void> {
+function runWorker(specPath: string, timeoutMs: number, workerFile = "worker.mjs"): Promise<void> {
   return new Promise((resolve, reject) => {
-    const proc = spawn("node", ["worker.mjs", specPath], { cwd: WORKER_DIR, stdio: ["ignore", "pipe", "pipe"] });
+    const proc = spawn("node", [workerFile, specPath], { cwd: WORKER_DIR, stdio: ["ignore", "pipe", "pipe"] });
     let stderr = "";
     proc.stderr?.on("data", (d) => { stderr += String(d); });
     const timer = setTimeout(() => { proc.kill("SIGKILL"); reject(new WorkerTimeout(timeoutMs)); }, timeoutMs);

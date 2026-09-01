@@ -59,6 +59,18 @@ describe("validateCodeSceneInput", () => {
     const badSrc = { workId: "w", filename: "f", template: { name: "keynote-leather", params: { title: "t", videoSrc: 123 } } };
     expect(validateCodeSceneInput(badSrc as any).join()).toContain("videoSrc 须为字符串");
   });
+  // 2026-09-01 05 方案 S3:web 支路服务层
+  it("magazine_light 主题合法(05方案S2 新增)", () => {
+    expect(validateCodeSceneInput({ ...base, theme: "magazine_light" } as any)).toEqual([]);
+  });
+  it("web 模板路由:big-number 命中 WEB_TEMPLATES", async () => {
+    const { WEB_TEMPLATES } = await import("../../src/services/code-scene.js");
+    expect(Object.keys(WEB_TEMPLATES)).toContain("big-number");
+  });
+  it("web 模板参数校验复用 schema(big-number value 必填)", () => {
+    const bad = { workId: "w", filename: "f", template: { name: "big-number", params: { title: "t" } } };
+    expect(validateCodeSceneInput(bad as any).join()).toContain("value");
+  });
 });
 
 // 集成测试:真实渲染(约 30-60s)。子项目未装依赖时跳过。
