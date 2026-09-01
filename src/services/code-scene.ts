@@ -102,6 +102,10 @@ export function validateCodeSceneInput(input: CodeSceneInput): string[] {
     const html = input.customHtml!;
     if (html.length > 200_000) errors.push(`customHtml ≤200KB(当前 ${Math.round(html.length / 1024)}KB)`);
     if (!/<\s*(html|!doctype|div|body)/i.test(html)) errors.push("customHtml 须为 HTML 文档片段");
+    // 静态黑名单(终审 C1 纵深防御;真正的隔离在 web-worker 的 page.route 网络锁)
+    const banned = [/\bfetch\s*\(/, /\bXMLHttpRequest\b/, /\bsendBeacon\b/, /<script[^>]*\bsrc\s*=/i, /https?:\/\//i, /\bwindow\.open\s*\(/, /\blocation\s*(?:\.href\s*)?=/];
+    const hit = banned.find((re) => re.test(html));
+    if (hit) errors.push(`customHtml 含禁止的外联/网络调用模式(${hit.source})——模板必须完全自包含`);
   } else if (hasTemplate) {
     const t = input.template!;
     const limit = WEB_TEMPLATES[t.name] ?? TEMPLATE_LIMITS[t.name];

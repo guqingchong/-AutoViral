@@ -39,6 +39,19 @@ const executablePath = edgeCandidates.find(existsSync);
 const browser = await chromium.launch(executablePath ? { executablePath } : { channel: "msedge" });
 try {
   const page = await browser.newPage({ viewport: { width: W, height: H } });
+  // 网络隔离(2026-09-01 终审 C1):customHtml 是 LLM 自写代码,渲染页若可出网,
+  // 恶意/被注入的脚本可在渲染窗口期以服务器身份反调本机无鉴权 API(localhost:3271)。
+  // 只允许 file:/data:/blob:(自包含模板与内联资源),其余一律 abort;非 file 导航即终止。
+  await page.route("**/*", (r) => {
+    const url = r.request().url();
+    return /^(file|data|blob):/.test(url) ? r.continue() : r.abort();
+  });
+  page.on("framenavigated", (frame) => {
+    if (frame === page.mainFrame() && !frame.url().startsWith("file://")) {
+      console.error(JSON.stringify({ ok: false, error: `非法导航已被拦截: ${frame.url()}` }));
+      process.exit(1);
+    }
+  });
   // 参数与主题先于页面脚本注入(addInitScript 仅支持单参数,故打包为对象)
   await page.addInitScript((injected) => {
     window.__PARAMS__ = injected.params;

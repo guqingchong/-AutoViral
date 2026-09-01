@@ -2840,7 +2840,8 @@ export async function runEvaluation(workId: string, completedStep: string, nextS
       const explicitDur = Number(work.explicitParams?.duration) > 0 ? Number(work.explicitParams?.duration) : undefined;
       const gateIssues = completedStep === "plan"
         ? gate.assertPlanDeliverables(workDir, explicitDur)
-        : gate.assertAssemblyDeliverables(workDir);
+        // 2026-09-01 终审 I4:兜底路径此前不传 {templateId, workId},模板契约第⑤项被跳过
+        : gate.assertAssemblyDeliverables(workDir, { templateId: work.templateId, workId });
       evalResult = {
         step: completedStep,
         attempt,
