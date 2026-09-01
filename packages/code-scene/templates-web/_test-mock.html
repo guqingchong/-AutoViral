@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><style>
+  html,body{margin:0;width:100%;height:100%;background:#0f1b2d}
+  #box{width:200px;height:200px;background:var(--accent,#3b82f6);position:absolute;left:440px;top:860px}
+</style></head><body>
+<div id="box"></div>
+<div id="label" style="position:absolute;left:40px;top:100px;color:#fff;font-size:60px"></div>
+<script>
+  const style = document.createElement("style");
+  style.textContent = window.__THEME_CSS__ || "";
+  document.head.appendChild(style);
+  document.getElementById("label").textContent = (window.__PARAMS__ || {}).title || "no-params";
+  // WAAPI 动画:0→1s 从左移入
+  document.getElementById("box").animate(
+    [{ transform: "translateX(-300px)", opacity: 0 }, { transform: "translateX(0)", opacity: 1 }],
+    { duration: 1000, fill: "both", easing: "ease-out" }
+  );
+  // 自定义 seek 钩子:帧号显示
+  window.__seek = (t) => { document.getElementById("label").dataset.t = t.toFixed(3); };
+</script></body></html>
