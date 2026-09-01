@@ -2358,6 +2358,7 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
             `4. 轮询 \`curl -s http://localhost:3271/api/render-jobs/{jobId}\` 直至 status=completed;failed 时读 error 修正变量后重试`,
             `5. 产物在 output/ 目录;不要对产物再做二次合成`,
             `6. 渲染完成后必须写 output/publish-text.md 发布文案(首个非空行=发布标题钩子;中段正文;最后一行 # 开头的话题标签 5-10 个,2-3 热门 + 2-3 垂类 + 1-2 品牌):首句 2 秒内抓人(好奇缺口/大胆断言/痛点),正文 2-3 句,结尾自然 CTA(关注/收藏/评论),语言匹配目标平台(抖音/小红书用中文)`,
+            `7. 必须写 output/narration-final.md——成片实际口播全文(纯文本,不含时间轴/标签)。若你在本阶段改写过口播,以改写后的最终版为准;系统据此回写脚本库,保证 DB 脚本与成片文案同源`,
           );
         } else {
         promptParts.push(
@@ -2401,6 +2402,8 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
           `## REQUIRED: Generate Publishing Copytext & Tags`,
           `After producing the final video, you MUST also generate a publishing copytext file.`,
           `Write it to \`output/publish-text.md\` in the work directory.`,
+          ``,
+          `You MUST also write \`output/narration-final.md\`: the final voiceover/narration text exactly as spoken in the delivered video (plain text, no timestamps or tags). If you rewrote the narration during assembly, this file holds the rewritten final version — it is written back to the script database so the DB script matches the delivered video.`,
           ``,
           `File structure (machine-consumed by the publish pipeline — follow exactly):`,
           `- First non-empty line = the publish title (the hook)`,
@@ -3293,6 +3296,13 @@ apiRoutes.post("/api/works/:id/pipeline/advance", async (c) => {
           issues: gateIssues.map((i) => i.detail),
         }, 400);
       }
+      // 2026-09-01 同源修复:门禁通过 = 成片交付物齐备,此刻把最终口播回写 scripts 表
+      // (agent 在 assembly 现场重写的文案此前不落 DB,下游读到的永远是 plan 前旧稿)
+      try {
+        const { syncFinalNarrationToScript } = await import("../services/script-sync.js");
+        const sync = syncFinalNarrationToScript(join(dataDir, "works", id), work.scriptId);
+        if (sync.synced) log("info", "api", "narration_synced", id, { source: sync.source, length: sync.length });
+      } catch { /* 回写失败不阻断主流程,publish-text/ass 事实源仍在 */ }
     }
 
     // ── plan 机器预检(2026-08-26):机械可校验项(时长/旁白字数/剔除素材引用/极限词)
@@ -3543,6 +3553,9 @@ apiRoutes.post("/api/works/:id/eval/force-pass", async (c) => {
   }
   await storeUpdateWork(id, { pipeline: work.pipeline, status: deriveStatusFromPipeline(work.pipeline, work.status, { reviveFromFailed: true }) });
   broadcastPipelineUpdate(id, work.pipeline);
+  // 复活回队列(2026-09-01 语义缝隙修复):此前只改状态不驱动执行,
+  // 死会话作品状态恢复后无人拉起,永久悬空。reject 路径同款 afterRunning 位次。
+  enqueueWork(id, { afterRunning: true });
   return c.json({ ok: true, pipeline: work.pipeline });
 });
 
@@ -3557,11 +3570,15 @@ apiRoutes.post("/api/works/:id/eval/retry", async (c) => {
   work.pipeline[step].status = "active";
   const evalAttempts = { ...(work.evalAttempts ?? {}), [step]: 0 };
   // reviveFromFailed:人工 retry 是 failed 粘性的合法复活通道(否则重开后卡片仍显示"失败")
-  await storeUpdateWork(id, { pipeline: work.pipeline, evalAttempts, status: deriveStatusFromPipeline(work.pipeline, work.status, { reviveFromFailed: true }) } as any);
+  // 指导同步落 reviewComment:会话已死时 sendMessage 无处投递,
+  // runner 重建会话后由 startWorkSession 注入(与 reject 路径同源,2026-09-01 修复)
+  await storeUpdateWork(id, { pipeline: work.pipeline, evalAttempts, ...(guidance ? { reviewComment: guidance } : {}), status: deriveStatusFromPipeline(work.pipeline, work.status, { reviveFromFailed: true }) } as any);
   broadcastPipelineUpdate(id, work.pipeline);
   if (wsBridge && guidance) {
     await wsBridge.sendMessage(id, `## 用户指导\n\n${guidance}\n\n请根据以上指导修改当前阶段的产出，完成后重新提交。`);
   }
+  // 复活回队列:死会话作品靠 runner 拉起(存活会话则 startWork 返回 already_running,无副作用)
+  enqueueWork(id, { afterRunning: true });
   return c.json({ ok: true });
 });
 

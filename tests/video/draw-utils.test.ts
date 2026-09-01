@@ -61,6 +61,15 @@ describe("wrapTextLines", () => {
   it("returns empty for empty text", () => {
     expect(wrapTextLines("", 28, 500)).toEqual([]);
   });
+
+  it("避头: 标点不得出现在行首(宁可上一行略超宽)", () => {
+    // maxUnits=5 → 第 6 字触发换行;构造第 6 字恰为句号
+    const lines = wrapTextLines("一二三四五。六七八九十", 100, 500);
+    for (const l of lines.slice(1)) {
+      expect("，。、；：？！』」》".includes(l[0])).toBe(false);
+    }
+    expect(lines.join("")).toBe("一二三四五。六七八九十");
+  });
 });
 
 describe("escapeDrawtext", () => {

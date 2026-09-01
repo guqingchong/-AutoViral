@@ -28,6 +28,13 @@ export function getScript(id: number): DbScript | undefined {
   };
 }
 
+/** 更新脚本文案(2026-09-01 新增:assembly 重写口播回写,此前全表只有建没有改) */
+export function updateScriptContent(id: number, content: unknown): boolean {
+  const db = getDb();
+  const result = db.prepare("UPDATE scripts SET content = ? WHERE id = ?").run(toJson(content), id);
+  return result.changes > 0;
+}
+
 export function listScriptsByWork(workId: string): DbScript[] {
   const db = getDb();
   const rows = db.prepare("SELECT * FROM scripts WHERE work_id = ? ORDER BY created_at DESC").all(workId) as Record<string, unknown>[];
