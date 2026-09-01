@@ -66,6 +66,8 @@ const TEMPLATE_LIMITS: Record<string, { items?: string; min?: number; max?: numb
  *  schema 语义与 TEMPLATE_LIMITS 相同,校验复用同一套规则。 */
 export const WEB_TEMPLATES: Record<string, { items?: string; min?: number; max?: number }> = {
   "big-number": {},
+  // 2026-09-01 样片批次:中心辐射结构图(SVG 连线绘制+错峰弹簧入场+毛玻璃卡片)
+  "structure-growth": { items: "branches", min: 2, max: 4 },
 };
 
 /** 纯校验:返回错误列表(空数组=合法) */
