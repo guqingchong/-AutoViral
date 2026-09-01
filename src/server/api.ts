@@ -2390,6 +2390,11 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
         } else {
         promptParts.push(
           ``,
+          `## 长合成走长任务(2026-09-01 起,强制):超过 1 分钟的 ffmpeg 作业(concat 拼接/ass 烧录/响度/补时/裁剪)禁止在 Bash 里后台跑+sleep 轮询——`,
+          `提交 \`POST /api/long-tasks\` body {"kind":"ffmpeg","workId":"${id}","spec":{...}},立即返回 taskId,完成时系统推送通知;`,
+          `白名单 op:concat{inputs[],output} / burn{input,ass,output} / loudnorm{input,output} / tpad{input,duration,output} / trim{input,startTime?,duration?,output};路径用作品目录内相对路径。`,
+          `轮询状态:\`curl -s http://localhost:3271/api/long-tasks/<taskId>\`(60s 一次即可,其间去做别的)。短操作(<30s)仍可 Bash 直接跑。`,
+          ``,
           // 批次12c-A:画幅按 works.aspect 动态——横屏作品反向教学(竖版素材→横屏),不再硬编码 9:16
           ...(isLandscape
             ? [
@@ -3759,11 +3764,28 @@ apiRoutes.post("/api/assets/code-scene/batch", async (c) => {
   return c.json({ taskId: task.id, count: body.renders.length, statusUrl: `/api/long-tasks/${task.id}` }, 202);
 });
 
-// POST /api/long-tasks { kind: "asr", workId, inputPath, outputPath, model?, style? }
+// POST /api/long-tasks { kind: "asr" | "ffmpeg", ... }
+// kind=ffmpeg(2026-09-01):参数化合成作业 { workId, spec: { op, inputs?/input?, ass?, output, duration?, startTime? } }
+// 白名单 op: concat/burn/loudnorm/tpad/trim;路径必须在作品目录内;命令由服务端拼装(防注入)
+interface FfmpegJobSpecBody {
+  op: "concat" | "burn" | "loudnorm" | "tpad" | "trim";
+  inputs?: string[]; input?: string; ass?: string; output: string; duration?: number; startTime?: number;
+}
 apiRoutes.post("/api/long-tasks", async (c) => {
-  const body = await c.req.json<{ kind?: string; workId?: string; inputPath?: string; outputPath?: string; model?: string; style?: string }>().catch(() => ({} as any));
-  if (body.kind !== "asr") return c.json({ error: "目前仅支持 kind=asr" }, 400);
-  if (!body.workId || !body.inputPath || !body.outputPath) {
+  const body = await c.req.json<{ kind?: string; workId?: string; inputPath?: string; outputPath?: string; model?: string; style?: string; spec?: FfmpegJobSpecBody }>().catch(() => ({} as any));
+  if (!body.workId) return c.json({ error: "workId 必填" }, 400);
+  if (body.kind === "ffmpeg") {
+    if (!body.spec?.op || !body.spec.output) return c.json({ error: "spec.op 与 spec.output 必填" }, 400);
+    try {
+      const { submitFfmpegTask } = await import("../services/long-tasks.js");
+      const task = await submitFfmpegTask({ workId: body.workId, spec: body.spec });
+      return c.json(task, 202);
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 400);
+    }
+  }
+  if (body.kind !== "asr") return c.json({ error: "目前支持 kind=asr / kind=ffmpeg" }, 400);
+  if (!body.inputPath || !body.outputPath) {
     return c.json({ error: "workId/inputPath/outputPath 必填" }, 400);
   }
   const { submitAsrTask } = await import("../services/long-tasks.js");
