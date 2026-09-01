@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; width: 1920px; height: 1080px; overflow: hidden; }
+  body { background: var(--bg, #0f1b2d); font-family: var(--font-display, "Noto Sans CJK SC", "Microsoft YaHei", sans-serif); position: relative; }
+  .grid-bg { position: absolute; inset: 0;
+    background-image: linear-gradient(var(--bg-grid, rgba(148,163,184,.05)) 1px, transparent 1px),
+      linear-gradient(90deg, var(--bg-grid, rgba(148,163,184,.05)) 1px, transparent 1px);
+    background-size: 96px 96px; }
+  .glow { position: absolute; left: 460px; top: 520px; width: 900px; height: 900px; transform: translate(-50%,-50%);
+    background: radial-gradient(circle, var(--accent, #3b82f6) 0%, transparent 60%); opacity: .14; pointer-events: none; }
+  .kicker { position: absolute; top: 72px; left: 96px; font-size: 26px; letter-spacing: 6px;
+    color: var(--accent, #3b82f6); border: 1px solid color-mix(in srgb, var(--accent, #3b82f6) 45%, transparent);
+    padding: 10px 22px 10px 28px; border-radius: 999px; font-weight: 500; white-space: nowrap; }
+  .title { position: absolute; top: 140px; left: 96px; font-size: 54px; font-weight: 700; color: var(--text, #f1f5f9); }
+  .badge { position: absolute; top: 240px; left: 96px; font-size: 28px; color: var(--text-sub, #94a3b8); font-weight: 500; }
+  .badge b { color: var(--accent, #3b82f6); font-size: 44px; font-weight: 900; }
+  svg.links { position: absolute; inset: 0; width: 1920px; height: 1080px; }
+  svg.links path { stroke: var(--accent, #3b82f6); stroke-width: 3; fill: none; opacity: .55; }
+  .hub { position: absolute; left: 460px; top: 560px; transform: translate(-50%,-50%);
+    width: 280px; height: 280px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--accent-2, #60a5fa), var(--accent, #3b82f6));
+    box-shadow: 0 24px 80px color-mix(in srgb, var(--accent, #3b82f6) 45%, transparent), inset 0 2px 12px rgba(255,255,255,.35);
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-size: 38px; font-weight: 800; text-align: center; line-height: 1.3; padding: 18px; box-sizing: border-box; }
+  .branch { position: absolute; left: 1010px; width: 810px;
+    background: color-mix(in srgb, var(--text, #f1f5f9) 6%, transparent);
+    backdrop-filter: blur(12px);
+    border: 1px solid color-mix(in srgb, var(--text, #f1f5f9) 12%, transparent);
+    border-radius: var(--radius-card, 24px);
+    box-shadow: var(--shadow-lg, 0 24px 64px rgba(2,8,23,.55));
+    padding: 24px 30px; box-sizing: border-box; }
+  .branch h3 { margin: 0; font-size: 32px; font-weight: 700; color: var(--text, #f1f5f9);
+    display: flex; align-items: center; gap: 14px; }
+  .branch h3 .dot { width: 16px; height: 16px; border-radius: 50%; background: var(--accent, #3b82f6);
+    box-shadow: 0 0 16px var(--accent, #3b82f6); flex: none; }
+  .branch ul { margin: 12px 0 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 4px 28px; }
+  .branch li { font-size: 24px; color: var(--text-sub, #94a3b8); line-height: 1.7; padding-left: 22px; position: relative; }
+  .branch li::before { content: ""; position: absolute; left: 0; top: 16px; width: 9px; height: 2px;
+    background: var(--accent, #3b82f6); opacity: .7; }
+  .corner { position: absolute; width: 56px; height: 56px; opacity: .35;
+    border-color: var(--accent, #3b82f6); border-style: solid; border-width: 0; }
+  .corner.tl { top: 40px; left: 40px; border-top-width: 4px; border-left-width: 4px; }
+  .corner.tr { top: 40px; right: 40px; border-top-width: 4px; border-right-width: 4px; }
+  .corner.bl { bottom: 40px; left: 40px; border-bottom-width: 4px; border-left-width: 4px; }
+  .corner.br { bottom: 40px; right: 40px; border-bottom-width: 4px; border-right-width: 4px; }
+  .source { position: absolute; bottom: 28px; left: 96px; font-size: 22px; color: var(--text-sub, #94a3b8); opacity: .8; }
+</style>
+</head>
+<body>
+<div class="grid-bg"></div><div class="glow" id="glow"></div>
+<div class="kicker" id="kicker"></div><div class="title" id="title"></div>
+<div class="badge" id="badge"></div>
+<svg class="links" id="links" viewBox="0 0 1920 1080"></svg>
+<div class="hub" id="hub"></div>
+<div id="branches"></div>
+<div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+<div class="source" id="source"></div>
+<script>
+(function () {
+  var style = document.createElement("style");
+  style.textContent = window.__THEME_CSS__ || "";
+  document.head.appendChild(style);
+  var P = window.__PARAMS__ || {};
+  var D = P.duration || 8;
+
+  var branches = P.branches || [
+    { label: "前期准备", items: ["可行性研究", "立项批复", "用地规划"] },
+    { label: "申报发行", items: ["一案两书编制", "省厅评审入库", "额度分配发行"] },
+    { label: "发行后管理", items: ["资金拨付使用", "绩效评价", "本息偿付"] },
+  ];
+  branches = branches.slice(0, 4);
+
+  document.getElementById("kicker").textContent = P.kicker || "结构拆解";
+  document.getElementById("title").textContent = P.title || "一张图看懂";
+  document.getElementById("hub").innerHTML = (P.center || "专项债\n项目全流程").replace(/\n/g, "<br>");
+  document.getElementById("source").textContent = P.source ? "来源:" + P.source : "";
+
+  // 布局:枢纽 (460,560);分支卡右列纵向均匀分布,底缘 ≤880(字幕带 900-1000 避让)
+  var n = branches.length;
+  var AREA_TOP = 240, AREA_BOTTOM = 880, CARD_H_MAX = 180;
+  var gap = (AREA_BOTTOM - AREA_TOP) / n;
+  var cardH = Math.min(CARD_H_MAX, gap - 26);
+  var HUB = { x: 460, y: 560 };
+  var NS = "http://www.w3.org/2000/svg";
+  var svg = document.getElementById("links");
+  var branchesEl = document.getElementById("branches");
+
+  branches.forEach(function (b, i) {
+    var y = AREA_TOP + gap * i + (gap - cardH) / 2;
+    var card = document.createElement("div");
+    card.className = "branch";
+    card.style.top = y + "px";
+    card.style.minHeight = cardH + "px";
+    card.innerHTML = '<h3><span class="dot"></span>' + (b.label || "") + "</h3><ul>" +
+      (b.items || []).map(function (t) { return "<li>" + t + "</li>"; }).join("") + "</ul>";
+    branchesEl.appendChild(card);
+
+    var sx = HUB.x + 145, sy = HUB.y;
+    var tx = 1000, ty = y + cardH / 2;
+    var mx = (sx + tx) / 2;
+    var path = document.createElementNS(NS, "path");
+    path.setAttribute("d", "M " + sx + " " + sy + " C " + mx + " " + sy + ", " + mx + " " + ty + ", " + tx + " " + ty);
+    svg.appendChild(path);
+  });
+
+  var EASE = "cubic-bezier(0.16, 1, 0.3, 1)";
+  var SPRING = "cubic-bezier(0.34, 1.56, 0.64, 1)";
+  function add(el, kf, o) { el.animate(kf, Object.assign({ fill: "both" }, o)); }
+
+  add(document.getElementById("kicker"), [{ opacity: 0, transform: "translateY(24px)" }, { opacity: 1, transform: "translateY(0)" }], { duration: 450, easing: EASE });
+  add(document.getElementById("title"), [{ opacity: 0, transform: "translateY(30px)" }, { opacity: 1, transform: "translateY(0)" }], { duration: 550, delay: 140, easing: EASE });
+  add(document.getElementById("hub"),
+    [{ opacity: 0, transform: "translate(-50%,-50%) scale(0.3)" },
+     { opacity: 1, transform: "translate(-50%,-50%) scale(1.06)", offset: 0.7 },
+     { opacity: 1, transform: "translate(-50%,-50%) scale(1)" }],
+    { duration: 800, delay: 550, easing: SPRING });
+
+  svg.querySelectorAll("path").forEach(function (p, i) {
+    var len = p.getTotalLength();
+    p.style.strokeDasharray = String(len);
+    p.style.strokeDashoffset = String(len);
+    p.animate([{ strokeDashoffset: len }, { strokeDashoffset: 0 }],
+      { duration: 500, delay: 1150 + i * 170, fill: "both", easing: EASE });
+  });
+
+  document.querySelectorAll(".branch").forEach(function (card, i) {
+    add(card,
+      [{ opacity: 0, transform: "translateX(80px) scale(0.94)" }, { opacity: 1, transform: "translateX(0) scale(1)" }],
+      { duration: 650, delay: 1500 + i * 200, easing: SPRING });
+    card.querySelectorAll("li").forEach(function (li, j) {
+      add(li, [{ opacity: 0, transform: "translateX(-16px)" }, { opacity: 1, transform: "translateX(0)" }],
+        { duration: 350, delay: 2000 + i * 200 + j * 110, easing: EASE });
+    });
+  });
+
+  add(document.getElementById("badge"), [{ opacity: 0 }, { opacity: 1 }], { duration: 500, delay: 2300, easing: EASE });
+  add(document.getElementById("hub"),
+    [{ transform: "translate(-50%,-50%) scale(1)" }, { transform: "translate(-50%,-50%) scale(1.05)" }, { transform: "translate(-50%,-50%) scale(1)" }],
+    { duration: 500, delay: 3000, easing: EASE });
+  add(document.getElementById("glow"), [{ opacity: 0.10 }, { opacity: 0.18 }, { opacity: 0.10 }], { duration: Math.round(D * 1000), easing: "ease-in-out" });
+
+  var COUNT_FROM = 2.3, COUNT_DUR = 0.9;
+  window.__seek = function (t) {
+    var p = Math.min(Math.max((t - COUNT_FROM) / COUNT_DUR, 0), 1);
+    var v = Math.round(n * (1 - Math.pow(1 - p, 3)));
+    document.getElementById("badge").innerHTML = "共 <b>" + v + "</b> 大环节";
+  };
+  window.__seek(0);
+})();
+</script>
+</body>
+</html>

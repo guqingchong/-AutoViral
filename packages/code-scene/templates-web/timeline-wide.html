@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; width: 1920px; height: 1080px; overflow: hidden; }
+  body { background: var(--bg, #0f1b2d); font-family: var(--font-display, "Noto Sans CJK SC", "Microsoft YaHei", sans-serif); position: relative; }
+  .grid-bg { position: absolute; inset: 0;
+    background-image: linear-gradient(var(--bg-grid, rgba(148,163,184,.05)) 1px, transparent 1px),
+      linear-gradient(90deg, var(--bg-grid, rgba(148,163,184,.05)) 1px, transparent 1px);
+    background-size: 96px 96px; }
+  .kicker { position: absolute; top: 72px; left: 96px; font-size: 26px; letter-spacing: 6px;
+    color: var(--accent, #3b82f6); border: 1px solid color-mix(in srgb, var(--accent, #3b82f6) 45%, transparent);
+    padding: 10px 22px 10px 28px; border-radius: 999px; font-weight: 500; white-space: nowrap; }
+  .title { position: absolute; top: 140px; left: 96px; font-size: 54px; font-weight: 700; color: var(--text, #f1f5f9); }
+  .count { position: absolute; top: 240px; left: 96px; font-size: 28px; color: var(--text-sub, #94a3b8); font-weight: 500; }
+  .count b { color: var(--accent, #3b82f6); font-size: 40px; font-weight: 900; }
+  .spine-track { position: absolute; left: 120px; right: 120px; top: 560px; height: 3px;
+    background: color-mix(in srgb, var(--text, #f1f5f9) 10%, transparent); border-radius: 2px; }
+  .spine { position: absolute; left: 120px; top: 560px; height: 3px; width: 0;
+    background: linear-gradient(90deg, var(--accent, #3b82f6), var(--accent-2, #60a5fa));
+    border-radius: 2px; box-shadow: 0 0 12px var(--accent, #3b82f6); }
+  .playhead { position: absolute; top: 561px; width: 22px; height: 22px; border-radius: 50%;
+    background: var(--accent-2, #60a5fa); transform: translate(-50%, -50%);
+    box-shadow: 0 0 20px 6px color-mix(in srgb, var(--accent, #3b82f6) 60%, transparent); }
+  .evt { position: absolute; width: 320px; }
+  .evt .dot { position: absolute; left: 50%; top: 0; width: 20px; height: 20px; border-radius: 50%;
+    transform: translate(-50%, -50%); background: var(--accent, #3b82f6);
+    box-shadow: 0 0 14px var(--accent, #3b82f6); }
+  .evt .halo { position: absolute; left: 50%; top: 0; width: 20px; height: 20px; border-radius: 50%;
+    transform: translate(-50%, -50%); border: 2px solid var(--accent, #3b82f6); opacity: 0; }
+  .evt .card { position: absolute; left: 50%; transform: translateX(-50%); width: 300px;
+    background: color-mix(in srgb, var(--text, #f1f5f9) 6%, transparent);
+    backdrop-filter: blur(12px);
+    border: 1px solid color-mix(in srgb, var(--text, #f1f5f9) 12%, transparent);
+    border-radius: var(--radius-card, 24px);
+    box-shadow: var(--shadow-lg, 0 24px 64px rgba(2,8,23,.55));
+    padding: 20px 24px; box-sizing: border-box; }
+  .evt .time { font-size: 30px; font-weight: 800; color: var(--accent-2, #60a5fa); margin-bottom: 6px; }
+  .evt .text { font-size: 25px; color: var(--text, #f1f5f9); line-height: 1.5; }
+  .corner { position: absolute; width: 56px; height: 56px; opacity: .35;
+    border-color: var(--accent, #3b82f6); border-style: solid; border-width: 0; }
+  .corner.tl { top: 40px; left: 40px; border-top-width: 4px; border-left-width: 4px; }
+  .corner.tr { top: 40px; right: 40px; border-top-width: 4px; border-right-width: 4px; }
+  .corner.bl { bottom: 40px; left: 40px; border-bottom-width: 4px; border-left-width: 4px; }
+  .corner.br { bottom: 40px; right: 40px; border-bottom-width: 4px; border-right-width: 4px; }
+  .source { position: absolute; bottom: 28px; left: 96px; font-size: 22px; color: var(--text-sub, #94a3b8); opacity: .8; }
+</style>
+</head>
+<body>
+<div class="grid-bg"></div>
+<div class="kicker" id="kicker"></div><div class="title" id="title"></div>
+<div class="count" id="count"></div>
+<div class="spine-track"></div>
+<div class="spine" id="spine"></div>
+<div class="playhead" id="playhead"></div>
+<div id="events"></div>
+<div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+<div class="source" id="source"></div>
+<script>
+(function () {
+  var style = document.createElement("style");
+  style.textContent = window.__THEME_CSS__ || "";
+  document.head.appendChild(style);
+  var P = window.__PARAMS__ || {};
+  var D = P.duration || 8;
+
+  var events = (P.events || [
+    { time: "1月", text: "项目储备入库,完成可行性研究" },
+    { time: "3月", text: "一案两书编制完成,报送省厅" },
+    { time: "5月", text: "省厅评审通过,纳入发行库" },
+    { time: "7月", text: "额度下达,启动簿记建档" },
+    { time: "9月", text: "发行完成,资金拨付到位" },
+  ]).slice(0, 5);
+  var n = events.length;
+
+  document.getElementById("kicker").textContent = P.kicker || "全流程透视";
+  document.getElementById("title").textContent = P.title || "";
+  document.getElementById("source").textContent = P.source ? "来源:" + P.source : "";
+
+  // 水平主轴:x ∈ [120, 1800],节点均匀分布;事件卡上下交替,卡底缘远离字幕带(900-1000)
+  var X0 = 120, X1 = 1800, SPINE_Y = 561;
+  var evEl = document.getElementById("events");
+  var xs = events.map(function (_, i) { return X0 + (X1 - X0) * (n === 1 ? 0.5 : i / (n - 1)); });
+
+  events.forEach(function (e, i) {
+    var wrap = document.createElement("div");
+    wrap.className = "evt";
+    // wrap 全宽,元素各自定位:dot/halo 锚定节点 x;卡片水平钳位在 [16, 1904] 内防出画
+    wrap.style.left = "0";
+    wrap.style.width = "1920px";
+    wrap.style.top = SPINE_Y + "px";
+    var above = i % 2 === 0;
+    var cardCx = Math.min(Math.max(xs[i], 16 + 160), 1920 - 16 - 160);
+    wrap.innerHTML =
+      '<div class="halo" style="left:' + xs[i] + 'px"></div>' +
+      '<div class="dot" style="left:' + xs[i] + 'px"></div>' +
+      '<div class="card" style="left:' + cardCx + "px;" + (above ? "bottom:52px" : "top:52px") + '">' +
+      '<div class="time">' + (e.time || "") + '</div><div class="text">' + (e.text || e.label || "") + "</div></div>";
+    evEl.appendChild(wrap);
+  });
+
+  var EASE = "cubic-bezier(0.16, 1, 0.3, 1)";
+  var SPRING = "cubic-bezier(0.34, 1.56, 0.64, 1)";
+  var SPINE_EASE = "cubic-bezier(0.6, 0.05, 0.2, 1)";
+  function add(el, kf, o) { el.animate(kf, Object.assign({ fill: "both" }, o)); }
+
+  add(document.getElementById("kicker"), [{ opacity: 0 }, { opacity: 1 }], { duration: 400, easing: EASE });
+  add(document.getElementById("title"), [{ opacity: 0, transform: "translateY(26px)" }, { opacity: 1, transform: "translateY(0)" }], { duration: 550, delay: 130, easing: EASE });
+  add(document.getElementById("count"), [{ opacity: 0 }, { opacity: 1 }], { duration: 500, delay: 500, easing: EASE });
+
+  // 主轴绘制:0.8s 起,窗长约 62% 时长;playhead 跟随线头
+  var spineFrom = 0.8, spineDur = Math.max(2, D * 0.62);
+  var spineEl = document.getElementById("spine");
+  spineEl.animate([{ width: "0px" }, { width: (X1 - X0) + "px" }],
+    { duration: spineDur * 1000, delay: spineFrom * 1000, fill: "both", easing: SPINE_EASE });
+
+  // 节点 i 激活时刻:playhead 到达其 x 的时间(spine 是 ease 曲线,近似按线性比例+端点修正)
+  function nodeT(i) {
+    var frac = n === 1 ? 0.5 : i / (n - 1);
+    // 数值反推 cubic-bezier(0.6,0.05,0.2,1) 的大致进度:用采样逼近
+    var best = 0, bestDiff = 1e9;
+    for (var s = 0; s <= 1000; s++) {
+      var t = s / 1000, mt = 1 - t;
+      var y = 3 * mt * mt * t * 0.05 + 3 * mt * t * t * 1 + t * t * t; // bezier y(时间进度→值)
+      var v = 3 * mt * mt * t * 0.6 + 3 * mt * t * t * 0.2 + t * t * t; // x 分量=输入进度
+      // 我们要 output=frac 时的 input:近似解
+      var diff = Math.abs(y - frac);
+      if (diff < bestDiff) { bestDiff = diff; best = v; }
+    }
+    return spineFrom + best * spineDur;
+  }
+
+  document.querySelectorAll(".evt").forEach(function (wrap, i) {
+    var t0 = nodeT(i) * 1000;
+    var dot = wrap.querySelector(".dot"), halo = wrap.querySelector(".halo"), card = wrap.querySelector(".card");
+    add(dot, [{ transform: "translate(-50%,-50%) scale(0)" }, { transform: "translate(-50%,-50%) scale(1.3)", offset: 0.65 }, { transform: "translate(-50%,-50%) scale(1)" }], { duration: 420, delay: t0, easing: SPRING });
+    add(halo, [{ opacity: 0.85, transform: "translate(-50%,-50%) scale(1)" }, { opacity: 0, transform: "translate(-50%,-50%) scale(3.2)" }], { duration: 650, delay: t0, easing: "ease-out" });
+    add(card, [{ opacity: 0, transform: "translateX(-50%) translateY(" + (i % 2 === 0 ? "30px" : "-30px") + ")" },
+      { opacity: 1, transform: "translateX(-50%) translateY(0)" }], { duration: 500, delay: t0 + 120, easing: SPRING });
+  });
+
+  var playhead = document.getElementById("playhead");
+  // playhead 用 __seek 定位(与主轴同一缓动,须采样一致)
+  window.__seek = function (t) {
+    var p = Math.min(Math.max((t - spineFrom) / spineDur, 0), 1);
+    // 与 spine WAAPI easing 同曲线:对 p(输入进度)求 bezier 输出
+    var mt = 1 - p;
+    var out = 3 * mt * mt * p * 0.05 + 3 * mt * p * p * 1 + p * p * p;
+    // 注意:WAAPI easing 是 input=时间进度 → output=动画进度;bezier 的 x 分量即时间进度参数化
+    // 用参数化采样求精确 output:
+    var lo = 0, hi = 1, mid = 0;
+    for (var k = 0; k < 24; k++) {
+      mid = (lo + hi) / 2;
+      var mm = 1 - mid;
+      var x = 3 * mm * mm * mid * 0.6 + 3 * mm * mid * mid * 0.2 + mid * mid * mid;
+      if (x < p) lo = mid; else hi = mid;
+    }
+    var mq = 1 - mid;
+    var prog = 3 * mq * mq * mid * 0.05 + 3 * mq * mid * mid * 1 + mid * mid * mid;
+    playhead.style.left = (X0 + (X1 - X0) * prog) + "px";
+    playhead.style.opacity = p >= 1 ? "0" : "1";
+    var v = 0;
+    for (var i = 0; i < n; i++) if (t >= nodeT(i)) v = i + 1;
+    document.getElementById("count").innerHTML = "共 <b>" + n + "</b> 个关键节点" + (v ? " · 已到第 <b>" + v + "</b> 个" : "");
+    void out;
+  };
+  window.__seek(0);
+})();
+</script>
+</body>
+</html>

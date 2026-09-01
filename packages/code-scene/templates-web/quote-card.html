@@ -53,15 +53,15 @@
     position: absolute; top: 520px; left: 96px; right: 96px; height: 830px;
     display: flex; flex-direction: column; justify-content: center;
   }
-  /* 巨型装饰引号「」(衬线,accent 低透明) */
+  /* 巨型装饰引号「」(衬线,accent 低透明);盒高须容下字面,防与正文交叠 */
   .mark {
     font-family: Georgia, "Noto Serif CJK SC", "Songti SC", "SimSun", serif;
-    font-size: 220px; font-weight: 900; line-height: .8;
+    font-size: 180px; font-weight: 900; line-height: 1;
     color: var(--accent, #3b82f6); opacity: 0;
-    height: 120px; pointer-events: none; user-select: none;
+    height: 170px; pointer-events: none; user-select: none;
   }
-  .mark.open { align-self: flex-start; margin-left: -14px; }
-  .mark.close { align-self: flex-end; margin-right: -14px; margin-top: 8px; }
+  .mark.open { align-self: flex-start; margin: 0 0 16px -6px; }
+  .mark.close { align-self: flex-end; margin: 20px -6px 0 0; }
 
   /* 金句正文:短语级 span 逐组揭示(clip-path 擦除 + 上浮) */
   #quote {

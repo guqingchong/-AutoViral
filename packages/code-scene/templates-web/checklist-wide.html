@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; width: 1920px; height: 1080px; overflow: hidden; }
+  body { background: var(--bg, #0f1b2d); font-family: var(--font-display, "Noto Sans CJK SC", "Microsoft YaHei", sans-serif); position: relative; }
+  .grid-bg { position: absolute; inset: 0;
+    background-image: linear-gradient(var(--bg-grid, rgba(148,163,184,.05)) 1px, transparent 1px),
+      linear-gradient(90deg, var(--bg-grid, rgba(148,163,184,.05)) 1px, transparent 1px);
+    background-size: 96px 96px; }
+  .kicker { position: absolute; top: 72px; left: 96px; font-size: 26px; letter-spacing: 6px;
+    color: var(--accent, #3b82f6); border: 1px solid color-mix(in srgb, var(--accent, #3b82f6) 45%, transparent);
+    padding: 10px 22px 10px 28px; border-radius: 999px; font-weight: 500; white-space: nowrap; }
+  .title { position: absolute; top: 140px; left: 96px; font-size: 54px; font-weight: 700; color: var(--text, #f1f5f9); }
+  .count { position: absolute; top: 240px; left: 96px; font-size: 28px; color: var(--text-sub, #94a3b8); font-weight: 500; }
+  .count b { color: var(--accent, #3b82f6); font-size: 40px; font-weight: 900; }
+  .row { position: absolute; width: 780px; height: 104px;
+    background: color-mix(in srgb, var(--text, #f1f5f9) 6%, transparent);
+    backdrop-filter: blur(12px);
+    border: 1px solid color-mix(in srgb, var(--text, #f1f5f9) 12%, transparent);
+    border-radius: var(--radius-card, 24px);
+    box-shadow: var(--shadow-lg, 0 24px 64px rgba(2,8,23,.55));
+    display: flex; align-items: center; padding: 0 30px; box-sizing: border-box; gap: 22px; }
+  .row .box { width: 52px; height: 52px; border-radius: 12px; flex: none;
+    border: 2.5px solid var(--accent, #3b82f6); position: relative; }
+  .row .box svg { position: absolute; inset: 4px; }
+  .row .box svg path { stroke: var(--accent, #3b82f6); stroke-width: 5; fill: none;
+    stroke-linecap: round; stroke-linejoin: round; }
+  .row.done-flash .box { background: color-mix(in srgb, var(--accent, #3b82f6) 18%, transparent); }
+  .row .txt { font-size: 30px; font-weight: 600; color: var(--text, #f1f5f9); }
+  .row.fail .box { border-color: #f87171; }
+  .row.fail .box svg path { stroke: #f87171; }
+  .row.fail .txt { color: var(--text-sub, #94a3b8); }
+  .corner { position: absolute; width: 56px; height: 56px; opacity: .35;
+    border-color: var(--accent, #3b82f6); border-style: solid; border-width: 0; }
+  .corner.tl { top: 40px; left: 40px; border-top-width: 4px; border-left-width: 4px; }
+  .corner.tr { top: 40px; right: 40px; border-top-width: 4px; border-right-width: 4px; }
+  .corner.bl { bottom: 40px; left: 40px; border-bottom-width: 4px; border-left-width: 4px; }
+  .corner.br { bottom: 40px; right: 40px; border-bottom-width: 4px; border-right-width: 4px; }
+  .source { position: absolute; bottom: 28px; left: 96px; font-size: 22px; color: var(--text-sub, #94a3b8); opacity: .8; }
+</style>
+</head>
+<body>
+<div class="grid-bg"></div>
+<div class="kicker" id="kicker"></div><div class="title" id="title"></div>
+<div class="count" id="count"></div>
+<div id="rows"></div>
+<div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+<div class="source" id="source"></div>
+<script>
+(function () {
+  var style = document.createElement("style");
+  style.textContent = window.__THEME_CSS__ || "";
+  document.head.appendChild(style);
+  var P = window.__PARAMS__ || {};
+  var D = P.duration || 8;
+
+  var items = (P.items || [
+    { text: "项目收益覆盖本息 1.1 倍以上", done: true },
+    { text: "一案两书齐备", done: true },
+    { text: "不在负面清单领域", done: true },
+    { text: "资本金来源合规", done: true },
+    { text: "绩效目标设定完整", done: true },
+    { text: "历史存续债务已披露", done: false },
+  ]).slice(0, 6).map(function (it) { return typeof it === "string" ? { text: it, done: true } : it; });
+  var n = items.length;
+
+  document.getElementById("kicker").textContent = P.kicker || "核对清单";
+  document.getElementById("title").textContent = P.title || "";
+  document.getElementById("source").textContent = P.source ? "来源:" + P.source : "";
+
+  // 两列布局:左列 x=96 右列 x=1044;行区 y∈[330, 880](字幕带 900 起)
+  var ROW_H = 104, ROW_GAP = 26;
+  var colRows = Math.ceil(n / 2);
+  var rowsEl = document.getElementById("rows");
+  var NS = "http://www.w3.org/2000/svg";
+
+  items.forEach(function (it, i) {
+    var col = i < colRows ? 0 : 1;
+    var rowIdx = col === 0 ? i : i - colRows;
+    var row = document.createElement("div");
+    row.className = "row" + (it.done === false ? " fail" : "");
+    row.style.left = (col === 0 ? 96 : 1044) + "px";
+    row.style.top = (330 + rowIdx * (ROW_H + ROW_GAP)) + "px";
+    var tick = it.done === false
+      ? '<path d="M 12 12 L 30 30 M 30 12 L 12 30" />'
+      : '<path d="M 10 23 L 19 32 L 34 12" />';
+    row.innerHTML = '<div class="box"><svg viewBox="0 0 42 42">' + tick + '</svg></div><div class="txt">' + (it.text || "") + "</div>";
+    rowsEl.appendChild(row);
+  });
+
+  var EASE = "cubic-bezier(0.16, 1, 0.3, 1)";
+  var SPRING = "cubic-bezier(0.34, 1.56, 0.64, 1)";
+  function add(el, kf, o) { el.animate(kf, Object.assign({ fill: "both" }, o)); }
+
+  add(document.getElementById("kicker"), [{ opacity: 0 }, { opacity: 1 }], { duration: 400, easing: EASE });
+  add(document.getElementById("title"), [{ opacity: 0, transform: "translateY(26px)" }, { opacity: 1, transform: "translateY(0)" }], { duration: 550, delay: 130, easing: EASE });
+  add(document.getElementById("count"), [{ opacity: 0 }, { opacity: 1 }], { duration: 500, delay: 500, easing: EASE });
+
+  // 行入场(按列交错) + 打勾绘制
+  var stagger = Math.min(700, Math.max(280, (D * 1000 * 0.5) / Math.max(n, 1)));
+  var doneTimes = [];
+  document.querySelectorAll(".row").forEach(function (row, i) {
+    var d0 = 700 + i * stagger;
+    add(row, [{ opacity: 0, transform: "translateY(40px)" }, { opacity: 1, transform: "translateY(0)" }], { duration: 500, delay: d0, easing: SPRING });
+    var path = row.querySelector("svg path");
+    var box = row.querySelector(".box");
+    if (path) {
+      var len = path.getTotalLength();
+      path.style.strokeDasharray = String(len);
+      path.style.strokeDashoffset = String(len);
+      path.animate([{ strokeDashoffset: len }, { strokeDashoffset: 0 }],
+        { duration: 380, delay: d0 + 420, fill: "both", easing: EASE });
+      box.animate([{ transform: "scale(1)" }, { transform: "scale(1.14)" }, { transform: "scale(1)" }],
+        { duration: 320, delay: d0 + 720, fill: "both", easing: EASE });
+      doneTimes.push(d0 + 720);
+    }
+  });
+
+  window.__seek = function (t) {
+    var v = 0;
+    for (var i = 0; i < doneTimes.length; i++) if (t * 1000 >= doneTimes[i]) v++;
+    document.getElementById("count").innerHTML = "已核对 <b>" + v + "</b> / " + n + " 项";
+  };
+  window.__seek(0);
+})();
+</script>
+</body>
+</html>
