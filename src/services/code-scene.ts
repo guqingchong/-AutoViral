@@ -45,18 +45,9 @@ export interface CodeSceneInput {
   theme?: string;
 }
 
+// 2026-09-01 视觉升级:9 个竖屏镜头模板已全部迁移至 web 支路(见 WEB_TEMPLATES),
+// TEMPLATE_LIMITS 仅保留 Revideo 专属模板;误从本表删除前请先确认 WEB_TEMPLATES 有同名条目。
 const TEMPLATE_LIMITS: Record<string, { items?: string; min?: number; max?: number }> = {
-  "structure-growth": { items: "branches", min: 2, max: 4 },
-  "flow-steps": { items: "steps", min: 2, max: 5 },
-  "logic-chain": { items: "chain", min: 2, max: 4 },
-  // 2026-08-18 03 方案:模板库扩充
-  "big-number": {},                                        // 主参数 value(数字)
-  "compare-split": {},                                     // 主参数 left/right
-  "timeline": { items: "events", min: 2, max: 5 },
-  "pyramid": { items: "levels", min: 2, max: 5 },
-  "quote-card": {},                                        // 主参数 quote(替代 title)
-  "checklist": { items: "items", min: 2, max: 6 },
-  "bar-compare": { items: "bars", min: 2, max: 5 },
   // 2026-08-24:横屏整片数字人口播模板(1920×1080,苹果风×深色皮革),主参数 title(≤18字)
   "keynote-leather": {},
 };
@@ -65,9 +56,18 @@ const TEMPLATE_LIMITS: Record<string, { items?: string; min?: number; max?: numb
  *  名字命中此处 → doRender 走 web-worker.mjs(Playwright 截帧),不再查 Revideo 场景表。
  *  schema 语义与 TEMPLATE_LIMITS 相同,校验复用同一套规则。 */
 export const WEB_TEMPLATES: Record<string, { items?: string; min?: number; max?: number }> = {
+  // 2026-09-01 05 方案:标杆 + 样片批次
   "big-number": {},
-  // 2026-09-01 样片批次:中心辐射结构图(SVG 连线绘制+错峰弹簧入场+毛玻璃卡片)
   "structure-growth": { items: "branches", min: 2, max: 4 },
+  // 2026-09-01 迁移批次(schema 与 Revideo 版 TEMPLATE_LIMITS 一致,agent 调用契约不变)
+  "flow-steps": { items: "steps", min: 2, max: 5 },
+  "logic-chain": { items: "chain", min: 2, max: 4 },
+  "compare-split": {},
+  "timeline": { items: "events", min: 2, max: 5 },
+  "pyramid": { items: "levels", min: 2, max: 5 },
+  "quote-card": {},
+  "checklist": { items: "items", min: 2, max: 6 },
+  "bar-compare": { items: "bars", min: 2, max: 5 },
 };
 
 /** 纯校验:返回错误列表(空数组=合法) */

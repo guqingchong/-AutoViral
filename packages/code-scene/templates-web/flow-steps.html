@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>flow-steps · 流程步骤</title>
+<!-- 渲染器经 addInitScript 注入 window.__THEME_CSS__,先挂到页首 -->
+<style id="theme-vars"></style>
+<style>
+  html, body { margin: 0; width: 1080px; height: 1920px; overflow: hidden; }
+  body {
+    background: var(--bg, #0f1b2d);
+    font-family: var(--font-display, "Noto Sans CJK SC", "Microsoft YaHei", sans-serif);
+    position: relative;
+  }
+  /* 网格底(纯 CSS 渐变网格,token 驱动) */
+  .grid-bg {
+    position: absolute; inset: 0;
+    background-image:
+      linear-gradient(var(--bg-grid, rgba(148,163,184,.05)) 1px, transparent 1px),
+      linear-gradient(90deg, var(--bg-grid, rgba(148,163,184,.05)) 1px, transparent 1px);
+    background-size: 108px 108px;
+  }
+  /* 流程区后方呼吸辉光 */
+  .glow {
+    position: absolute; left: 50%; top: 900px; width: 1100px; height: 1100px;
+    transform: translate(-50%, -50%);
+    background: radial-gradient(circle, var(--accent, #3b82f6) 0%, transparent 60%);
+    opacity: .10; pointer-events: none;
+  }
+  /* 左上 kicker 胶囊 */
+  .kicker {
+    position: absolute; top: 120px; left: 96px;
+    font-size: 28px; letter-spacing: 6px; color: var(--accent, #3b82f6);
+    border: 1px solid color-mix(in srgb, var(--accent, #3b82f6) 45%, transparent);
+    padding: 10px 22px 10px 28px; /* 字距末字补偿 */
+    border-radius: 999px; font-weight: 500; white-space: nowrap;
+  }
+  .title {
+    position: absolute; top: 196px; left: 96px; right: 96px;
+    font-size: 64px; font-weight: 700; color: var(--text, #f1f5f9);
+    line-height: 1.25; white-space: nowrap;
+  }
+  .step-count {
+    position: absolute; top: 300px; left: 96px;
+    font-size: 30px; color: var(--text-sub, #94a3b8); font-weight: 500;
+  }
+  .step-count b { color: var(--accent, #3b82f6); font-weight: 800; }
+
+  /* SVG 主轴连线层 */
+  svg.rail { position: absolute; inset: 0; width: 1080px; height: 1920px; pointer-events: none; }
+  svg.rail .rail-line {
+    stroke: var(--accent, #3b82f6); stroke-width: 4; fill: none; opacity: .5;
+    stroke-linecap: round;
+  }
+  svg.rail .rail-arrow { fill: var(--accent, #3b82f6); opacity: 0; }
+
+  /* 步骤节点:wrapper 做入场,card 做脉冲(避免 transform 动画互相覆盖) */
+  .step { position: absolute; left: 0; right: 0; opacity: 0; }
+  .badge {
+    position: absolute; width: 76px; height: 76px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--accent-2, #60a5fa), var(--accent, #3b82f6));
+    box-shadow: 0 10px 32px color-mix(in srgb, var(--accent, #3b82f6) 50%, transparent),
+                inset 0 2px 8px rgba(255,255,255,.35);
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-size: 34px; font-weight: 800;
+  }
+  .badge-ring {
+    position: absolute; width: 76px; height: 76px; border-radius: 50%;
+    border: 2px solid var(--accent, #3b82f6); opacity: 0;
+  }
+  .card {
+    position: absolute; left: 250px; right: 96px; box-sizing: border-box;
+    background: color-mix(in srgb, var(--text, #f1f5f9) 6%, transparent);
+    backdrop-filter: blur(12px);
+    border: 1px solid color-mix(in srgb, var(--text, #f1f5f9) 12%, transparent);
+    border-left: 5px solid var(--accent, #3b82f6);
+    border-radius: var(--radius-card, 24px);
+    box-shadow: var(--shadow-lg, 0 24px 64px rgba(2,8,23,.55));
+    padding: 24px 36px;
+    display: flex; flex-direction: column; justify-content: center;
+  }
+  .card .step-title {
+    font-size: 40px; font-weight: 700; color: var(--text, #f1f5f9);
+    line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .card .step-desc {
+    margin-top: 8px;
+    font-size: 27px; color: var(--text-sub, #94a3b8); line-height: 1.5;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+
+  /* 角标(取景框语言) */
+  .corner { position: absolute; width: 64px; height: 64px; opacity: 0;
+    border-color: var(--accent, #3b82f6); border-style: solid; border-width: 0; }
+  .corner.tl { top: 56px; left: 56px; border-top-width: 4px; border-left-width: 4px; }
+  .corner.tr { top: 56px; right: 56px; border-top-width: 4px; border-right-width: 4px; }
+  .corner.bl { bottom: 56px; left: 56px; border-bottom-width: 4px; border-left-width: 4px; }
+  .corner.br { bottom: 56px; right: 56px; border-bottom-width: 4px; border-right-width: 4px; }
+
+  .source {
+    position: absolute; bottom: 170px; left: 96px;
+    font-size: 24px; color: var(--text-sub, #94a3b8); opacity: 0;
+    white-space: nowrap;
+  }
+</style>
+</head>
+<body>
+<div class="grid-bg"></div>
+<div class="glow" id="glow"></div>
+<div class="kicker" id="kicker"></div>
+<div class="title" id="title"></div>
+<div class="step-count" id="count"></div>
+<svg class="rail" id="rail" viewBox="0 0 1080 1920"></svg>
+<div id="steps"></div>
+<div class="corner tl"></div><div class="corner tr"></div>
+<div class="corner bl"></div><div class="corner br"></div>
+<div class="source" id="source"></div>
+
+<script>
+(function () {
+  // 主题令牌注入(web-worker 契约)
+  document.getElementById("theme-vars").textContent = window.__THEME_CSS__ || "";
+
+  var P = window.__PARAMS__ || {};
+  var D = typeof P.duration === "number" && isFinite(P.duration) ? P.duration : 8;
+
+  // ── 数据(与 Revideo 版参数语义一致:steps 2-5,title/desc) ──
+  var steps = (P.steps || []).slice(0, 5);
+  if (steps.length < 2) {
+    steps = [
+      { title: "项目储备", desc: "筛选入库,完成前期手续" },
+      { title: "方案编制", desc: "一案两书,收益测算" },
+      { title: "评审发行", desc: "省厅评审,额度分配" },
+      { title: "资金管理", desc: "拨付使用,绩效评价" }
+    ];
+  }
+  var n = steps.length;
+
+  var kickerEl = document.getElementById("kicker");
+  var titleEl = document.getElementById("title");
+  var countEl = document.getElementById("count");
+  var srcEl = document.getElementById("source");
+  if (P.kicker) kickerEl.textContent = P.kicker; else kickerEl.style.display = "none";
+  titleEl.textContent = P.title || "";
+  if (P.source) srcEl.textContent = "来源:" + P.source; else srcEl.style.display = "none";
+
+  // ── 布局:竖向主轴 x=190,卡片列 250→984;流程区 y∈[430,1390](避让字幕带 1418-1562) ──
+  var RAIL_X = 190, AREA_TOP = 430, AREA_BOT = 1390;
+  var gap = (AREA_BOT - AREA_TOP) / n;
+  var cardH = Math.min(gap - 30, 200);
+  var centers = steps.map(function (_, i) { return AREA_TOP + gap * i + gap / 2; });
+
+  var stepsEl = document.getElementById("steps");
+  steps.forEach(function (s, i) {
+    var cy = centers[i];
+    var wrap = document.createElement("div");
+    wrap.className = "step";
+    wrap.style.top = (cy - cardH / 2) + "px";
+    wrap.style.height = cardH + "px";
+
+    var ring = document.createElement("div");
+    ring.className = "badge-ring";
+    ring.style.left = (RAIL_X - 38) + "px";
+    ring.style.top = (cardH / 2 - 38) + "px";
+    wrap.appendChild(ring);
+
+    var badge = document.createElement("div");
+    badge.className = "badge";
+    badge.style.left = (RAIL_X - 38) + "px";
+    badge.style.top = (cardH / 2 - 38) + "px";
+    badge.textContent = String(i + 1);
+    wrap.appendChild(badge);
+
+    var card = document.createElement("div");
+    card.className = "card";
+    card.style.top = "0";
+    card.style.height = cardH + "px";
+    var t = document.createElement("div");
+    t.className = "step-title";
+    t.textContent = s.title || "";
+    card.appendChild(t);
+    if (s.desc) {
+      var d = document.createElement("div");
+      d.className = "step-desc";
+      d.textContent = s.desc;
+      card.appendChild(d);
+    }
+    wrap.appendChild(card);
+    stepsEl.appendChild(wrap);
+  });
+
+  // 主轴连线:首节点中心 → 末节点中心 + 末端箭头
+  var svg = document.getElementById("rail");
+  var NS = "http://www.w3.org/2000/svg";
+  var y0 = centers[0], y1 = centers[n - 1];
+  var line = document.createElementNS(NS, "line");
+  line.setAttribute("x1", RAIL_X); line.setAttribute("y1", y0);
+  line.setAttribute("x2", RAIL_X); line.setAttribute("y2", y1);
+  line.setAttribute("class", "rail-line");
+  svg.appendChild(line);
+  var arrow = document.createElementNS(NS, "polygon");
+  var ay = y1 + 74; // 箭头末端避开末节点徽章(徽章底缘 y1+38)
+  arrow.setAttribute("points",
+    RAIL_X + "," + ay + " " + (RAIL_X - 14) + "," + (ay - 24) + " " + (RAIL_X + 14) + "," + (ay - 24));
+  arrow.setAttribute("class", "rail-arrow");
+  svg.appendChild(arrow);
+
+  // ── 动画时间轴(全部 WAAPI fill:"both",确定性 seek) ──
+  var EASE = "cubic-bezier(0.16, 1, 0.3, 1)";
+  var SPRING = "cubic-bezier(0.34, 1.56, 0.64, 1)";
+  var anims = [];
+  function add(el, kf, opts) { var o = { fill: "both" }; for (var k in opts) o[k] = opts[k]; anims.push(el.animate(kf, o)); }
+
+  // 0-0.75s: 装饰件 + kicker + 标题错峰入场
+  document.querySelectorAll(".corner").forEach(function (c, i) {
+    add(c, [{ opacity: 0 }, { opacity: 0.35 }], { duration: 600, delay: 200 + i * 80, easing: "ease-out" });
+  });
+  add(kickerEl,
+    [{ opacity: 0, transform: "translateY(24px)" }, { opacity: 1, transform: "translateY(0)" }],
+    { duration: 500, easing: EASE });
+  add(titleEl,
+    [{ opacity: 0, transform: "translateY(36px)" }, { opacity: 1, transform: "translateY(0)" }],
+    { duration: 600, delay: 150, easing: EASE });
+  add(countEl, [{ opacity: 0 }, { opacity: 1 }], { duration: 500, delay: 400, easing: "ease-out" });
+  add(srcEl, [{ opacity: 0 }, { opacity: 0.7 }], { duration: 500, delay: 900, easing: "ease-out" });
+
+  // 步骤错峰:首步 0.85s,末步入场完成不超过 62% 总时长
+  var stagger = Math.min(1.2, Math.max(0.4, (D * 0.62 - 0.85 - 0.65) / Math.max(n - 1, 1)));
+  var stepDelay = function (i) { return 0.85 + i * stagger; };
+
+  // 0.95s 起:主轴连线随步骤推进绘制(stroke-dashoffset),线头不越过下一个未到的徽章
+  var railLen = y1 - y0;
+  line.style.strokeDasharray = String(railLen);
+  line.style.strokeDashoffset = String(railLen);
+  var railDur = Math.max(0.6, stagger * (n - 1) + 0.45);
+  anims.push(line.animate(
+    [{ strokeDashoffset: railLen }, { strokeDashoffset: 0 }],
+    { duration: railDur * 1000, delay: 950, fill: "both", easing: "ease-in-out" }));
+  add(arrow, [{ opacity: 0 }, { opacity: 0.8 }],
+    { duration: 400, delay: 950 + railDur * 1000 - 200, easing: "ease-out" });
+
+  // 步骤入场:自右滑入(Revideo 原意)+ 徽章弹簧弹出 + 当前步脉冲
+  document.querySelectorAll(".step").forEach(function (wrap, i) {
+    var d0 = stepDelay(i);
+    add(wrap,
+      [{ opacity: 0, transform: "translateX(160px)" }, { opacity: 1, transform: "translateX(0)" }],
+      { duration: 650, delay: d0 * 1000, easing: SPRING });
+    var badge = wrap.querySelector(".badge");
+    add(badge,
+      [{ transform: "scale(0)" }, { transform: "scale(1.18)", offset: 0.65 }, { transform: "scale(1)" }],
+      { duration: 550, delay: (d0 + 0.12) * 1000, easing: SPRING });
+    // 当前步脉冲:卡片 1→1.04→1 + 徽章光环扩散(Revideo 的当前步强调语义)
+    var card = wrap.querySelector(".card");
+    add(card,
+      [{ transform: "scale(1)" }, { transform: "scale(1.04)", offset: 0.5 }, { transform: "scale(1)" }],
+      { duration: 450, delay: (d0 + 0.7) * 1000, easing: "ease-in-out" });
+    var ring = wrap.querySelector(".badge-ring");
+    add(ring,
+      [{ opacity: 0.8, transform: "scale(1)" }, { opacity: 0, transform: "scale(1.9)" }],
+      { duration: 600, delay: (d0 + 0.7) * 1000, easing: "ease-out" });
+  });
+
+  // 收尾强调:末步完成后再脉冲一次,保证尾帧为完整信息态
+  var lastWrap = stepsEl.lastElementChild;
+  if (lastWrap) {
+    var endT = stepDelay(n - 1) + 1.3;
+    add(lastWrap.querySelector(".card"),
+      [{ transform: "scale(1)" }, { transform: "scale(1.03)", offset: 0.5 }, { transform: "scale(1)" }],
+      { duration: 500, delay: endT * 1000, easing: "ease-in-out" });
+    add(lastWrap.querySelector(".badge-ring"),
+      [{ opacity: 0.8, transform: "scale(1)" }, { opacity: 0, transform: "scale(1.9)" }],
+      { duration: 600, delay: endT * 1000, easing: "ease-out" });
+  }
+
+  // 全程:辉光呼吸
+  add(document.getElementById("glow"),
+    [{ opacity: 0.08 }, { opacity: 0.16 }, { opacity: 0.08 }],
+    { duration: Math.round(D * 1000), easing: "ease-in-out" });
+
+  // ── 步数徽标(__seek 驱动,确定性):随入场步数递增 ──
+  window.__seek = function (t) {
+    var v = 0;
+    for (var i = 0; i < n; i++) if (t >= stepDelay(i) + 0.3) v = i + 1;
+    countEl.innerHTML = v === 0
+      ? "共 <b>" + n + "</b> 步"
+      : "共 <b>" + n + "</b> 步 · 当前第 <b>" + v + "</b> 步";
+  };
+  window.__seek(0);
+})();
+</script>
+</body>
+</html>

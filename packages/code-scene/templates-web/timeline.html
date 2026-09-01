@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>timeline · 时间轴</title>
+<!-- 渲染器经 addInitScript 注入 window.__THEME_CSS__,先挂到页首 -->
+<style id="theme-vars"></style>
+<style>
+  html, body { margin: 0; width: 1080px; height: 1920px; overflow: hidden; }
+  body {
+    background: var(--bg, #0f1b2d);
+    font-family: var(--font-display, "Noto Sans CJK SC", "Microsoft YaHei", sans-serif);
+    position: relative;
+  }
+  /* 网格底(纯 CSS 渐变网格,token 驱动) */
+  .grid-bg {
+    position: absolute; inset: 0;
+    background-image:
+      linear-gradient(var(--bg-grid, rgba(148,163,184,.05)) 1px, transparent 1px),
+      linear-gradient(90deg, var(--bg-grid, rgba(148,163,184,.05)) 1px, transparent 1px);
+    background-size: 108px 108px;
+  }
+  /* 主轴后方呼吸辉光 */
+  .glow {
+    position: absolute; left: 200px; top: 900px; width: 860px; height: 860px;
+    transform: translate(-50%, -50%);
+    background: radial-gradient(circle, var(--accent, #3b82f6) 0%, transparent 62%);
+    opacity: .10; pointer-events: none;
+  }
+  /* kicker 胶囊 */
+  .kicker {
+    position: absolute; top: 120px; left: 96px;
+    font-size: 28px; letter-spacing: 6px; font-weight: 500;
+    color: var(--accent, #3b82f6);
+    border: 1px solid color-mix(in srgb, var(--accent, #3b82f6) 45%, transparent);
+    padding: 10px 28px 10px 34px; /* 字距末字补偿 */
+    border-radius: 999px; white-space: nowrap;
+  }
+  .title {
+    position: absolute; top: 190px; left: 96px; right: 96px;
+    font-size: 64px; font-weight: 700; color: var(--text, #f1f5f9);
+    line-height: 1.25;
+  }
+  .count-badge {
+    position: absolute; top: 310px; left: 96px;
+    font-size: 34px; color: var(--text-sub, #94a3b8); font-weight: 500;
+    white-space: nowrap;
+  }
+  .count-badge b { color: var(--accent, #3b82f6); font-size: 54px; font-weight: 900; }
+
+  /* 主轴:暗轨全程可见,亮轨向下生长 */
+  .spine-track {
+    position: absolute; left: 198px; width: 4px; border-radius: 2px;
+    background: var(--accent, #3b82f6); opacity: .16;
+  }
+  .spine-live {
+    position: absolute; left: 198px; width: 4px; border-radius: 2px;
+    background: linear-gradient(180deg, var(--accent-2, #60a5fa), var(--accent, #3b82f6));
+    box-shadow: 0 0 14px color-mix(in srgb, var(--accent, #3b82f6) 65%, transparent);
+    height: 0;
+  }
+  /* 播放头:沿主轴行进的光点 */
+  .playhead {
+    position: absolute; left: 185px; width: 30px; height: 30px; border-radius: 50%;
+    background: radial-gradient(circle, #fff 0%, var(--accent-2, #60a5fa) 45%, transparent 75%);
+    box-shadow: 0 0 26px var(--accent-2, #60a5fa), 0 0 60px color-mix(in srgb, var(--accent, #3b82f6) 60%, transparent);
+    opacity: 0;
+  }
+
+  /* 节点:圆点 + 脉冲光环 + 连接短线 + 事件卡 */
+  .dot {
+    position: absolute; width: 26px; height: 26px; border-radius: 50%;
+    background: var(--accent, #3b82f6);
+    border: 4px solid var(--bg, #0f1b2d);
+    box-shadow: 0 0 18px var(--accent, #3b82f6);
+    box-sizing: border-box;
+    opacity: 0;
+  }
+  .halo {
+    position: absolute; width: 56px; height: 56px; border-radius: 50%;
+    border: 2px solid var(--accent-2, #60a5fa);
+    box-sizing: border-box; opacity: 0; pointer-events: none;
+  }
+  .tick {
+    position: absolute; height: 3px; width: 0;
+    background: linear-gradient(90deg, var(--accent, #3b82f6), color-mix(in srgb, var(--accent, #3b82f6) 35%, transparent));
+    border-radius: 2px;
+  }
+  .card {
+    position: absolute; left: 288px; width: 696px;
+    background: color-mix(in srgb, var(--text, #f1f5f9) 6%, transparent);
+    backdrop-filter: blur(12px);
+    border: 1px solid color-mix(in srgb, var(--text, #f1f5f9) 12%, transparent);
+    border-left: 4px solid var(--accent, #3b82f6);
+    border-radius: var(--radius-card, 24px);
+    box-shadow: var(--shadow-lg, 0 24px 64px rgba(2,8,23,.55));
+    padding: 26px 34px; box-sizing: border-box;
+    opacity: 0;
+  }
+  .card .time {
+    font-size: 30px; font-weight: 800; letter-spacing: 2px;
+    color: var(--accent-2, #60a5fa); line-height: 1.3;
+  }
+  .card .text {
+    margin-top: 8px;
+    font-size: 32px; color: var(--text, #f1f5f9); line-height: 1.5;
+    font-weight: 500;
+  }
+  /* n≥4 紧凑模式 */
+  .card.compact { padding: 18px 30px; }
+  .card.compact .time { font-size: 26px; }
+  .card.compact .text { font-size: 29px; margin-top: 5px; }
+
+  /* 取景框角标 */
+  .corner { position: absolute; width: 64px; height: 64px; opacity: 0;
+    border-color: var(--accent, #3b82f6); border-style: solid; border-width: 0; }
+  .corner.tl { top: 56px; left: 56px; border-top-width: 4px; border-left-width: 4px; }
+  .corner.tr { top: 56px; right: 56px; border-top-width: 4px; border-right-width: 4px; }
+  .corner.bl { bottom: 56px; left: 56px; border-bottom-width: 4px; border-left-width: 4px; }
+  .corner.br { bottom: 56px; right: 56px; border-bottom-width: 4px; border-right-width: 4px; }
+
+  .source {
+    position: absolute; bottom: 170px; left: 96px;
+    font-size: 24px; color: var(--text-sub, #94a3b8); opacity: 0;
+    white-space: nowrap;
+  }
+</style>
+</head>
+<body>
+<div class="grid-bg"></div>
+<div class="glow" id="glow"></div>
+<div class="kicker" id="kicker"></div>
+<div class="title" id="title"></div>
+<div class="count-badge" id="badge"></div>
+<div class="spine-track" id="track"></div>
+<div class="spine-live" id="spine"></div>
+<div class="playhead" id="playhead"></div>
+<div id="nodes"></div>
+<div class="corner tl"></div><div class="corner tr"></div>
+<div class="corner bl"></div><div class="corner br"></div>
+<div class="source" id="source"></div>
+
+<script>
+(function () {
+  // 主题令牌注入(web-worker 契约)
+  document.getElementById("theme-vars").textContent = window.__THEME_CSS__ || "";
+
+  var P = window.__PARAMS__ || {};
+  var D = typeof P.duration === "number" && isFinite(P.duration) ? P.duration : 8;
+
+  // ── 数据(契约:events[{time,text}] 2-5 个;兼容 Revideo 版 label 字段) ──
+  var events = (P.events || []).slice(0, 5).map(function (e) {
+    return { time: e.time || "", text: e.text || e.label || "" };
+  });
+  if (events.length === 0) {
+    events = [
+      { time: "1月", text: "项目储备入库" },
+      { time: "3月", text: "一案两书编制完成" },
+      { time: "6月", text: "省厅评审通过" },
+      { time: "9月", text: "债券发行缴款" },
+    ];
+  }
+  var n = events.length;
+  var compact = n >= 4;
+
+  document.getElementById("kicker").textContent = P.kicker || "时间轴";
+  document.getElementById("title").textContent = P.title || "关键节点";
+  var srcEl = document.getElementById("source");
+  if (P.source) srcEl.textContent = "来源:" + P.source; else srcEl.style.display = "none";
+
+  // ── 布局常量(字幕带 y∈[1418,1562] 禁入:轴底 1350,余量 68px) ──
+  var SPINE_X = 200, TOP_Y = 470, SPAN = 880;
+  var slot = SPAN / n;
+  var nodeY = events.map(function (_, i) { return TOP_Y + slot * i + slot / 2; });
+
+  var track = document.getElementById("track");
+  track.style.top = TOP_Y + "px";
+  track.style.height = SPAN + "px";
+  var spine = document.getElementById("spine");
+  spine.style.top = TOP_Y + "px";
+  var playhead = document.getElementById("playhead");
+  playhead.style.top = (TOP_Y - 15) + "px";
+
+  // ── 节点 DOM ──
+  var nodesEl = document.getElementById("nodes");
+  var dots = [], halos = [], ticks = [], cards = [];
+  events.forEach(function (ev, i) {
+    var y = nodeY[i];
+
+    var halo = document.createElement("div");
+    halo.className = "halo";
+    halo.style.left = (SPINE_X - 28) + "px";
+    halo.style.top = (y - 28) + "px";
+    nodesEl.appendChild(halo); halos.push(halo);
+
+    var dot = document.createElement("div");
+    dot.className = "dot";
+    dot.style.left = (SPINE_X - 13) + "px";
+    dot.style.top = (y - 13) + "px";
+    nodesEl.appendChild(dot); dots.push(dot);
+
+    var tick = document.createElement("div");
+    tick.className = "tick";
+    tick.style.left = (SPINE_X + 14) + "px";
+    tick.style.top = (y - 1) + "px";
+    nodesEl.appendChild(tick); ticks.push(tick);
+
+    var card = document.createElement("div");
+    card.className = "card" + (compact ? " compact" : "");
+    card.style.top = y + "px";
+    var timeEl = document.createElement("div");
+    timeEl.className = "time";
+    timeEl.textContent = ev.time;
+    var textEl = document.createElement("div");
+    textEl.className = "text";
+    textEl.textContent = ev.text;
+    card.appendChild(timeEl);
+    card.appendChild(textEl);
+    nodesEl.appendChild(card); cards.push(card);
+  });
+
+  // ── 动画编排(全部 WAAPI fill:"both",渲染器逐帧 seek) ──
+  var EASE = "cubic-bezier(0.16, 1, 0.3, 1)";
+  var SPRING = "cubic-bezier(0.34, 1.56, 0.64, 1)";
+  function add(el, kf, opts) {
+    opts.fill = "both";
+    el.animate(kf, opts);
+  }
+
+  // 0.0-0.75s: 角标 / kicker / 标题错峰入场
+  document.querySelectorAll(".corner").forEach(function (c, i) {
+    add(c, [{ opacity: 0 }, { opacity: 0.35 }], { duration: 700, delay: i * 90, easing: "ease-out" });
+  });
+  add(document.getElementById("kicker"),
+    [{ opacity: 0, transform: "translateY(30px)" }, { opacity: 1, transform: "translateY(0)" }],
+    { duration: 500, easing: EASE });
+  add(document.getElementById("title"),
+    [{ opacity: 0, transform: "translateY(40px)" }, { opacity: 1, transform: "translateY(0)" }],
+    { duration: 600, delay: 150, easing: EASE });
+  add(document.getElementById("badge"),
+    [{ opacity: 0 }, { opacity: 1 }],
+    { duration: 500, delay: 600, easing: EASE });
+  add(srcEl, [{ opacity: 0 }, { opacity: 0.8 }], { duration: 500, delay: 800, easing: "ease-out" });
+
+  // 主轴生长窗口:0.9s 起,时长随时长自适应(1.6-2.6s)
+  var SS = 0.9;
+  var SD = Math.min(Math.max(D * 0.28, 1.6), 2.6);
+  var SPINE_EASE = "cubic-bezier(0.6, 0.05, 0.2, 1)";
+
+  // cubic-bezier(0.6,0.05,0.2,1) 数值求逆:给定纵向进度 yTarget,求时间进度 x
+  // (保证节点激活时刻与播放头/亮轨到达该位置严格同步)
+  function easeTimeAt(yTarget) {
+    var cx1 = 0.6, cy1 = 0.05, cx2 = 0.2, cy2 = 1;
+    function bez(t, c1, c2) {
+      var u = 1 - t;
+      return 3 * u * u * t * c1 + 3 * u * t * t * c2 + t * t * t;
+    }
+    var lo = 0, hi = 1, t = yTarget;
+    for (var k = 0; k < 24; k++) {
+      t = (lo + hi) / 2;
+      if (bez(t, cy1, cy2) < yTarget) lo = t; else hi = t;
+    }
+    return bez(t, cx1, cx2);
+  }
+
+  // 亮轨向下生长(精致小动作:连线绘制)
+  add(spine,
+    [{ height: "0px" }, { height: SPAN + "px" }],
+    { duration: Math.round(SD * 1000), delay: Math.round(SS * 1000), easing: SPINE_EASE });
+
+  // 播放头:同步行进,到达末端后淡出
+  playhead.animate(
+    [{ opacity: 0 }, { opacity: 1, offset: 0.06 }, { opacity: 1, offset: 0.92 }, { opacity: 0 }],
+    { duration: Math.round(SD * 1000) + 400, delay: Math.round(SS * 1000), fill: "both", easing: "ease-out" });
+  add(playhead,
+    [{ transform: "translateY(0px)" }, { transform: "translateY(" + SPAN + "px)" }],
+    { duration: Math.round(SD * 1000), delay: Math.round(SS * 1000), easing: SPINE_EASE });
+
+  // 节点在播放头经过时逐个激活:光环脉冲 → 圆点弹跳 → 短线绘制 → 卡片划入
+  events.forEach(function (_, i) {
+    var frac = n === 1 ? 0.5 : (i + 0.5) / n;
+    var t = SS + SD * easeTimeAt(frac); // 播放头到达该节点的时刻(秒)
+    var ms = Math.round(t * 1000);
+
+    add(dots[i],
+      [{ opacity: 0, transform: "scale(0)" },
+       { opacity: 1, transform: "scale(1.35)", offset: 0.6 },
+       { opacity: 1, transform: "scale(1)" }],
+      { duration: 420, delay: ms, easing: SPRING });
+    add(halos[i],
+      [{ opacity: 0, transform: "scale(0.5)" },
+       { opacity: 0.9, transform: "scale(0.7)", offset: 0.18 },
+       { opacity: 0, transform: "scale(1.8)" }],
+      { duration: 700, delay: ms, easing: "ease-out" });
+    add(ticks[i],
+      [{ width: "0px" }, { width: "60px" }],
+      { duration: 300, delay: ms + 80, easing: EASE });
+    add(cards[i],
+      [{ opacity: 0, transform: "translate(70px, -50%)" },
+       { opacity: 1, transform: "translate(0, -50%)" }],
+      { duration: 520, delay: ms + 120, easing: EASE });
+  });
+
+  // 全程:辉光呼吸(长动画模拟缓慢起伏)
+  add(document.getElementById("glow"),
+    [{ opacity: 0.07 }, { opacity: 0.15 }, { opacity: 0.07 }],
+    { duration: Math.round(D * 1000), easing: "ease-in-out" });
+
+  // ── 计数徽章(__seek 驱动,确定性):0.6s 起 0.9s 滚到 n ──
+  var badgeEl = document.getElementById("badge");
+  var COUNT_FROM = 0.6, COUNT_DUR = 0.9;
+  window.__seek = function (t) {
+    var p = Math.min(Math.max((t - COUNT_FROM) / COUNT_DUR, 0), 1);
+    var eased = 1 - Math.pow(1 - p, 3);
+    var v = Math.round(n * eased);
+    badgeEl.innerHTML = "共 <b>" + v + "</b> 个关键节点";
+  };
+  window.__seek(0);
+})();
+</script>
+</body>
+</html>

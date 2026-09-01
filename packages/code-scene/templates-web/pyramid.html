@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>pyramid · 金字塔层级</title>
+<style id="theme-vars"></style>
+<style>
+  html, body { margin: 0; width: 1080px; height: 1920px; overflow: hidden; }
+  body {
+    background: var(--bg, #0f1b2d);
+    font-family: var(--font-display, "Noto Sans CJK SC", "Microsoft YaHei", sans-serif);
+    position: relative;
+  }
+  /* 网格底(纯 CSS 渐变网格,token 驱动) */
+  .grid-bg {
+    position: absolute; inset: 0;
+    background-image:
+      linear-gradient(var(--bg-grid, rgba(148,163,184,.05)) 1px, transparent 1px),
+      linear-gradient(90deg, var(--bg-grid, rgba(148,163,184,.05)) 1px, transparent 1px);
+    background-size: 108px 108px;
+  }
+  /* 中心辉光(呼吸) */
+  .glow {
+    position: absolute; left: 460px; top: 900px; width: 900px; height: 900px;
+    transform: translate(-50%, -50%);
+    background: radial-gradient(circle, var(--accent, #3b82f6) 0%, transparent 60%);
+    opacity: .12; pointer-events: none;
+  }
+  .kicker {
+    position: absolute; top: 120px; left: 96px;
+    font-size: 28px; letter-spacing: 6px; color: var(--accent, #3b82f6);
+    border: 1px solid color-mix(in srgb, var(--accent, #3b82f6) 45%, transparent);
+    padding: 10px 28px; border-radius: 999px; font-weight: 500;
+    white-space: nowrap;
+  }
+  .title {
+    position: absolute; top: 190px; left: 96px;
+    font-size: 64px; font-weight: 700; color: var(--text, #f1f5f9);
+    white-space: nowrap;
+  }
+  .count-badge {
+    position: absolute; top: 300px; left: 96px;
+    font-size: 34px; color: var(--text-sub, #94a3b8); font-weight: 500;
+  }
+  .count-badge b { color: var(--accent, #3b82f6); font-size: 54px; font-weight: 900; }
+
+  /* 金字塔层:wrapper 定层位,inner 承载脉冲,SVG 画梯形 */
+  .layer { position: absolute; }
+  .layer .inner { position: absolute; inset: 0; transform-origin: center bottom; }
+  .layer svg { position: absolute; inset: 0; overflow: visible; }
+  /* 层内主文本(自动适宽) */
+  .layer .lv-text {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; color: #fff; text-align: center;
+    text-shadow: 0 2px 12px rgba(2,8,23,.55);
+    white-space: nowrap;
+  }
+  /* 右侧释义标签(desc):竖向 accent 条 + 文本,与层中线对齐 */
+  .side-label {
+    position: absolute;
+    font-size: 24px; line-height: 1.5; color: var(--text-sub, #94a3b8);
+    border-left: 3px solid var(--accent, #3b82f6);
+    padding-left: 16px;
+    transform: translateY(-50%);
+  }
+  /* 塔尖辉光 */
+  .apex-glow {
+    position: absolute; width: 520px; height: 320px;
+    transform: translate(-50%, -50%);
+    background: radial-gradient(ellipse, var(--accent-2, #60a5fa) 0%, transparent 65%);
+    opacity: 0; pointer-events: none;
+  }
+
+  /* 角标(取景框语言) */
+  .corner { position: absolute; width: 64px; height: 64px; opacity: .35;
+    border-color: var(--accent, #3b82f6); border-style: solid; border-width: 0; }
+  .corner.tl { top: 56px; left: 56px; border-top-width: 4px; border-left-width: 4px; }
+  .corner.tr { top: 56px; right: 56px; border-top-width: 4px; border-right-width: 4px; }
+  .corner.bl { bottom: 56px; left: 56px; border-bottom-width: 4px; border-left-width: 4px; }
+  .corner.br { bottom: 56px; right: 56px; border-bottom-width: 4px; border-right-width: 4px; }
+
+  .source {
+    position: absolute; bottom: 170px; left: 96px;
+    font-size: 24px; color: var(--text-sub, #94a3b8); opacity: .8;
+    white-space: nowrap;
+  }
+</style>
+</head>
+<body>
+<div class="grid-bg"></div>
+<div class="glow" id="glow"></div>
+<div class="kicker" id="kicker"></div>
+<div class="title" id="title"></div>
+<div class="count-badge" id="badge"></div>
+<div class="apex-glow" id="apex-glow"></div>
+<div id="pyramid"></div>
+<div class="corner tl"></div><div class="corner tr"></div>
+<div class="corner bl"></div><div class="corner br"></div>
+<div class="source" id="source"></div>
+
+<script>
+(function () {
+  // 主题令牌注入(web-worker 契约)
+  document.getElementById("theme-vars").textContent = window.__THEME_CSS__ || "";
+
+  const P = window.__PARAMS__ || {};
+  const DURATION = typeof P.duration === "number" && isFinite(P.duration) ? P.duration : 8;
+  const MS = DURATION * 1000;
+
+  // ── 数据:levels 自下而上(数组末位 = 塔尖),兼容 string / {text,desc} ──
+  const raw = (P.levels || []).slice(0, 5);
+  const levels = raw.map((lv) =>
+    typeof lv === "string" ? { text: lv } : { text: lv.text || "", desc: lv.desc });
+  const n = Math.max(2, levels.length);
+  while (levels.length < n) levels.push({ text: "" });
+
+  document.getElementById("kicker").textContent = P.kicker || "层级拆解";
+  document.getElementById("title").textContent = P.title || "金字塔结构";
+  document.getElementById("source").textContent = P.source ? "来源:" + P.source : "";
+  if (!P.kicker) document.getElementById("kicker").style.display = "none";
+  if (!P.source) document.getElementById("source").style.display = "none";
+
+  // ── 几何:金字塔中心 x=460,右侧留释义标签列;整体避让字幕带(y≤1400) ──
+  const CX = 460, MAX_W = 600, MIN_W = 300, GAP = 18;
+  const layerH = Math.min(168, Math.floor(880 / n));
+  const totalH = n * layerH + (n - 1) * GAP;
+  // 垂直分布区 [440, 1380],偏上留白给标题区
+  const topY = Math.max(430, 440 + (940 - totalH) * 0.35);
+
+  const widths = [], topWs = [];
+  for (let i = 0; i < n; i++) {
+    widths.push(n > 1 ? MAX_W - ((MAX_W - MIN_W) * i) / (n - 1) : MAX_W);
+  }
+  for (let i = 0; i < n; i++) {
+    topWs.push(i < n - 1 ? widths[i + 1] : Math.round(widths[i] * 0.55));
+  }
+
+  const pyramidEl = document.getElementById("pyramid");
+  const NS = "http://www.w3.org/2000/svg";
+  const layerEls = [], innerEls = [];
+
+  levels.forEach((lv, i) => {
+    const w = widths[i], tw = topWs[i];
+    const layerTop = topY + (n - 1 - i) * (layerH + GAP); // i=0 塔底
+    const left = CX - w / 2 - 2;
+    const W = w + 4, H = layerH;
+
+    const layer = document.createElement("div");
+    layer.className = "layer";
+    layer.style.cssText = `left:${left}px;top:${layerTop}px;width:${W}px;height:${H}px;`;
+
+    const inner = document.createElement("div");
+    inner.className = "inner";
+
+    // 梯形(塔尖层顶宽 55%,其余层顶宽 = 上一层底宽,轮廓连续)
+    const alpha = n > 1 ? 24 + (54 * i) / (n - 1) : 50; // 底 24% → 尖 78% 渐浓
+    const svg = document.createElementNS(NS, "svg");
+    svg.setAttribute("width", W); svg.setAttribute("height", H);
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+    const path = document.createElementNS(NS, "path");
+    path.setAttribute("d",
+      `M 2 ${H - 2} L ${W - 2} ${H - 2} L ${(W + tw) / 2} 2 L ${(W - tw) / 2} 2 Z`);
+    path.style.fill = `color-mix(in srgb, var(--accent, #3b82f6) ${alpha}%, transparent)`;
+    path.style.stroke = "var(--accent, #3b82f6)";
+    path.style.strokeWidth = "2.5";
+    path.style.strokeLinejoin = "round";
+    svg.appendChild(path);
+    // 顶缘高光
+    const hl = document.createElementNS(NS, "line");
+    hl.setAttribute("x1", (W - tw) / 2 + 4); hl.setAttribute("x2", (W + tw) / 2 - 4);
+    hl.setAttribute("y1", 4); hl.setAttribute("y2", 4);
+    hl.style.stroke = "rgba(255,255,255,.28)"; hl.style.strokeWidth = "2";
+    svg.appendChild(hl);
+    inner.appendChild(svg);
+
+    // 层内主文本:按梯形中线宽度适配字号
+    const midW = (w + tw) / 2;
+    const len = Math.max(1, Array.from(lv.text).length);
+    const fs = Math.max(20, Math.min(42, layerH * 0.34, (midW - 56) / len));
+    const txt = document.createElement("div");
+    txt.className = "lv-text";
+    txt.style.fontSize = fs + "px";
+    txt.textContent = lv.text;
+    inner.appendChild(txt);
+
+    layer.appendChild(inner);
+    pyramidEl.appendChild(layer);
+    layerEls.push(layer); innerEls.push(inner);
+
+    // 右侧释义标签(desc)
+    if (lv.desc) {
+      const lab = document.createElement("div");
+      lab.className = "side-label";
+      const lx = CX + w / 2 + 28;
+      lab.style.left = lx + "px";
+      lab.style.top = layerTop + layerH / 2 + "px";
+      lab.style.maxWidth = Math.max(80, 984 - lx) + "px";
+      lab.textContent = lv.desc;
+      lab.dataset.layer = String(i);
+      pyramidEl.appendChild(lab);
+    }
+  });
+
+  // 塔尖辉光定位
+  const apexTop = topY, apexH = layerH;
+  const apexGlow = document.getElementById("apex-glow");
+  apexGlow.style.left = CX + "px";
+  apexGlow.style.top = apexTop + apexH / 2 + "px";
+
+  // ── 动画时间轴(全部 WAAPI,deterministic seek) ──
+  const EASE = "cubic-bezier(0.16, 1, 0.3, 1)";
+  const SPRING = "cubic-bezier(0.34, 1.56, 0.64, 1)";
+  const add = (el, kf, opts) => el.animate(kf, { fill: "both", ...opts });
+
+  // 0.0-0.75s: kicker + 标题错峰淡入
+  add(document.getElementById("kicker"),
+    [{ opacity: 0, transform: "translateY(30px)" }, { opacity: 1, transform: "translateY(0)" }],
+    { duration: 500, easing: EASE });
+  add(document.getElementById("title"),
+    [{ opacity: 0, transform: "translateY(40px)" }, { opacity: 1, transform: "translateY(0)" }],
+    { duration: 600, delay: 150, easing: EASE });
+  add(document.getElementById("badge"),
+    [{ opacity: 0 }, { opacity: 1 }],
+    { duration: 500, delay: 900, easing: EASE });
+
+  // 0.8s 起:层级自底向上逐层弹簧落入(时长自适应,短镜头压缩错峰)
+  const BUILD_START = 800;
+  const stagger = n > 1
+    ? Math.min(500, Math.max(260, (MS * 0.55 - 1400) / (n - 1)))
+    : 0;
+  const lastLand = BUILD_START + (n - 1) * stagger + 650;
+  layerEls.forEach((layer, i) => {
+    add(layer,
+      [{ opacity: 0, transform: "translateY(70px) scale(.85)" },
+       { opacity: 1, transform: "translateY(0) scale(1)" }],
+      { duration: 650, delay: BUILD_START + i * stagger, easing: SPRING });
+  });
+  // 释义标签随层错峰揭示
+  document.querySelectorAll(".side-label").forEach((lab) => {
+    const i = Number(lab.dataset.layer);
+    add(lab,
+      [{ opacity: 0, transform: "translateY(-50%) translateX(24px)" },
+       { opacity: 1, transform: "translateY(-50%) translateX(0)" }],
+      { duration: 450, delay: BUILD_START + i * stagger + 350, easing: EASE });
+  });
+
+  // 塔尖落成后:脉冲强调 + 辉光点亮(收尾强调)
+  const pulseDelay = Math.min(lastLand + 250, MS * 0.7);
+  add(innerEls[n - 1],
+    [{ transform: "scale(1)" }, { transform: "scale(1.07)", offset: 0.45 }, { transform: "scale(1)" }],
+    { duration: 550, delay: pulseDelay, easing: "ease-in-out" });
+  add(apexGlow,
+    [{ opacity: 0 }, { opacity: 0.32, offset: 0.4 }, { opacity: 0.22 }],
+    { duration: 900, delay: pulseDelay, easing: "ease-out" });
+
+  // 全程:背景辉光呼吸
+  add(document.getElementById("glow"),
+    [{ opacity: 0.09 }, { opacity: 0.16 }, { opacity: 0.09 }],
+    { duration: Math.round(MS), easing: "ease-in-out" });
+
+  // ── 计数徽章(__seek 驱动,确定性):跟随搭建进度 ──
+  window.__seek = function (t) {
+    const ms = t * 1000;
+    let v = 0;
+    for (let i = 0; i < n; i++) {
+      if (ms >= BUILD_START + i * stagger + 200) v = i + 1;
+    }
+    document.getElementById("badge").innerHTML = "共 <b>" + v + "</b> 层结构";
+  };
+  window.__seek(0);
+})();
+</script>
+</body>
+</html>

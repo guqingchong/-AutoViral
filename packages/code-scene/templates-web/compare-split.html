@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>compare-split · 对比对照(深色数据科技)</title>
+<style>
+  html, body { margin: 0; width: 1080px; height: 1920px; overflow: hidden; }
+  body {
+    background: var(--bg, #0f1b2d);
+    font-family: var(--font-display, "Noto Sans CJK SC", "Microsoft YaHei", sans-serif);
+    position: relative;
+  }
+  /* 网格底(纯 CSS 渐变网格,token 驱动) */
+  .grid-bg {
+    position: absolute; inset: 0;
+    background-image:
+      linear-gradient(var(--bg-grid, rgba(148,163,184,.05)) 1px, transparent 1px),
+      linear-gradient(90deg, var(--bg-grid, rgba(148,163,184,.05)) 1px, transparent 1px);
+    background-size: 108px 108px;
+  }
+  /* 中央辉光(呼吸) */
+  .glow {
+    position: absolute; left: 50%; top: 850px; width: 1000px; height: 1000px;
+    transform: translate(-50%, -50%);
+    background: radial-gradient(circle, var(--accent, #3b82f6) 0%, transparent 60%);
+    opacity: .12; pointer-events: none;
+  }
+  /* 角标(取景框语言) */
+  .corner { position: absolute; width: 64px; height: 64px; opacity: .35;
+    border-color: var(--accent, #3b82f6); border-style: solid; border-width: 0; }
+  .corner.tl { top: 56px; left: 56px; border-top-width: 4px; border-left-width: 4px; }
+  .corner.tr { top: 56px; right: 56px; border-top-width: 4px; border-right-width: 4px; }
+  .corner.bl { bottom: 56px; left: 56px; border-bottom-width: 4px; border-left-width: 4px; }
+  .corner.br { bottom: 56px; right: 56px; border-bottom-width: 4px; border-right-width: 4px; }
+
+  .kicker {
+    position: absolute; top: 120px; left: 96px;
+    font-size: 28px; letter-spacing: 6px; color: var(--accent, #3b82f6);
+    border: 1px solid color-mix(in srgb, var(--accent, #3b82f6) 45%, transparent);
+    padding: 10px 28px; border-radius: 999px; font-weight: 500;
+    white-space: nowrap;
+  }
+  .title {
+    position: absolute; top: 190px; left: 96px; right: 96px;
+    font-size: 64px; font-weight: 700; color: var(--text, #f1f5f9);
+    line-height: 1.25;
+  }
+
+  /* ── 双栏玻璃拟态面板:左 accent(主推)/右 muted(对照) ── */
+  .panel {
+    position: absolute; top: 400px; width: 408px; height: 880px;
+    box-sizing: border-box; padding: 40px 34px;
+    border-radius: var(--radius-card, 24px);
+    backdrop-filter: blur(12px);
+    box-shadow: var(--shadow-lg, 0 24px 64px rgba(2,8,23,.55));
+    overflow: hidden;
+  }
+  .panel.left {
+    left: 96px;
+    background: linear-gradient(180deg,
+      color-mix(in srgb, var(--accent, #3b82f6) 10%, transparent) 0%,
+      color-mix(in srgb, var(--text, #f1f5f9) 5%, transparent) 45%);
+    border: 1px solid color-mix(in srgb, var(--accent, #3b82f6) 55%, transparent);
+  }
+  .panel.right {
+    left: 576px;
+    background: color-mix(in srgb, var(--text, #f1f5f9) 5%, transparent);
+    border: 1px solid color-mix(in srgb, var(--text, #f1f5f9) 14%, transparent);
+  }
+  /* 面板顶部 accent 光带 */
+  .panel .topbar {
+    position: absolute; top: 0; left: 0; right: 0; height: 6px;
+  }
+  .panel.left .topbar {
+    background: linear-gradient(90deg, var(--accent, #3b82f6), var(--accent-2, #60a5fa));
+  }
+  .panel.right .topbar {
+    background: color-mix(in srgb, var(--text-sub, #94a3b8) 35%, transparent);
+  }
+  .panel .head {
+    display: flex; align-items: center; justify-content: center; gap: 16px;
+    margin-top: 6px;
+  }
+  .panel .head .tag {
+    width: 20px; height: 20px; border-radius: 6px; transform: rotate(45deg);
+    flex: none;
+  }
+  .panel.left .head .tag {
+    background: var(--accent, #3b82f6);
+    box-shadow: 0 0 18px var(--accent, #3b82f6);
+  }
+  .panel.right .head .tag {
+    background: var(--text-sub, #94a3b8); opacity: .7;
+  }
+  .panel .head .label {
+    font-size: 40px; font-weight: 800; letter-spacing: 2px;
+  }
+  .panel.left .head .label { color: var(--accent-2, #60a5fa); }
+  .panel.right .head .label { color: var(--text-sub, #94a3b8); }
+
+  .panel ul { margin: 34px 0 0; padding: 0; list-style: none; }
+  .panel li {
+    position: relative; padding-left: 40px;
+    font-size: 29px; line-height: 1.55; color: var(--text, #f1f5f9);
+    margin-top: 26px;
+  }
+  .panel li::before {
+    content: ""; position: absolute; left: 4px; top: 20px;
+    width: 13px; height: 13px; transform: rotate(45deg);
+  }
+  .panel.left li::before {
+    background: var(--accent, #3b82f6);
+    box-shadow: 0 0 12px color-mix(in srgb, var(--accent, #3b82f6) 70%, transparent);
+  }
+  .panel.right li::before {
+    background: color-mix(in srgb, var(--text-sub, #94a3b8) 70%, transparent);
+  }
+  .panel.right li { color: color-mix(in srgb, var(--text, #f1f5f9) 78%, transparent); }
+
+  /* 中缝分隔线 + VS 徽章 */
+  .divider {
+    position: absolute; left: 539px; top: 460px; width: 2px; height: 760px;
+    background: linear-gradient(180deg, transparent,
+      color-mix(in srgb, var(--text, #f1f5f9) 18%, transparent) 20%,
+      color-mix(in srgb, var(--text, #f1f5f9) 18%, transparent) 80%, transparent);
+    transform-origin: center top;
+  }
+  .vs {
+    position: absolute; left: 540px; top: 840px; transform: translate(-50%, -50%);
+    width: 104px; height: 104px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--accent-2, #60a5fa), var(--accent, #3b82f6));
+    box-shadow: 0 12px 44px color-mix(in srgb, var(--accent, #3b82f6) 55%, transparent),
+                inset 0 2px 10px rgba(255,255,255,.35);
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-size: 42px; font-weight: 900; letter-spacing: 1px;
+  }
+
+  /* 结论压底(安全区 y∈[1418,1562] 上方,单行 nowrap) */
+  .verdict {
+    position: absolute; top: 1330px; left: 96px; right: 96px;
+    text-align: center; font-size: 36px; font-weight: 700;
+    color: var(--text, #f1f5f9); white-space: nowrap;
+  }
+  .verdict b { color: var(--accent-2, #60a5fa); }
+
+  .source {
+    position: absolute; bottom: 170px; left: 96px;
+    font-size: 24px; color: var(--text-sub, #94a3b8); opacity: .8;
+    white-space: nowrap;
+  }
+</style>
+</head>
+<body>
+<div class="grid-bg"></div>
+<div class="glow" id="glow"></div>
+<div class="corner tl"></div><div class="corner tr"></div>
+<div class="corner bl"></div><div class="corner br"></div>
+<div class="kicker" id="kicker"></div>
+<div class="title" id="title"></div>
+
+<div class="panel left" id="panelL">
+  <div class="topbar"></div>
+  <div class="head"><span class="tag"></span><span class="label" id="labelL"></span></div>
+  <ul id="listL"></ul>
+</div>
+<div class="panel right" id="panelR">
+  <div class="topbar"></div>
+  <div class="head"><span class="tag"></span><span class="label" id="labelR"></span></div>
+  <ul id="listR"></ul>
+</div>
+<div class="divider" id="divider"></div>
+<div class="vs" id="vs">VS</div>
+
+<div class="verdict" id="verdict"></div>
+<div class="source" id="source"></div>
+
+<script>
+(function () {
+  // 主题令牌注入(web-worker 契约:__THEME_CSS__ 先于页面脚本写入)
+  const style = document.createElement("style");
+  style.textContent = window.__THEME_CSS__ || "";
+  document.head.appendChild(style);
+
+  const P = window.__PARAMS__ || {};
+  const DURATION = typeof P.duration === "number" && isFinite(P.duration) ? P.duration : 8;
+
+  // ── 数据(契约:left/right:{label, points[1-4]},与 Revideo 版一致) ──
+  const left = P.left || { label: "方案 A", points: [] };
+  const right = P.right || { label: "方案 B", points: [] };
+  const ptsL = (left.points || []).slice(0, 4);
+  const ptsR = (right.points || []).slice(0, 4);
+
+  const $ = (id) => document.getElementById(id);
+  if (P.kicker) $("kicker").textContent = P.kicker; else $("kicker").style.display = "none";
+  $("title").textContent = P.title || "";
+  $("labelL").textContent = left.label || "";
+  $("labelR").textContent = right.label || "";
+  if (P.source) $("source").textContent = "来源:" + P.source; else $("source").style.display = "none";
+  if (P.verdict) $("verdict").textContent = P.verdict; else $("verdict").style.display = "none";
+
+  const listL = $("listL"), listR = $("listR");
+  ptsL.forEach((t) => { const li = document.createElement("li"); li.textContent = t; listL.appendChild(li); });
+  ptsR.forEach((t) => { const li = document.createElement("li"); li.textContent = t; listR.appendChild(li); });
+
+  // ── 动画时间轴(全部 WAAPI fill:"both",渲染器逐帧 seek) ──
+  const EASE = (getComputedStyle(document.documentElement).getPropertyValue("--ease-out") || "").trim()
+    || "cubic-bezier(0.16, 1, 0.3, 1)";
+  const SPRING = "cubic-bezier(0.34, 1.56, 0.64, 1)";
+  const add = (el, kf, opts) => el.animate(kf, { fill: "both", ...opts });
+
+  // 0.0-0.75s: kicker + 标题错峰入场
+  if (P.kicker) add($("kicker"),
+    [{ opacity: 0, transform: "translateY(30px)" }, { opacity: 1, transform: "translateY(0)" }],
+    { duration: 500, easing: EASE });
+  add($("title"),
+    [{ opacity: 0, transform: "translateY(40px)" }, { opacity: 1, transform: "translateY(0)" }],
+    { duration: 600, delay: 150, easing: EASE });
+
+  // 0.5-1.5s: 双面板自两侧弹簧滑入(错峰 120ms)
+  add($("panelL"),
+    [{ opacity: 0, transform: "translateX(-160px)" }, { opacity: 1, transform: "translateX(0)" }],
+    { duration: 800, delay: 500, easing: SPRING });
+  add($("panelR"),
+    [{ opacity: 0, transform: "translateX(160px)" }, { opacity: 1, transform: "translateX(0)" }],
+    { duration: 800, delay: 620, easing: SPRING });
+
+  // 1.2s: 中缝分隔线自上而下绘制
+  add($("divider"),
+    [{ opacity: 0, transform: "scaleY(0)" }, { opacity: 1, transform: "scaleY(1)" }],
+    { duration: 600, delay: 1200, easing: EASE });
+
+  // 1.4s: VS 徽章弹簧入场
+  add($("vs"),
+    [{ opacity: 0, transform: "translate(-50%,-50%) scale(0.2)" },
+     { opacity: 1, transform: "translate(-50%,-50%) scale(1.12)", offset: 0.7 },
+     { opacity: 1, transform: "translate(-50%,-50%) scale(1)" }],
+    { duration: 650, delay: 1400, easing: SPRING });
+
+  // 1.8s 起:逐项成对揭示(左右第 i 条同拍,行间错峰 320ms,对照感)
+  const lisL = listL.querySelectorAll("li"), lisR = listR.querySelectorAll("li");
+  const maxN = Math.max(lisL.length, lisR.length);
+  const PAIR_START = 1800, PAIR_STEP = 320;
+  for (let i = 0; i < maxN; i++) {
+    const d = PAIR_START + i * PAIR_STEP;
+    if (lisL[i]) add(lisL[i],
+      [{ opacity: 0, transform: "translateX(-28px)" }, { opacity: 1, transform: "translateX(0)" }],
+      { duration: 420, delay: d, easing: EASE });
+    if (lisR[i]) add(lisR[i],
+      [{ opacity: 0, transform: "translateX(28px)" }, { opacity: 1, transform: "translateX(0)" }],
+      { duration: 420, delay: d, easing: EASE });
+  }
+
+  // 全部条目就位后:VS 徽章脉冲强调(精致小动作)
+  const vsPulseAt = PAIR_START + maxN * PAIR_STEP + 200;
+  add($("vs"),
+    [{ transform: "translate(-50%,-50%) scale(1)" },
+     { transform: "translate(-50%,-50%) scale(1.14)" },
+     { transform: "translate(-50%,-50%) scale(1)" }],
+    { duration: 500, delay: vsPulseAt, easing: "ease-in-out" });
+
+  // 结论压底淡入(若有)
+  if (P.verdict) add($("verdict"),
+    [{ opacity: 0, transform: "translateY(20px)" }, { opacity: 1, transform: "translateY(0)" }],
+    { duration: 500, delay: vsPulseAt + 300, easing: EASE });
+
+  // 来源标注淡入
+  if (P.source) add($("source"),
+    [{ opacity: 0 }, { opacity: 0.8 }],
+    { duration: 500, delay: 1000, easing: "ease-out" });
+
+  // 全程:辉光呼吸
+  add($("glow"),
+    [{ opacity: 0.08 }, { opacity: 0.16 }, { opacity: 0.08 }],
+    { duration: Math.round(DURATION * 1000), easing: "ease-in-out" });
+})();
+</script>
+</body>
+</html>

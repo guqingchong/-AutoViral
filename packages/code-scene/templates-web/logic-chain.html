@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>logic-chain · 逻辑链条</title>
+<!-- 渲染器经 addInitScript 注入 window.__THEME_CSS__,先挂到页首 -->
+<style id="theme-vars"></style>
+<style>
+  html, body { margin: 0; width: 1080px; height: 1920px; overflow: hidden; }
+  body {
+    background: var(--bg, #0f1b2d);
+    font-family: var(--font-display, "Noto Sans CJK SC", "Microsoft YaHei", sans-serif);
+    position: relative;
+  }
+  /* 网格底(纯 CSS 渐变网格) */
+  .grid-bg {
+    position: absolute; inset: 0;
+    background-image:
+      linear-gradient(var(--bg-grid, rgba(148,163,184,.05)) 1px, transparent 1px),
+      linear-gradient(90deg, var(--bg-grid, rgba(148,163,184,.05)) 1px, transparent 1px);
+    background-size: 108px 108px;
+  }
+  /* 链条区中心辉光(呼吸) */
+  .glow {
+    position: absolute; left: 50%; top: 900px; width: 1000px; height: 1000px;
+    transform: translate(-50%, -50%);
+    background: radial-gradient(circle, var(--accent, #3b82f6) 0%, transparent 60%);
+    opacity: .12; pointer-events: none;
+  }
+  .kicker {
+    position: absolute; top: 120px; left: 96px;
+    font-size: 28px; letter-spacing: 6px; color: var(--accent, #3b82f6);
+    border: 1px solid color-mix(in srgb, var(--accent, #3b82f6) 45%, transparent);
+    padding: 10px 28px 10px 34px; border-radius: 999px; font-weight: 500;
+    white-space: nowrap;
+  }
+  .title {
+    position: absolute; top: 190px; left: 96px; right: 96px;
+    font-size: 64px; font-weight: 700; color: var(--text, #f1f5f9);
+    line-height: 1.3; white-space: nowrap;
+  }
+  /* 标题下渐变基线 */
+  .baseline {
+    position: absolute; top: 300px; left: 96px;
+    width: 0; height: 8px; border-radius: 4px;
+    background: linear-gradient(90deg, var(--accent, #3b82f6), var(--accent-2, #60a5fa));
+    opacity: .9;
+  }
+
+  /* SVG 连线层 */
+  svg.links { position: absolute; inset: 0; width: 1080px; height: 1920px; }
+  svg.links .track { stroke: var(--text-sub, #94a3b8); stroke-width: 2; fill: none; opacity: .25; }
+  svg.links .glowline { stroke: var(--accent, #3b82f6); stroke-width: 12; fill: none; opacity: .18; }
+  svg.links .main { stroke: var(--accent, #3b82f6); stroke-width: 5; fill: none; opacity: .95; }
+  svg.links polygon { fill: var(--accent, #3b82f6); }
+
+  /* 节点卡片(毛玻璃 + 左侧渐变条) */
+  .node {
+    position: absolute; width: 860px; height: 150px; box-sizing: border-box;
+    background: color-mix(in srgb, var(--text, #f1f5f9) 6%, transparent);
+    backdrop-filter: blur(12px);
+    border: 1px solid color-mix(in srgb, var(--text, #f1f5f9) 12%, transparent);
+    border-radius: var(--radius-card, 24px);
+    box-shadow: var(--shadow-lg, 0 24px 64px rgba(2,8,23,.55));
+    display: flex; align-items: center; gap: 30px;
+    padding: 0 44px 0 36px;
+    opacity: 0;
+  }
+  .node::before {
+    content: ""; position: absolute; left: 0; top: 28px; bottom: 28px; width: 6px;
+    border-radius: 3px;
+    background: linear-gradient(180deg, var(--accent-2, #60a5fa), var(--accent, #3b82f6));
+  }
+  .node .num {
+    flex: none; width: 76px; height: 76px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--accent-2, #60a5fa), var(--accent, #3b82f6));
+    box-shadow: 0 8px 28px color-mix(in srgb, var(--accent, #3b82f6) 45%, transparent),
+                inset 0 2px 8px rgba(255,255,255,.35);
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-size: 34px; font-weight: 900; letter-spacing: 1px;
+  }
+  .node .txt { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .node .label {
+    font-size: 24px; font-weight: 500; letter-spacing: 4px;
+    color: var(--accent-2, #60a5fa);
+  }
+  .node .text {
+    font-size: 40px; font-weight: 700; color: var(--text, #f1f5f9);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  /* 激活脉冲光环(挂在节点外层,避免 transform 冲突) */
+  .halo {
+    position: absolute; width: 860px; height: 150px; border-radius: var(--radius-card, 24px);
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent, #3b82f6) 55%, transparent),
+                0 0 60px color-mix(in srgb, var(--accent, #3b82f6) 50%, transparent);
+    opacity: 0; pointer-events: none;
+  }
+
+  /* 角标(取景框语言) */
+  .corner { position: absolute; width: 64px; height: 64px; opacity: .35;
+    border-color: var(--accent, #3b82f6); border-style: solid; border-width: 0; }
+  .corner.tl { top: 56px; left: 56px; border-top-width: 4px; border-left-width: 4px; }
+  .corner.tr { top: 56px; right: 56px; border-top-width: 4px; border-right-width: 4px; }
+  .corner.bl { bottom: 56px; left: 56px; border-bottom-width: 4px; border-left-width: 4px; }
+  .corner.br { bottom: 56px; right: 56px; border-bottom-width: 4px; border-right-width: 4px; }
+
+  .source {
+    position: absolute; bottom: 170px; left: 96px;
+    font-size: 24px; color: var(--text-sub, #94a3b8); opacity: .8;
+    white-space: nowrap;
+  }
+</style>
+</head>
+<body>
+<div class="grid-bg"></div>
+<div class="glow" id="glow"></div>
+<div class="kicker" id="kicker"></div>
+<div class="title" id="title"></div>
+<div class="baseline" id="baseline"></div>
+<svg class="links" id="links" viewBox="0 0 1080 1920"></svg>
+<div id="chain"></div>
+<div class="corner tl"></div><div class="corner tr"></div>
+<div class="corner bl"></div><div class="corner br"></div>
+<div class="source" id="source"></div>
+
+<script>
+(function () {
+  document.getElementById("theme-vars").textContent = window.__THEME_CSS__ || "";
+
+  var P = window.__PARAMS__ || {};
+  var D = typeof P.duration === "number" && isFinite(P.duration) ? P.duration : 6;
+
+  // ── 数据(契约:chain:[{text,label?}] 2-4 节) ──
+  var raw = Array.isArray(P.chain) ? P.chain : [];
+  var items = raw.slice(0, 4).map(function (it) {
+    return typeof it === "string" ? { text: it } : (it || {});
+  }).filter(function (it) { return it.text; });
+  if (items.length < 2) items = [{ text: "政策落地" }, { text: "预期改善" }, { text: "价格回升" }];
+  var n = items.length;
+
+  var kickerEl = document.getElementById("kicker");
+  var titleEl = document.getElementById("title");
+  var srcEl = document.getElementById("source");
+  if (P.kicker) kickerEl.textContent = P.kicker; else kickerEl.style.display = "none";
+  titleEl.textContent = P.title || "";
+  if (P.source) srcEl.textContent = "来源:" + P.source; else srcEl.style.display = "none";
+
+  // ── 布局:链条区 y∈[400,1400],避让字幕带 y∈[1418,1562] ──
+  var AREA_TOP = 400, AREA_BOT = 1400;
+  var NODE_H = 150, NODE_W = 860, NODE_X = (1080 - NODE_W) / 2; // = 110 ≥ 96 边距
+  var GAP = n > 1 ? Math.min(160, Math.max(70, (AREA_BOT - AREA_TOP - n * NODE_H) / (n - 1))) : 0;
+  var totalH = n * NODE_H + (n - 1) * GAP;
+  var top0 = AREA_TOP + Math.max(0, (AREA_BOT - AREA_TOP - totalH)) / 2;
+
+  var chainEl = document.getElementById("chain");
+  var svg = document.getElementById("links");
+  var NS = "http://www.w3.org/2000/svg";
+  var nodeEls = [], haloEls = [];
+
+  items.forEach(function (it, i) {
+    var y = top0 + i * (NODE_H + GAP);
+
+    var halo = document.createElement("div");
+    halo.className = "halo";
+    halo.style.left = NODE_X + "px"; halo.style.top = y + "px";
+    chainEl.appendChild(halo);
+    haloEls.push(halo);
+
+    var node = document.createElement("div");
+    node.className = "node";
+    node.style.left = NODE_X + "px"; node.style.top = y + "px";
+    var inner = '<div class="num">' + String(i + 1).padStart(2, "0") + "</div>" +
+      '<div class="txt">' +
+      (it.label ? '<div class="label"></div>' : "") +
+      '<div class="text"></div></div>';
+    node.innerHTML = inner;
+    if (it.label) node.querySelector(".label").textContent = it.label;
+    node.querySelector(".text").textContent = it.text;
+    chainEl.appendChild(node);
+    nodeEls.push(node);
+  });
+
+  // 连线:节点底缘中点 → 下一节点顶缘(辉光粗线 + 主线双层,箭头单独淡入)
+  var arrows = [];
+  for (var i = 0; i < n - 1; i++) {
+    var y1 = top0 + i * (NODE_H + GAP) + NODE_H + 6;
+    var y2 = top0 + (i + 1) * (NODE_H + GAP) - 16;
+    var dAttr = "M 540 " + y1 + " L 540 " + y2;
+    var track = document.createElementNS(NS, "path");
+    track.setAttribute("d", dAttr); track.setAttribute("class", "track");
+    svg.appendChild(track);
+    var glow = document.createElementNS(NS, "path");
+    glow.setAttribute("d", dAttr); glow.setAttribute("class", "glowline");
+    svg.appendChild(glow);
+    var main = document.createElementNS(NS, "path");
+    main.setAttribute("d", dAttr); main.setAttribute("class", "main");
+    svg.appendChild(main);
+    var tri = document.createElementNS(NS, "polygon");
+    tri.setAttribute("points", "540," + (y2 + 22) + " 526," + (y2 - 2) + " 554," + (y2 - 2));
+    tri.style.opacity = "0";
+    svg.appendChild(tri);
+    arrows.push({ glow: glow, main: main, tri: tri });
+  }
+
+  // ── 动画时间轴(全部 WAAPI fill:"both",确定性 seek) ──
+  var easeOut = (getComputedStyle(document.documentElement).getPropertyValue("--ease-out") || "").trim()
+    || "cubic-bezier(0.16, 1, 0.3, 1)";
+  var SPRING = "cubic-bezier(0.34, 1.56, 0.64, 1)";
+  var add = function (el, kf, opts) { el.animate(kf, Object.assign({ fill: "both" }, opts)); };
+
+  // 0.0-0.8s: kicker / 标题 / 基线 错峰入场
+  add(kickerEl,
+    [{ opacity: 0, transform: "translateY(30px)" }, { opacity: 1, transform: "translateY(0)" }],
+    { duration: 500, easing: easeOut });
+  add(titleEl,
+    [{ opacity: 0, transform: "translateY(40px)" }, { opacity: 1, transform: "translateY(0)" }],
+    { duration: 600, delay: 150, easing: easeOut });
+  add(document.getElementById("baseline"),
+    [{ width: "0px" }, { width: "360px" }],
+    { duration: 700, delay: 400, easing: easeOut });
+  srcEl.animate([{ opacity: 0 }, { opacity: 0.8 }], { duration: 500, delay: 800, fill: "both", easing: "ease-out" });
+
+  // 链条时间窗:0.8s 起,末段留 ≥1.2s 完整信息态
+  var chainStart = 800;
+  var chainEnd = Math.min(D * 0.72, D - 1.4) * 1000;
+  var unit = (chainEnd - chainStart) / (2 * n - 1); // n 节点 + (n-1) 连线
+  var nodeDur = Math.min(650, unit * 0.9);
+  var arrowDur = Math.min(500, unit * 0.8);
+
+  nodeEls.forEach(function (node, i) {
+    var d0 = chainStart + 2 * i * unit;
+    // 节点弹簧入场(scale .5→1.05→1 + 上浮)
+    add(node,
+      [{ opacity: 0, transform: "translateY(60px) scale(0.5)" },
+       { opacity: 1, transform: "translateY(0) scale(1.05)", offset: 0.72 },
+       { opacity: 1, transform: "translateY(0) scale(1)" }],
+      { duration: nodeDur, delay: d0, easing: SPRING });
+    // 激活脉冲:光环扩散 + 微缩放强调
+    add(haloEls[i],
+      [{ opacity: 0, transform: "scale(1)" },
+       { opacity: 1, transform: "scale(1.04)", offset: 0.35 },
+       { opacity: 0, transform: "scale(1.12)" }],
+      { duration: 600, delay: d0 + nodeDur * 0.7, easing: "ease-out" });
+    // 连线绘制(stroke-dashoffset)+ 箭头淡入
+    if (i < n - 1) {
+      var a = arrows[i];
+      [a.glow, a.main].forEach(function (p) {
+        var len = p.getTotalLength();
+        p.style.strokeDasharray = String(len);
+        p.style.strokeDashoffset = String(len);
+        p.animate([{ strokeDashoffset: len }, { strokeDashoffset: 0 }],
+          { duration: arrowDur, delay: d0 + unit, fill: "both", easing: easeOut });
+      });
+      add(a.tri, [{ opacity: 0 }, { opacity: 1 }],
+        { duration: 200, delay: d0 + unit + arrowDur * 0.8, easing: "ease-out" });
+    }
+  });
+
+  // 收尾:全链激活波(依次再现脉冲,强调"链条贯通")
+  var waveStart = chainEnd + 200;
+  haloEls.forEach(function (halo, i) {
+    add(halo,
+      [{ opacity: 0, transform: "scale(1)" },
+       { opacity: 0.8, transform: "scale(1.03)", offset: 0.4 },
+       { opacity: 0, transform: "scale(1.09)" }],
+      { duration: 500, delay: waveStart + i * 140, easing: "ease-out" });
+  });
+
+  // 全程:辉光呼吸
+  add(document.getElementById("glow"),
+    [{ opacity: 0.08 }, { opacity: 0.16 }, { opacity: 0.08 }],
+    { duration: Math.round(D * 1000), easing: "ease-in-out" });
+
+  // 无动态计数文本,但仍暴露 __seek 钩子(契约)
+  window.__seek = function (t) {};
+})();
+</script>
+</body>
+</html>
