@@ -267,10 +267,13 @@ async function renderCodeTemplate(
   req: RenderRequest,
   outputPath: string,
 ): Promise<number | undefined> {
-  const cfg = (template.layers?.[0] ?? {}) as { scene?: string; customCode?: string; params?: Record<string, unknown>; designTokens?: Record<string, unknown> };
-  const isCustom = typeof cfg.customCode === "string" && cfg.customCode.trim().length > 0;
-  if (!isCustom && (typeof cfg.scene !== "string" || !cfg.scene)) {
-    throw new Error(`code 模板 ${template.id} 缺少场景配置(layers[0].scene 或 layers[0].customCode)`);
+  const cfg = (template.layers?.[0] ?? {}) as { scene?: string; customCode?: string; customHtml?: string; params?: Record<string, unknown>; designTokens?: Record<string, unknown> };
+  // 2026-09-01:customHtml(web 支路)优先于 customCode(Revideo)——转译后的克隆模板
+  // 走 Playwright 截帧,不占 custom 独占池,渲染提速一个量级
+  const isCustomHtml = typeof cfg.customHtml === "string" && cfg.customHtml.trim().length > 0;
+  const isCustom = !isCustomHtml && typeof cfg.customCode === "string" && cfg.customCode.trim().length > 0;
+  if (!isCustomHtml && !isCustom && (typeof cfg.scene !== "string" || !cfg.scene)) {
+    throw new Error(`code 模板 ${template.id} 缺少场景配置(layers[0].scene / customCode / customHtml)`);
   }
   const work = await getWork(req.workId);
 
@@ -322,9 +325,11 @@ async function renderCodeTemplate(
   const r = await renderCodeScene({
     workId: req.workId,
     filename: `${jobId}_code`,
-    ...(isCustom
-      ? { customScene: cfg.customCode, params }
-      : { template: { name: cfg.scene!, params } }),
+    ...(isCustomHtml
+      ? { customHtml: cfg.customHtml, params }
+      : isCustom
+        ? { customScene: cfg.customCode, params }
+        : { template: { name: cfg.scene!, params } }),
     duration,
     size: template.canvas ? { w: template.canvas.width, h: template.canvas.height } : undefined,
   });
