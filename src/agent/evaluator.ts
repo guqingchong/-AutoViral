@@ -24,7 +24,8 @@ import type { WsBridge, WsSession } from "../ws-bridge.js";
 export function parseEvalResultText(resultText: string, fallbackStep: string): EvalResult {
   try {
     const jsonMatch = resultText.match(/```json\s*([\s\S]*?)\s*```/);
-    return jsonMatch ? JSON.parse(jsonMatch[1]) : JSON.parse(resultText);
+    const parsed = jsonMatch ? JSON.parse(jsonMatch[1]) : JSON.parse(resultText);
+    return machineCheckVerdict(parsed, fallbackStep);
   } catch {
     // 2026-08-19 堵假 pass 洞:解析失败兜底 pass 曾让质量门随机放水(w_20260819_1634_cd5
     // material-search 第 3 轮空 scores "pass")。打 __parseFailed 标记,由调用方先重试。
@@ -39,6 +40,23 @@ export function parseEvalResultText(resultText: string, fallbackStep: string): E
       __parseFailed: true,
     } as EvalResult & { __parseFailed?: boolean };
   }
+}
+/** 2026-09-01 终审 M2:verdict 机器复核——LLM 写的 verdict 不再原样采信。
+ *  归一化(trim/lowercase);"scores 有 <6 分或含 critical 问题但 verdict 写 pass"
+ *  的不一致直接改判 fail(幻觉 pass 的结构性防线);反之 scores 全过但 verdict
+ *  误写 fail 不翻案(误拒安全方向,走重试)。 */
+export function machineCheckVerdict(parsed: any, fallbackStep: string): EvalResult {
+  const result = parsed as EvalResult;
+  const rawVerdict = String(result.verdict ?? "").trim().toLowerCase();
+  result.verdict = rawVerdict === "pass" ? "pass" : "fail";
+  const scoreVals = Object.values(result.scores ?? {}).map(Number).filter(Number.isFinite);
+  const hasLowScore = scoreVals.length > 0 && scoreVals.some((s) => s < 6);
+  const hasCritical = (result.issues ?? []).some((i: any) => i?.severity === "critical");
+  if (result.verdict === "pass" && (hasLowScore || hasCritical)) {
+    console.warn(`[eval] verdict 复核改判 fail(${fallbackStep}):scores 含 <6 分或 critical 问题`);
+    result.verdict = "fail";
+  }
+  return result;
 }
 
 /** 评审器硬超时(2026-08-28 批次1.2):超时触发 abortTurn,控制流收敛后由调用方转降级链 */
