@@ -1,0 +1,22 @@
+{
+  "jobId": "timeline-demo",
+  "templatePath": "D:/Autoviral/packages/code-scene/templates-web/timeline.html",
+  "theme": "finance_dark",
+  "duration": 8,
+  "params": {
+    "title": "专项债发行时间轴",
+    "kicker": "全流程透视",
+    "events": [
+      { "time": "1月", "text": "项目储备入库,完成可行性研究" },
+      { "time": "3月", "text": "一案两书编制完成,报送省厅" },
+      { "time": "5月", "text": "省厅评审通过,纳入发行库" },
+      { "time": "7月", "text": "额度下达,启动簿记建档" },
+      { "time": "9月", "text": "债券发行缴款,资金拨付到位" }
+    ],
+    "source": "财政部地方政府债券发行管理办法",
+    "duration": 8
+  },
+  "outDir": "C:/Users/顾庆冲/.autoviral/works/w_web_timeline_demo/assets/clips/code",
+  "outFile": "timeline-demo.mp4",
+  "ffmpegPath": "ffmpeg"
+}

@@ -40,6 +40,10 @@ export interface CodeSceneInput {
   customScene?: string;
   /** customScene 形态的参数(2026-08-24 LLM 生成模板参数化):导出厂函数时注入 */
   params?: Record<string, unknown>;
+  /** 2026-09-01:LLM 自写 HTML 程序性动画(web 支路 custom 形态)。
+   *  自包含单文件 HTML,渲染走 web-worker;源码随产物保留在 assets/clips/code/,
+   *  优质场景人工确认后移入 templates-web/ 注册即沉淀为模板 */
+  customHtml?: string;
   duration?: number;
   size?: { w: number; h: number };
   theme?: string;
@@ -91,8 +95,13 @@ export function validateCodeSceneInput(input: CodeSceneInput): string[] {
 
   const hasTemplate = !!input.template;
   const hasCustom = !!input.customScene;
-  if (hasTemplate === hasCustom) {
-    errors.push("template 与 customScene 必须二选一");
+  const hasCustomHtml = !!input.customHtml;
+  if ([hasTemplate, hasCustom, hasCustomHtml].filter(Boolean).length !== 1) {
+    errors.push("template / customScene / customHtml 必须三选一");
+  } else if (hasCustomHtml) {
+    const html = input.customHtml!;
+    if (html.length > 200_000) errors.push(`customHtml ≤200KB(当前 ${Math.round(html.length / 1024)}KB)`);
+    if (!/<\s*(html|!doctype|div|body)/i.test(html)) errors.push("customHtml 须为 HTML 文档片段");
   } else if (hasTemplate) {
     const t = input.template!;
     const limit = WEB_TEMPLATES[t.name] ?? TEMPLATE_LIMITS[t.name];
@@ -235,13 +244,15 @@ async function doRender(input: CodeSceneInput): Promise<CodeSceneResult> {
   // 横屏镜头模板(2026-09-01 横屏矩阵):-wide 后缀,默认 1920×1080
   const isWide = !!input.template?.name?.endsWith("-wide");
   const isCustom = !!input.customScene;
+  // LLM 自写 HTML(web 支路 custom 形态):自包含文件,无共享状态,不占 custom 独占池
+  const isCustomHtml = !!input.customHtml;
   // web 判定上移(2026-09-01 修复):duration 注入点需要它;spec 增补段复用同一变量
   const isWeb = !!input.template && input.template.name in WEB_TEMPLATES;
-  const targetDuration = Math.min(Math.max(input.duration ?? (isKeynote ? 8 : 6), 1), durationMaxFor(input.template?.name ?? (isCustom ? "keynote-leather" : undefined)));
+  const targetDuration = Math.min(Math.max(input.duration ?? (isKeynote ? 8 : 6), 1), durationMaxFor(input.template?.name ?? (isCustom || isCustomHtml ? "keynote-leather" : undefined)));
   const params: Record<string, unknown> | undefined = input.template
     ? { ...input.template.params, theme: input.theme ?? input.template.params.theme }
     : input.params ? { ...input.params } : undefined;
-  if ((isKeynote || isCustom || isWeb) && params) {
+  if ((isKeynote || isCustom || isWeb || isCustomHtml) && params) {
     // 场景动画/呼吸循环轮数按 params.duration 自适应,必须与渲染目标时长一致
     // (web 支路:__PARAMS__.duration 驱动模板短/长镜头分支,缺失则永远走默认长分支)
     params.duration = targetDuration;
@@ -265,7 +276,7 @@ async function doRender(input: CodeSceneInput): Promise<CodeSceneResult> {
 
   const spec = {
     jobId,
-    scene: input.template ? input.template.name : "custom",
+    scene: input.template ? input.template.name : isCustomHtml ? "custom-html" : "custom",
     params,
     customCode: input.customScene,
     duration: targetDuration,
@@ -291,11 +302,25 @@ async function doRender(input: CodeSceneInput): Promise<CodeSceneResult> {
     });
     await writeFile(specPath, JSON.stringify(spec), "utf-8"); // 重写增补后的 spec
   }
+  if (isCustomHtml) {
+    // customHtml:源码落盘在产物旁(<filename>.custom.html),一供渲染二供沉淀——
+    // 优质自定义场景人工确认后移入 templates-web/ 注册即成为正式模板
+    const { getFFmpegPath } = await import("../video/ffmpeg.js");
+    const htmlPath = join(outDirAbs, `${input.filename}.custom.html`);
+    await writeFile(htmlPath, input.customHtml!, "utf-8");
+    Object.assign(spec, {
+      templatePath: htmlPath,
+      theme: input.theme ?? (params?.theme as string | undefined) ?? "finance_dark",
+      ffmpegPath: await getFFmpegPath(),
+    });
+    await writeFile(specPath, JSON.stringify(spec), "utf-8");
+  }
+  const useWebWorker = isWeb || isCustomHtml;
   try {
     // 渲染前清掉同名旧产物:渲染器对已有 outFile 可能跳过重渲染(实测 18:24 旧 3.8s
     // 产物原地复用),残留旧文件会污染补时判定与"成功但产物陈旧"的假象
     await rm(outputPath, { force: true });
-    await runWorkerWithRetry(specPath, renderTimeoutMs(targetDuration), isWeb ? "web-worker.mjs" : "worker.mjs");
+    await runWorkerWithRetry(specPath, renderTimeoutMs(targetDuration), useWebWorker ? "web-worker.mjs" : "worker.mjs");
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : String(err), code: err instanceof WorkerTimeout ? "TIMEOUT" : "RENDER_FAILED" };
   } finally {
@@ -310,8 +335,8 @@ async function doRender(input: CodeSceneInput): Promise<CodeSceneResult> {
   // duration 参数生效化(2026-08-19 根因修复):场景自然时长与 spec.duration 无关,
   // 不足目标时长时 tpad 克隆末帧补齐(详见 decidePadSeconds 注释)
   const pad = decidePadSeconds(info.duration, targetDuration);
-  // web 支路产物时长恒等于 targetDuration(截帧帧数即目标),跳过补时
-  if (!isWeb && pad > 0) {
+  // web 支路(含 customHtml)产物时长恒等于 targetDuration(截帧帧数即目标),跳过补时
+  if (!useWebWorker && pad > 0) {
     await padWithLastFrame(outputPath, pad);
     info = await probeMedia(outputPath);
   }

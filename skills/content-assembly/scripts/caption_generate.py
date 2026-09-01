@@ -183,6 +183,21 @@ def hex_to_ass_color(hex_color: str, alpha: str = "00") -> str:
     return f"&H{a.upper()}{b.upper()}{g.upper()}{r.upper()}"
 
 
+def probe_video_size(path: str) -> tuple[int, int] | None:
+    """ffprobe 探测视频分辨率;非视频/探测失败返回 None(2026-09-01 PlayRes 自适应)."""
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=width,height", "-of", "csv=p=0", path],
+            capture_output=True, text=True, timeout=30)
+        if out.returncode == 0 and out.stdout.strip():
+            w, h = out.stdout.strip().split(",")[:2]
+            return int(w), int(h)
+    except Exception:
+        pass
+    return None
+
+
 def seconds_to_ass_time(seconds: float) -> str:
     """将秒数转为 ASS 时间格式 H:MM:SS.CC (百分之一秒).
 
@@ -449,17 +464,28 @@ def build_style_config(style_name: str, overrides: dict) -> dict:
 
 
 def build_ass(lines: list[list[dict]], config: dict,
-              line_starts: list[float] | None = None) -> str:
+              line_starts: list[float] | None = None,
+              play_res: tuple[int, int] = (1080, 1920)) -> str:
     """生成完整的 ASS 字幕文件内容.
 
     Args:
         lines:       分行后的词列表
         config:      样式配置字典
         line_starts: 每行的显示起始时间 (含 lead time), None 则使用第一个词的 start
+        play_res:    ASS 播放分辨率 (宽, 高)。2026-09-01 横屏自适应:默认竖屏
+                     1080×1920;横屏传入 (1920, 1080) 时字号/边距/胶囊 padding
+                     按比例缩放,字幕相对位置(底部安全带)保持不变
 
     Returns:
         ASS 文件内容字符串
     """
+    pw, ph = play_res
+    v_scale = ph / 1920.0
+    h_scale = pw / 1080.0
+    font_size = max(20, round(config["font_size"] * v_scale))
+    margin_v = max(10, round(config["margin_v"] * v_scale))
+    margin_l = max(5, round(config["margin_l"] * h_scale))
+    margin_r = max(5, round(config["margin_r"] * h_scale))
     # 获取字体 family 名称
     font_family = get_font_family(config["font_id"])
     if not font_family:
@@ -482,8 +508,8 @@ def build_ass(lines: list[list[dict]], config: dict,
     ass = []
     ass.append("[Script Info]")
     ass.append("ScriptType: v4.00+")
-    ass.append("PlayResX: 1080")
-    ass.append("PlayResY: 1920")
+    ass.append(f"PlayResX: {pw}")
+    ass.append(f"PlayResY: {ph}")
     ass.append("WrapStyle: 0")
     ass.append("ScaledBorderAndShadow: yes")
     ass.append("Title: AutoViral Pro Captions")
@@ -501,19 +527,20 @@ def build_ass(lines: list[list[dict]], config: dict,
         "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
         "Alignment, MarginL, MarginR, MarginV, Encoding"
     )
-    # BorderStyle=3 时 Outline 字段表示底盒 padding, 需 ≥12 保证胶囊内边距
+    # BorderStyle=3 时 Outline 字段表示底盒 padding, 需 ≥12(竖屏) 保证胶囊内边距;
+    # 横屏按比例缩放(v_scale)
     outline_field = (
-        max(config["outline_width"], 12)
+        max(round(config["outline_width"] * v_scale), max(6, round(12 * v_scale)))
         if config.get("border_style") == 3
-        else config["outline_width"]
+        else max(1, round(config["outline_width"] * v_scale))
     )
     style_line = (
-        f"Style: Default,{font_family},{config['font_size']},"
+        f"Style: Default,{font_family},{font_size},"
         f"{primary_color},{secondary_color},{outline_color},{back_color},"
         f"{config['bold']},{config['italic']},0,0,"
         f"100,100,0,0,"
         f"{config.get('border_style', 1)},{outline_field},{config['shadow']},{config['alignment']},"
-        f"{config['margin_l']},{config['margin_r']},{config['margin_v']},1"
+        f"{margin_l},{margin_r},{margin_v},1"
     )
     ass.append(style_line)
     ass.append("")
@@ -636,8 +663,24 @@ def generate_captions(
         # 4. 构建样式配置
         config = build_style_config(style, kwargs)
 
+        # 4.5 PlayRes 自适应(2026-09-01 横屏支持):显式 --play-res 优先,
+        # 其次探测输入视频分辨率,兜底竖屏 1080×1920
+        play_res = (1080, 1920)
+        pr = kwargs.get("play_res")
+        if isinstance(pr, str) and "x" in pr:
+            try:
+                a, b = pr.lower().split("x")[:2]
+                play_res = (int(a), int(b))
+            except ValueError:
+                print(f"[!] --play-res 格式无效({pr}),用默认 1080x1920", file=sys.stderr)
+        elif input_path:
+            probed = probe_video_size(input_path)
+            if probed:
+                play_res = probed
+                print(f"[*] 探测分辨率: {probed[0]}x{probed[1]}", file=sys.stderr)
+
         # 5. 生成 ASS
-        ass_content = build_ass(lines, config, line_starts)
+        ass_content = build_ass(lines, config, line_starts, play_res)
 
         # 6. 写入文件
         output = Path(output_path).resolve()
@@ -713,6 +756,7 @@ def main():
     parser.add_argument("--highlight-color", help="高亮颜色, 如 #FFFF00 (覆盖预设)")
     parser.add_argument("--base-color", help="基础颜色, 如 #FFFFFF (覆盖预设)")
     parser.add_argument("--stroke-width", type=int, help="描边宽度 (覆盖预设)")
+    parser.add_argument("--play-res", metavar="WxH", help="ASS 播放分辨率(如 1920x1080);缺省探测输入视频,兜底 1080x1920")
     parser.add_argument(
         "--position", choices=["center", "top", "bottom"],
         help="字幕位置 (覆盖预设)",
@@ -742,6 +786,8 @@ def main():
         overrides["stroke_width"] = args.stroke_width
     if args.position:
         overrides["position"] = args.position
+    if args.play_res:
+        overrides["play_res"] = args.play_res
 
     result = generate_captions(
         input_path=args.input,
