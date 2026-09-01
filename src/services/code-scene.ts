@@ -218,16 +218,21 @@ async function doRender(input: CodeSceneInput): Promise<CodeSceneResult> {
 
   const isKeynote = input.template?.name === "keynote-leather";
   const isCustom = !!input.customScene;
+  // web 判定上移(2026-09-01 修复):duration 注入点需要它;spec 增补段复用同一变量
+  const isWeb = !!input.template && input.template.name in WEB_TEMPLATES;
   const targetDuration = Math.min(Math.max(input.duration ?? (isKeynote ? 8 : 6), 1), durationMaxFor(input.template?.name ?? (isCustom ? "keynote-leather" : undefined)));
   const params: Record<string, unknown> | undefined = input.template
     ? { ...input.template.params, theme: input.theme ?? input.template.params.theme }
     : input.params ? { ...input.params } : undefined;
-  if ((isKeynote || isCustom) && params) {
-    // 场景呼吸循环轮数按 params.duration 计算,必须与渲染目标时长一致
+  if ((isKeynote || isCustom || isWeb) && params) {
+    // 场景动画/呼吸循环轮数按 params.duration 自适应,必须与渲染目标时长一致
+    // (web 支路:__PARAMS__.duration 驱动模板短/长镜头分支,缺失则永远走默认长分支)
     params.duration = targetDuration;
+  }
+  if ((isKeynote || isCustom) && params) {
     // 数字人源片中转(2026-08-24):revideo 渲染器只认 vite public 下的 URL 形式
     // src("/xxx.mp4"),本地绝对路径会被当相对 URL → MEDIA_ERR_SRC_NOT_SUPPORTED 挂死。
-    // 渲染前复制进 public/staged/,渲染结束(成败)即清理。
+    // 渲染前复制进 public/staged/,渲染结束(成败)即清理。仅 keynote/custom,web 支路不涉及。
     const videoSrc = params.videoSrc;
     if (typeof videoSrc === "string" && videoSrc && !videoSrc.startsWith("/") && !/^https?:\/\//.test(videoSrc)) {
       const staged = await stageDigitalHumanAsset(jobId, videoSrc);
@@ -259,7 +264,6 @@ async function doRender(input: CodeSceneInput): Promise<CodeSceneResult> {
   const outputPath = join(outDirAbs, outFile);
   // web 支路(2026-09-01 05 方案 S3):模板名命中 WEB_TEMPLATES → 一律走 web-worker.mjs
   // (Playwright 截帧),不再查 Revideo 场景注册表;spec 增补 templatePath/theme/ffmpegPath
-  const isWeb = !!input.template && input.template.name in WEB_TEMPLATES;
   if (isWeb) {
     const { getFFmpegPath } = await import("../video/ffmpeg.js");
     Object.assign(spec, {
