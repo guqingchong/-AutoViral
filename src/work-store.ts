@@ -76,6 +76,8 @@ export interface Work {
   estimatedCost?: number;
   actualCost?: number;
   reviewComment?: string;
+  /** 最近一次失败原因(failVisible 落库,批次12c) */
+  lastError?: string;
   /** 素材三维（批量制作） */
   assetForm?: AssetForm;
   assetSource?: AssetSource;
@@ -90,6 +92,8 @@ export interface Work {
   explicitParams?: Record<string, unknown>;
   /** 评审分级(批次10.2):standard(缺省)|express(机器门禁+assembly 单轮 LLM 终审) */
   evalMode?: "standard" | "express";
+  /** 作品画幅(批次12c-A):portrait(竖屏 9:16,缺省)|landscape(横屏 16:9) */
+  aspect?: "portrait" | "landscape";
   createdAt: string;
   updatedAt: string;
 }
@@ -115,6 +119,8 @@ export interface WorkSummary {
   previewUrl?: string;
   /** 最近一次发布中心打回的审核意见 */
   reviewComment?: string;
+  /** 最近一次失败原因(failVisible 落库,批次12c) */
+  lastError?: string;
   /** 最近活动时间（步骤 started/completed 与作品 updated_at 的最大值），Works 页进度三态数据源 */
   lastActivityAt: string | null;
   updatedAt: string;
@@ -213,6 +219,7 @@ function dbWorkToWork(w: DbWork, steps?: DbPipelineStep[]): Work {
     evaluationMode: w.evaluation_mode,
     evalSessionIds: w.eval_session_ids,
     evalAttempts: w.eval_attempts,
+    lastError: w.last_error as string | undefined,
     estimatedCost: w.estimated_cost,
     actualCost: w.actual_cost,
     reviewComment: w.review_comment,
@@ -225,6 +232,7 @@ function dbWorkToWork(w: DbWork, steps?: DbPipelineStep[]): Work {
     purpose: w.purpose,
     explicitParams: (() => { try { return w.explicit_params ? JSON.parse(w.explicit_params) : undefined; } catch { return undefined; } })(),
     evalMode: (w.eval_mode as "standard" | "express" | undefined) ?? undefined,
+    aspect: (w.aspect as "portrait" | "landscape" | undefined) ?? "portrait",
     createdAt: w.created_at,
     updatedAt: w.updated_at,
   };
@@ -299,6 +307,8 @@ export async function createWork(input: {
   /** 用户显式参数(批次5.8):只存用户显式给的键 */
   explicitParams?: Record<string, unknown>;
   evalMode?: "standard" | "express";
+  /** 作品画幅(批次12c-A):缺省 portrait */
+  aspect?: "portrait" | "landscape";
 }): Promise<Work> {
   await maybeMigrateLegacy();
   const now = new Date().toISOString();
@@ -328,6 +338,7 @@ export async function createWork(input: {
     purpose: input.purpose,
     explicit_params: input.explicitParams ? JSON.stringify(input.explicitParams) : undefined,
     eval_mode: input.evalMode,
+    aspect: input.aspect ?? "portrait",
     tags: [],
     created_at: now,
     updated_at: now,
@@ -382,6 +393,7 @@ export async function updateWork(id: string, updates: Partial<Work>): Promise<Wo
   if (updates.estimatedCost !== undefined) dbUpdates.estimated_cost = updates.estimatedCost;
   if (updates.actualCost !== undefined) dbUpdates.actual_cost = updates.actualCost;
   if (updates.reviewComment !== undefined) dbUpdates.review_comment = updates.reviewComment;
+  if (updates.lastError !== undefined) dbUpdates.last_error = updates.lastError;
   if (updates.assetForm !== undefined) dbUpdates.asset_form = updates.assetForm;
   if (updates.assetSource !== undefined) dbUpdates.asset_source = updates.assetSource;
   if (updates.assetBudget !== undefined) dbUpdates.asset_budget = updates.assetBudget;
@@ -390,6 +402,7 @@ export async function updateWork(id: string, updates: Partial<Work>): Promise<Wo
   if (updates.purpose !== undefined) dbUpdates.purpose = updates.purpose;
   if (updates.explicitParams !== undefined) dbUpdates.explicit_params = JSON.stringify(updates.explicitParams);
   if (updates.evalMode !== undefined) dbUpdates.eval_mode = updates.evalMode;
+  if (updates.aspect !== undefined) dbUpdates.aspect = updates.aspect;
   if (updates.pipeline !== undefined) {
     // Sync steps back to DB
     for (const [key, step] of Object.entries(updates.pipeline)) {

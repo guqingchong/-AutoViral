@@ -239,6 +239,8 @@ export interface Work {
   digitalHumanId?: string;
   templateId?: string;
   accountId?: string;
+  /** 作品画幅（批次12c-A）：portrait 竖屏 9:16（缺省）/ landscape 横屏 16:9 */
+  aspect?: "portrait" | "landscape";
   estimatedCost?: number;
   actualCost?: number;
   createdAt: string;
@@ -280,6 +282,8 @@ export async function createWorkApi(input: {
   platforms?: string[];
   topicHint?: string;
   evalMode?: "standard" | "express";
+  /** 作品画幅（批次12c-A）：缺省竖屏 portrait */
+  aspect?: "portrait" | "landscape";
 }): Promise<Work> {
   return request<Work>("/api/works", {
     method: "POST",
@@ -710,6 +714,31 @@ export async function recheckAssetCompliance(id: number): Promise<AssetLibraryIt
 // ---------------------------------------------------------------------------
 // Template & Render API
 // ---------------------------------------------------------------------------
+
+// ── 镜头模板（kind=web 程序化动画场景，2026-09-01 批次12c-A）──
+// GET /api/assets/code-scene/templates:agent 发现入口同款清单,模板库页「镜头模板」分组用
+export interface CodeSceneTemplate {
+  /** 模板名（横屏款带 -wide 后缀，另有 cover-title-wide / keynote-leather） */
+  name: string;
+  /** 中文名 */
+  label: string;
+  /** 参数摘要（字符串描述，如 "title, steps[2-5]{title,desc?}"） */
+  params: string;
+  /** 适用场景 */
+  bestFor: string;
+}
+
+export interface CodeSceneTemplatesResponse {
+  templates: CodeSceneTemplate[];
+  themes: string[];
+  duration: string;
+  note: string;
+}
+
+export async function fetchCodeSceneTemplates(): Promise<CodeSceneTemplatesResponse> {
+  return get<CodeSceneTemplatesResponse>("/api/assets/code-scene/templates");
+}
+
 
 export function getAnalyticsRecords(): Promise<{ records: unknown[] }> {
   return request<{ records: unknown[] }>("/api/analytics/records");
