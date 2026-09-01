@@ -39,11 +39,11 @@ const executablePath = edgeCandidates.find(existsSync);
 const browser = await chromium.launch(executablePath ? { executablePath } : { channel: "msedge" });
 try {
   const page = await browser.newPage({ viewport: { width: W, height: H } });
-  // 参数与主题先于页面脚本注入
-  await page.addInitScript((params, css) => {
-    window.__PARAMS__ = params;
-    window.__THEME_CSS__ = css;
-  }, spec.params ?? {}, themeCss);
+  // 参数与主题先于页面脚本注入(addInitScript 仅支持单参数,故打包为对象)
+  await page.addInitScript((injected) => {
+    window.__PARAMS__ = injected.params;
+    window.__THEME_CSS__ = injected.css;
+  }, { params: spec.params ?? {}, css: themeCss });
   await page.goto("file:///" + spec.templatePath.replaceAll("\\", "/"));
   await page.evaluate(() => document.fonts.ready);
 
