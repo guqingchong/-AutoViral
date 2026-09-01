@@ -24,6 +24,8 @@ export const SCENE_THEMES: SceneTheme[] = [
   { key: "warm_gold", background: "#161311", palette: ["#d4af37", "#e8c56b", "#b8860b", "#f5deb3", "#cd853f", "#8b6914"], textColor: "#f5efe0", subTextColor: "#a89968" },
   { key: "ink_green", background: "#0d1f1a", palette: ["#3fd68f", "#2dd4bf", "#84cc16", "#facc15", "#fb923c", "#38bdf8"], textColor: "#e8f5ee", subTextColor: "#8fbc9f" },
   { key: "minimal_light", background: "#fafaf7", palette: ["#2563eb", "#059669", "#d97706", "#dc2626", "#7c3aed", "#0891b2"], textColor: "#1c1917", subTextColor: "#78716c" },
+  // 2026-09-01 05 方案 S2:杂志编辑风(design-tokens.css 同款,Revideo 侧同步,终审 follow-up)
+  { key: "magazine_light", background: "#fafaf7", palette: ["#dc2626", "#1c1917", "#b91c1c", "#57534e", "#d97706", "#2563eb"], textColor: "#1c1917", subTextColor: "#57534e" },
 ];
 
 export function getSceneTheme(key?: string, overrides?: ThemeTokenOverrides): SceneTheme {
