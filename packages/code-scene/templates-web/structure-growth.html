@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; width: 1080px; height: 1920px; overflow: hidden; }
+  body {
+    background: var(--bg, #0f1b2d);
+    font-family: var(--font-display, "Noto Sans CJK SC", "Microsoft YaHei", sans-serif);
+    position: relative;
+  }
+  /* 网格底(纯 CSS 渐变网格,token 驱动) */
+  .grid-bg {
+    position: absolute; inset: 0;
+    background-image:
+      linear-gradient(var(--bg-grid, rgba(148,163,184,.05)) 1px, transparent 1px),
+      linear-gradient(90deg, var(--bg-grid, rgba(148,163,184,.05)) 1px, transparent 1px);
+    background-size: 108px 108px;
+  }
+  /* 中心辉光(径向渐变 + 呼吸动画) */
+  .glow {
+    position: absolute; left: 50%; top: 780px; width: 900px; height: 900px;
+    transform: translate(-50%, -50%);
+    background: radial-gradient(circle, var(--accent, #3b82f6) 0%, transparent 60%);
+    opacity: .14; pointer-events: none;
+  }
+  .kicker {
+    position: absolute; top: 120px; left: 96px;
+    font-size: 28px; letter-spacing: 6px; color: var(--accent, #3b82f6);
+    border: 1px solid color-mix(in srgb, var(--accent, #3b82f6) 45%, transparent);
+    padding: 10px 28px; border-radius: 999px; font-weight: 500;
+  }
+  .title {
+    position: absolute; top: 190px; left: 96px;
+    font-size: 64px; font-weight: 700; color: var(--text, #f1f5f9);
+  }
+  .count-badge {
+    position: absolute; top: 300px; left: 96px;
+    font-size: 34px; color: var(--text-sub, #94a3b8); font-weight: 500;
+  }
+  .count-badge b { color: var(--accent, #3b82f6); font-size: 54px; font-weight: 900; }
+
+  /* SVG 连线层 */
+  svg.links { position: absolute; inset: 0; width: 1080px; height: 1920px; }
+  svg.links path {
+    stroke: var(--accent, #3b82f6); stroke-width: 3; fill: none; opacity: .55;
+  }
+
+  /* 中心枢纽 */
+  .hub {
+    position: absolute; left: 50%; top: 780px; transform: translate(-50%, -50%);
+    width: 320px; height: 320px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--accent-2, #60a5fa), var(--accent, #3b82f6));
+    box-shadow: 0 24px 80px color-mix(in srgb, var(--accent, #3b82f6) 45%, transparent),
+                inset 0 2px 12px rgba(255,255,255,.35);
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-size: 44px; font-weight: 800; text-align: center;
+    line-height: 1.3; padding: 20px; box-sizing: border-box;
+  }
+
+  /* 分支卡片:毛玻璃质感 */
+  .branch {
+    position: absolute; width: 380px;
+    background: color-mix(in srgb, var(--text, #f1f5f9) 6%, transparent);
+    backdrop-filter: blur(12px);
+    border: 1px solid color-mix(in srgb, var(--text, #f1f5f9) 12%, transparent);
+    border-radius: var(--radius-card, 24px);
+    box-shadow: var(--shadow-lg, 0 24px 64px rgba(2,8,23,.55));
+    padding: 28px 32px; box-sizing: border-box;
+  }
+  .branch h3 {
+    margin: 0 0 6px; font-size: 36px; font-weight: 700; color: var(--text, #f1f5f9);
+    display: flex; align-items: center; gap: 14px;
+  }
+  .branch h3 .dot {
+    width: 18px; height: 18px; border-radius: 50%;
+    background: var(--accent, #3b82f6);
+    box-shadow: 0 0 16px var(--accent, #3b82f6);
+    flex: none;
+  }
+  .branch ul { margin: 14px 0 0; padding: 0; list-style: none; }
+  .branch li {
+    font-size: 26px; color: var(--text-sub, #94a3b8); line-height: 1.9;
+    padding-left: 26px; position: relative;
+  }
+  .branch li::before {
+    content: ""; position: absolute; left: 0; top: 18px;
+    width: 10px; height: 2px; background: var(--accent, #3b82f6); opacity: .7;
+  }
+
+  /* 角标(取景框语言) */
+  .corner { position: absolute; width: 64px; height: 64px; opacity: .35;
+    border-color: var(--accent, #3b82f6); border-style: solid; border-width: 0; }
+  .corner.tl { top: 56px; left: 56px; border-top-width: 4px; border-left-width: 4px; }
+  .corner.tr { top: 56px; right: 56px; border-top-width: 4px; border-right-width: 4px; }
+  .corner.bl { bottom: 56px; left: 56px; border-bottom-width: 4px; border-left-width: 4px; }
+  .corner.br { bottom: 56px; right: 56px; border-bottom-width: 4px; border-right-width: 4px; }
+
+  .source {
+    position: absolute; bottom: 170px; left: 96px;
+    font-size: 24px; color: var(--text-sub, #94a3b8); opacity: .8;
+  }
+</style>
+</head>
+<body>
+<div class="grid-bg"></div>
+<div class="glow" id="glow"></div>
+<div class="kicker" id="kicker"></div>
+<div class="title" id="title"></div>
+<div class="count-badge" id="badge"></div>
+<svg class="links" id="links" viewBox="0 0 1080 1920"></svg>
+<div class="hub" id="hub"></div>
+<div id="branches"></div>
+<div class="corner tl"></div><div class="corner tr"></div>
+<div class="corner bl"></div><div class="corner br"></div>
+<div class="source" id="source"></div>
+
+<script>
+(function () {
+  // 主题令牌注入(web-worker 契约)
+  const style = document.createElement("style");
+  style.textContent = window.__THEME_CSS__ || "";
+  document.head.appendChild(style);
+
+  const P = window.__PARAMS__ || {};
+  const DURATION = P.duration || 8;
+
+  // ── 数据 ──
+  const branches = P.branches || [
+    { label: "前期准备", items: ["可行性研究", "立项批复", "用地规划"] },
+    { label: "申报发行", items: ["一案两书编制", "省厅评审入库", "额度分配发行"] },
+    { label: "发行后管理", items: ["资金拨付使用", "绩效评价", "本息偿付"] },
+  ];
+  const center = P.center || "专项债\n项目全流程";
+
+  document.getElementById("kicker").textContent = P.kicker || "结构拆解";
+  document.getElementById("title").textContent = P.title || "一张图看懂";
+  document.getElementById("hub").innerHTML = center.replace(/\n/g, "<br>");
+  document.getElementById("source").textContent = P.source ? "来源:" + P.source : "";
+  const badgeEl = document.getElementById("badge");
+
+  // ── 布局:中心枢纽 (540,780),三张分支卡横排中部 ──
+  // 卡宽 296×3 + gap 24×2 = 936 ≤ 984(1080-96×2 边距);卡片顶 1100,
+  // 底缘 ≈1100+340=1440 之内只有文字行不下探,字幕带(1418-1562)由下方留白避让
+  const CARD_W = 296, CARD_TOP = 1100, GAP = 24;
+  const HUB = { x: 540, y: 780 };
+
+  const branchesEl = document.getElementById("branches");
+  const svg = document.getElementById("links");
+  const NS = "http://www.w3.org/2000/svg";
+
+  branches.forEach((b, i) => {
+    const x = 96 + i * (CARD_W + GAP);
+    const card = document.createElement("div");
+    card.className = "branch";
+    card.style.left = x + "px";
+    card.style.top = CARD_TOP + "px";
+    card.style.width = CARD_W + "px";
+    card.innerHTML =
+      '<h3><span class="dot"></span>' + b.label + "</h3>" +
+      "<ul>" + b.items.map((t) => "<li>" + t + "</li>").join("") + "</ul>";
+    branchesEl.appendChild(card);
+
+    // 连线:枢纽底缘 → 卡片顶缘中点,二次贝塞尔
+    const sx = HUB.x, sy = HUB.y + 170;
+    const tx = x + CARD_W / 2, ty = CARD_TOP - 10;
+    const my = (sy + ty) / 2;
+    const path = document.createElementNS(NS, "path");
+    path.setAttribute("d", `M ${sx} ${sy} C ${sx} ${my}, ${tx} ${my}, ${tx} ${ty}`);
+    svg.appendChild(path);
+  });
+
+  // ── 动画时间轴(全部 WAAPI,deterministic seek) ──
+  const EASE = "cubic-bezier(0.16, 1, 0.3, 1)";
+  const SPRING = "cubic-bezier(0.34, 1.56, 0.64, 1)";
+  const anims = [];
+  const add = (el, kf, opts) => anims.push(el.animate(kf, { fill: "both", ...opts }));
+
+  // 0.0-0.6s: kicker + 标题错峰淡入
+  add(document.getElementById("kicker"),
+    [{ opacity: 0, transform: "translateY(30px)" }, { opacity: 1, transform: "translateY(0)" }],
+    { duration: 500, easing: EASE });
+  add(document.getElementById("title"),
+    [{ opacity: 0, transform: "translateY(40px)" }, { opacity: 1, transform: "translateY(0)" }],
+    { duration: 600, delay: 150, easing: EASE });
+
+  // 0.6-1.4s: 枢纽弹簧入场
+  add(document.getElementById("hub"),
+    [{ opacity: 0, transform: "translate(-50%,-50%) scale(0.3)" },
+     { opacity: 1, transform: "translate(-50%,-50%) scale(1.06)", offset: 0.7 },
+     { opacity: 1, transform: "translate(-50%,-50%) scale(1)" }],
+    { duration: 800, delay: 600, easing: SPRING });
+
+  // 1.2s 起:连线逐条绘制(stroke-dashoffset)
+  const paths = svg.querySelectorAll("path");
+  paths.forEach((p, i) => {
+    const len = p.getTotalLength();
+    p.style.strokeDasharray = String(len);
+    p.style.strokeDashoffset = String(len);
+    anims.push(p.animate(
+      [{ strokeDashoffset: len }, { strokeDashoffset: 0 }],
+      { duration: 550, delay: 1200 + i * 180, fill: "both", easing: EASE }));
+  });
+
+  // 1.6s 起:分支卡片错峰弹簧入场 + 列表项逐行揭示
+  document.querySelectorAll(".branch").forEach((card, i) => {
+    add(card,
+      [{ opacity: 0, transform: "translateY(80px) scale(0.92)" },
+       { opacity: 1, transform: "translateY(0) scale(1)" }],
+      { duration: 700, delay: 1600 + i * 220, easing: SPRING });
+    card.querySelectorAll("li").forEach((li, j) => {
+      add(li,
+        [{ opacity: 0, transform: "translateX(-20px)" }, { opacity: 1, transform: "translateX(0)" }],
+        { duration: 400, delay: 2100 + i * 220 + j * 120, easing: EASE });
+    });
+  });
+
+  // 2.4s 起:徽章容器淡入(计数走 __seek)
+  add(badgeEl,
+    [{ opacity: 0 }, { opacity: 1 }],
+    { duration: 500, delay: 2400, easing: EASE });
+
+  // 3.2s: 枢纽脉冲强调
+  add(document.getElementById("hub"),
+    [{ transform: "translate(-50%,-50%) scale(1)" },
+     { transform: "translate(-50%,-50%) scale(1.05)" },
+     { transform: "translate(-50%,-50%) scale(1)" }],
+    { duration: 500, delay: 3200, easing: EASE });
+
+  // 全程:辉光呼吸(缓慢 opacity 起伏,用长动画模拟)
+  add(document.getElementById("glow"),
+    [{ opacity: 0.10 }, { opacity: 0.18 }, { opacity: 0.10 }],
+    { duration: Math.round(DURATION * 1000), easing: "ease-in-out" });
+
+  // ── 计数徽章(__seek 驱动,确定性) ──
+  const COUNT_FROM = 2.4, COUNT_DUR = 1.0;
+  const target = branches.length;
+  window.__seek = function (t) {
+    const p = Math.min(Math.max((t - COUNT_FROM) / COUNT_DUR, 0), 1);
+    const eased = 1 - Math.pow(1 - p, 3);
+    const v = Math.round(target * eased);
+    badgeEl.innerHTML = "共 <b>" + v + "</b> 大环节";
+  };
+  window.__seek(0);
+})();
+</script>
+</body>
+</html>
