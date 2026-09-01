@@ -60,7 +60,8 @@ PRESET_STYLES = {
         "base_color": "#FFFFFF",
         "highlight_color": "#FFFF00",
         "outline_color": "#000000",
-        "back_color": "#80000000",
+        "back_color": "#0A101E",
+        "border_style": 3,
         "bold": 1,
         "italic": 0,
         "outline_width": 3,
@@ -80,7 +81,8 @@ PRESET_STYLES = {
         "base_color": "#FFFFFF",
         "highlight_color": "#FFFFFF",
         "outline_color": "#000000",
-        "back_color": "#80000000",
+        "back_color": "#0A101E",
+        "border_style": 3,
         "bold": 1,
         "italic": 0,
         "outline_width": 4,
@@ -99,7 +101,8 @@ PRESET_STYLES = {
         "base_color": "#FFFFFF",
         "highlight_color": "#FFFFFF",
         "outline_color": "#CCCCCC",
-        "back_color": "#00000000",
+        "back_color": "#0A101E",
+        "border_style": 3,
         "bold": 0,
         "italic": 0,
         "outline_width": 2,
@@ -118,7 +121,8 @@ PRESET_STYLES = {
         "base_color": "#FFFF00",
         "highlight_color": "#FF0000",
         "outline_color": "#000000",
-        "back_color": "#80000000",
+        "back_color": "#0A101E",
+        "border_style": 3,
         "bold": 1,
         "italic": 0,
         "outline_width": 4,
@@ -137,7 +141,8 @@ PRESET_STYLES = {
         "base_color": "#FFFFFF",
         "highlight_color": "#FFFFFF",
         "outline_color": "#000000",
-        "back_color": "#40000000",
+        "back_color": "#0A101E",
+        "border_style": 3,
         "bold": 0,
         "italic": 0,
         "outline_width": 0,
@@ -471,7 +476,7 @@ def build_ass(lines: list[list[dict]], config: dict,
     primary_color = hex_to_ass_color(config["base_color"])
     secondary_color = hex_to_ass_color(config["highlight_color"])
     outline_color = hex_to_ass_color(config["outline_color"])
-    back_color = hex_to_ass_color(config["back_color"])
+    back_color = hex_to_ass_color(config["back_color"], "47")  # 0x47 ≈ 72% 不透明(胶囊底盒)
 
     # ── Script Info ──
     ass = []
@@ -496,12 +501,18 @@ def build_ass(lines: list[list[dict]], config: dict,
         "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
         "Alignment, MarginL, MarginR, MarginV, Encoding"
     )
+    # BorderStyle=3 时 Outline 字段表示底盒 padding, 需 ≥12 保证胶囊内边距
+    outline_field = (
+        max(config["outline_width"], 12)
+        if config.get("border_style") == 3
+        else config["outline_width"]
+    )
     style_line = (
         f"Style: Default,{font_family},{config['font_size']},"
         f"{primary_color},{secondary_color},{outline_color},{back_color},"
         f"{config['bold']},{config['italic']},0,0,"
         f"100,100,0,0,"
-        f"1,{config['outline_width']},{config['shadow']},{config['alignment']},"
+        f"{config.get('border_style', 1)},{outline_field},{config['shadow']},{config['alignment']},"
         f"{config['margin_l']},{config['margin_r']},{config['margin_v']},1"
     )
     ass.append(style_line)
