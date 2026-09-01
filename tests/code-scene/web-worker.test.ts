@@ -26,4 +26,15 @@ describe.skipIf(!edgeExists)("web-worker 确定性截帧", () => {
     expect(r.status, r.stderr).toBe(0);
     expect(existsSync(join(outDir, "mock.mp4"))).toBe(true);
   });
+
+  it("big-number web 模板真渲染出片", { timeout: 180_000 }, async () => {
+    const { renderCodeScene } = await import("../../src/services/code-scene.js");
+    const r = await renderCodeScene({
+      workId: "w_web_bignumber_test", filename: "bignumber-web",
+      template: { name: "big-number", params: { title: "新能源装机投资", kicker: "行业数据", value: 5.4, format: "wan", caption: "同比增长 38%,首次超越火电", source: "国家能源局" } },
+      theme: "finance_dark", duration: 6,
+    } as any);
+    expect(r.success, r.error).toBe(true);
+    expect(r.duration).toBeGreaterThanOrEqual(5.9);
+  });
 });
