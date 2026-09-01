@@ -68,6 +68,19 @@ export const WEB_TEMPLATES: Record<string, { items?: string; min?: number; max?:
   "quote-card": {},
   "checklist": { items: "items", min: 2, max: 6 },
   "bar-compare": { items: "bars", min: 2, max: 5 },
+  // 2026-09-01 横屏矩阵(-wide 后缀,1920×1080,schema 与竖屏同款一致)
+  "big-number-wide": {},
+  "structure-growth-wide": { items: "branches", min: 2, max: 4 },
+  "flow-steps-wide": { items: "steps", min: 2, max: 5 },
+  "logic-chain-wide": { items: "chain", min: 2, max: 4 },
+  "compare-split-wide": {},
+  "timeline-wide": { items: "events", min: 2, max: 5 },
+  "pyramid-wide": { items: "levels", min: 2, max: 5 },
+  "quote-card-wide": {},
+  "checklist-wide": { items: "items", min: 2, max: 6 },
+  "bar-compare-wide": { items: "bars", min: 2, max: 5 },
+  // 横屏原生:片头封面(主参数 title,副题 subtitle)
+  "cover-title-wide": {},
 };
 
 /** 纯校验:返回错误列表(空数组=合法) */
@@ -219,6 +232,8 @@ async function doRender(input: CodeSceneInput): Promise<CodeSceneResult> {
   const outFile = `${input.filename}.mp4`;
 
   const isKeynote = input.template?.name === "keynote-leather";
+  // 横屏镜头模板(2026-09-01 横屏矩阵):-wide 后缀,默认 1920×1080
+  const isWide = !!input.template?.name?.endsWith("-wide");
   const isCustom = !!input.customScene;
   // web 判定上移(2026-09-01 修复):duration 注入点需要它;spec 增补段复用同一变量
   const isWeb = !!input.template && input.template.name in WEB_TEMPLATES;
@@ -255,8 +270,9 @@ async function doRender(input: CodeSceneInput): Promise<CodeSceneResult> {
     customCode: input.customScene,
     duration: targetDuration,
     // keynote-leather 是横屏整片模板,默认 1920×1080;其余模板默认竖屏 1080×1920
-    width: input.size?.w ?? (isKeynote ? 1920 : 1080),
-    height: input.size?.h ?? (isKeynote ? 1080 : 1920),
+    // keynote-leather 与 -wide 横屏模板默认 1920×1080;其余模板默认竖屏 1080×1920
+    width: input.size?.w ?? ((isKeynote || isWide) ? 1920 : 1080),
+    height: input.size?.h ?? ((isKeynote || isWide) ? 1080 : 1920),
     outFile,
     outDir: outDirAbs,
   };

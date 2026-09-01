@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; width: 1920px; height: 1080px; overflow: hidden; }
+  body { background: var(--bg, #0f1b2d); font-family: var(--font-display, "Noto Sans CJK SC", "Microsoft YaHei", sans-serif); position: relative; }
+  .grid-bg { position: absolute; inset: 0;
+    background-image: linear-gradient(var(--bg-grid, rgba(148,163,184,.05)) 1px, transparent 1px),
+      linear-gradient(90deg, var(--bg-grid, rgba(148,163,184,.05)) 1px, transparent 1px);
+    background-size: 96px 96px; }
+  .kicker { position: absolute; top: 72px; left: 96px; font-size: 26px; letter-spacing: 6px;
+    color: var(--accent, #3b82f6); border: 1px solid color-mix(in srgb, var(--accent, #3b82f6) 45%, transparent);
+    padding: 10px 22px 10px 28px; border-radius: 999px; font-weight: 500; white-space: nowrap; }
+  .title { position: absolute; top: 140px; left: 96px; font-size: 54px; font-weight: 700; color: var(--text, #f1f5f9); }
+  .unit { position: absolute; top: 240px; right: 96px; font-size: 24px; color: var(--text-sub, #94a3b8); }
+  .axis { position: absolute; left: 480px; top: 300px; bottom: 210px; width: 2px;
+    background: color-mix(in srgb, var(--text, #f1f5f9) 14%, transparent); }
+  .row { position: absolute; }
+  .row .dot { position: absolute; left: 0; top: 50%; transform: translateY(-50%); width: 14px; height: 14px;
+    border-radius: 50%; background: var(--text-sub, #94a3b8); opacity: .5; }
+  .row .label { position: absolute; left: 32px; width: 340px; top: 50%; transform: translateY(-50%);
+    font-size: 30px; font-weight: 500; color: var(--text, #f1f5f9); }
+  .row .track { position: absolute; top: 50%; transform: translateY(-50%); height: 56px; border-radius: 10px;
+    background: color-mix(in srgb, var(--text, #f1f5f9) 5%, transparent);
+    border: 1px solid color-mix(in srgb, var(--text, #f1f5f9) 7%, transparent); }
+  .row .fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 10px; width: 0;
+    background: color-mix(in srgb, var(--accent, #3b82f6) 34%, transparent); }
+  .row.max .fill { background: linear-gradient(90deg, var(--accent, #3b82f6), var(--accent-2, #60a5fa));
+    box-shadow: 0 0 22px color-mix(in srgb, var(--accent, #3b82f6) 45%, transparent); }
+  .row.max .dot { background: var(--accent, #3b82f6); opacity: 1; box-shadow: 0 0 12px var(--accent, #3b82f6); }
+  .row .val { position: absolute; top: 50%; transform: translateY(-50%); font-size: 30px; font-weight: 700;
+    color: var(--text-sub, #94a3b8); white-space: nowrap; }
+  .row.max .val { color: var(--accent-2, #60a5fa); }
+  .corner { position: absolute; width: 56px; height: 56px; opacity: .35;
+    border-color: var(--accent, #3b82f6); border-style: solid; border-width: 0; }
+  .corner.tl { top: 40px; left: 40px; border-top-width: 4px; border-left-width: 4px; }
+  .corner.tr { top: 40px; right: 40px; border-top-width: 4px; border-right-width: 4px; }
+  .corner.bl { bottom: 40px; left: 40px; border-bottom-width: 4px; border-left-width: 4px; }
+  .corner.br { bottom: 40px; right: 40px; border-bottom-width: 4px; border-right-width: 4px; }
+  .source { position: absolute; bottom: 28px; left: 96px; font-size: 22px; color: var(--text-sub, #94a3b8); opacity: .8; }
+</style>
+</head>
+<body>
+<div class="grid-bg"></div>
+<div class="kicker" id="kicker"></div><div class="title" id="title"></div>
+<div class="unit" id="unit"></div>
+<div class="axis"></div>
+<div id="rows"></div>
+<div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+<div class="source" id="source"></div>
+<script>
+(function () {
+  var style = document.createElement("style");
+  style.textContent = window.__THEME_CSS__ || "";
+  document.head.appendChild(style);
+  var P = window.__PARAMS__ || {};
+  var D = P.duration || 8;
+
+  var bars = (P.bars || [
+    { label: "交通基础设施", value: 38200 },
+    { label: "市政和产业园区", value: 29850 },
+    { label: "保障性安居工程", value: 18400 },
+    { label: "农林水利", value: 9600 },
+    { label: "生态环保", value: 5200 },
+  ]).slice(0, 5);
+  var n = bars.length;
+  var maxV = Math.max.apply(null, bars.map(function (b) { return b.value; }));
+  var maxIdx = bars.findIndex(function (b) { return b.value === maxV; });
+
+  document.getElementById("kicker").textContent = P.kicker || "数据透视";
+  document.getElementById("title").textContent = P.title || "";
+  document.getElementById("unit").textContent = P.unit ? "单位:" + P.unit : "";
+  document.getElementById("source").textContent = P.source ? "来源:" + P.source : "";
+
+  // 布局:标签列 x∈[96,436],轴 x=480,条区 x∈[480, 1620],数值在条右侧;行区 y∈[300, 880]
+  var TOP = 310, BOT = 880;
+  var rowH = (BOT - TOP) / n;
+  var AXIS_X = 480, BAR_MAX_W = 1620 - AXIS_X;
+  var rowsEl = document.getElementById("rows");
+
+  bars.forEach(function (b, i) {
+    var row = document.createElement("div");
+    row.className = "row" + (i === maxIdx ? " max" : "");
+    row.style.left = "96px";
+    row.style.top = (TOP + rowH * i) + "px";
+    row.style.width = "1760px";
+    row.style.height = rowH + "px";
+    var w = Math.max(40, Math.round(BAR_MAX_W * b.value / maxV));
+    row.innerHTML =
+      '<div class="dot"></div><div class="label">' + (b.label || "") + "</div>" +
+      '<div class="track" style="left:' + (AXIS_X - 96) + "px;width:" + w + 'px"><div class="fill"></div></div>' +
+      '<div class="val" style="left:' + (AXIS_X - 96 + w + 22) + 'px">0</div>';
+    rowsEl.appendChild(row);
+  });
+
+  var EASE = "cubic-bezier(0.16, 1, 0.3, 1)";
+  function add(el, kf, o) { el.animate(kf, Object.assign({ fill: "both" }, o)); }
+
+  add(document.getElementById("kicker"), [{ opacity: 0 }, { opacity: 1 }], { duration: 400, easing: EASE });
+  add(document.getElementById("title"), [{ opacity: 0, transform: "translateY(26px)" }, { opacity: 1, transform: "translateY(0)" }], { duration: 550, delay: 130, easing: EASE });
+
+  var stagger = Math.min(600, Math.max(240, (D * 1000 * 0.45) / Math.max(n, 1)));
+  var growDur = 900;
+  var fills = [], vals = [];
+  document.querySelectorAll(".row").forEach(function (row, i) {
+    var d0 = 700 + i * stagger;
+    var track = row.querySelector(".track");
+    add(row, [{ opacity: 0, transform: "translateX(30px)" }, { opacity: 1, transform: "translateX(0)" }], { duration: 450, delay: d0, easing: EASE });
+    var w = track.style.width;
+    track.querySelector(".fill").animate([{ width: "0px" }, { width: w }], { duration: growDur, delay: d0 + 200, fill: "both", easing: EASE });
+    fills.push(track); vals.push(row.querySelector(".val"));
+  });
+
+  // 数值滚动:与柱条生长同窗同步
+  window.__seek = function (t) {
+    for (var i = 0; i < n; i++) {
+      var d0 = (700 + i * stagger) / 1000;
+      var p = Math.min(Math.max((t - d0 - 0.2) / (growDur / 1000), 0), 1);
+      var eased = 1 - Math.pow(1 - p, 3);
+      var v = bars[i].value * eased;
+      vals[i].textContent = v >= 10000
+        ? String(Math.round(v)).replace(/\B(?=(\d{3})+(?!\d))/g, " ")
+        : (v % 1 ? v.toFixed(1) : String(Math.round(v)));
+    }
+  };
+  window.__seek(0);
+})();
+</script>
+</body>
+</html>

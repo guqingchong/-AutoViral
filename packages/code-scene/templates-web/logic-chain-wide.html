@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; width: 1920px; height: 1080px; overflow: hidden; }
+  body { background: var(--bg, #0f1b2d); font-family: var(--font-display, "Noto Sans CJK SC", "Microsoft YaHei", sans-serif); position: relative; }
+  .grid-bg { position: absolute; inset: 0;
+    background-image: linear-gradient(var(--bg-grid, rgba(148,163,184,.05)) 1px, transparent 1px),
+      linear-gradient(90deg, var(--bg-grid, rgba(148,163,184,.05)) 1px, transparent 1px);
+    background-size: 96px 96px; }
+  .glow { position: absolute; left: 50%; top: 540px; width: 1300px; height: 800px; transform: translate(-50%,-50%);
+    background: radial-gradient(circle, var(--accent, #3b82f6) 0%, transparent 60%); opacity: .13; pointer-events: none; }
+  .kicker { position: absolute; top: 72px; left: 96px; font-size: 26px; letter-spacing: 6px;
+    color: var(--accent, #3b82f6); border: 1px solid color-mix(in srgb, var(--accent, #3b82f6) 45%, transparent);
+    padding: 10px 22px 10px 28px; border-radius: 999px; font-weight: 500; white-space: nowrap; }
+  .title { position: absolute; top: 140px; left: 96px; font-size: 54px; font-weight: 700; color: var(--text, #f1f5f9); }
+  svg.chain { position: absolute; inset: 0; width: 1920px; height: 1080px; }
+  svg.chain path { stroke: var(--accent, #3b82f6); stroke-width: 3; fill: none; opacity: .55; }
+  .node { position: absolute; top: 430px; width: 400px; min-height: 210px;
+    background: color-mix(in srgb, var(--text, #f1f5f9) 6%, transparent);
+    backdrop-filter: blur(12px);
+    border: 1px solid color-mix(in srgb, var(--text, #f1f5f9) 12%, transparent);
+    border-radius: var(--radius-card, 24px);
+    box-shadow: var(--shadow-lg, 0 24px 64px rgba(2,8,23,.55));
+    padding: 28px 30px; box-sizing: border-box; }
+  .node .idx { width: 56px; height: 56px; border-radius: 50%; margin-bottom: 16px;
+    background: linear-gradient(135deg, var(--accent-2, #60a5fa), var(--accent, #3b82f6));
+    display: flex; align-items: center; justify-content: center; color: #fff; font-size: 26px; font-weight: 800; }
+  .node .lab { display: inline-block; font-size: 22px; color: var(--accent, #3b82f6);
+    border: 1px solid color-mix(in srgb, var(--accent, #3b82f6) 45%, transparent);
+    border-radius: 999px; padding: 4px 14px; margin-bottom: 12px; }
+  .node .txt { font-size: 32px; font-weight: 700; color: var(--text, #f1f5f9); line-height: 1.4; }
+  .corner { position: absolute; width: 56px; height: 56px; opacity: .35;
+    border-color: var(--accent, #3b82f6); border-style: solid; border-width: 0; }
+  .corner.tl { top: 40px; left: 40px; border-top-width: 4px; border-left-width: 4px; }
+  .corner.tr { top: 40px; right: 40px; border-top-width: 4px; border-right-width: 4px; }
+  .corner.bl { bottom: 40px; left: 40px; border-bottom-width: 4px; border-left-width: 4px; }
+  .corner.br { bottom: 40px; right: 40px; border-bottom-width: 4px; border-right-width: 4px; }
+  .source { position: absolute; bottom: 28px; left: 96px; font-size: 22px; color: var(--text-sub, #94a3b8); opacity: .8; }
+</style>
+</head>
+<body>
+<div class="grid-bg"></div><div class="glow" id="glow"></div>
+<div class="kicker" id="kicker"></div><div class="title" id="title"></div>
+<svg class="chain" id="chain" viewBox="0 0 1920 1080"></svg>
+<div id="nodes"></div>
+<div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+<div class="source" id="source"></div>
+<script>
+(function () {
+  var style = document.createElement("style");
+  style.textContent = window.__THEME_CSS__ || "";
+  document.head.appendChild(style);
+  var P = window.__PARAMS__ || {};
+  var D = P.duration || 8;
+
+  var chain = (P.chain || [
+    { label: "背景", text: "隐性债务压力上升" },
+    { label: "政策", text: "专项债置换额度下达" },
+    { label: "传导", text: "城投现金流改善" },
+    { label: "结果", text: "区域信用修复" },
+  ]).slice(0, 4).map(function (c) { return typeof c === "string" ? { text: c } : c; });
+  var n = chain.length;
+
+  document.getElementById("kicker").textContent = P.kicker || "逻辑链条";
+  document.getElementById("title").textContent = P.title || "";
+  document.getElementById("source").textContent = P.source ? "来源:" + P.source : "";
+
+  var CARD_W = 400, AREA_L = 96, AREA_R = 1920 - 96;
+  var totalW = n * CARD_W;
+  var gap = n > 1 ? Math.min(90, (AREA_R - AREA_L - totalW) / (n - 1)) : 0;
+  var startX = AREA_L + Math.max(0, (AREA_R - AREA_L - totalW - gap * (n - 1)) / 2);
+  var TOP = 430;
+  var NS = "http://www.w3.org/2000/svg";
+  var svg = document.getElementById("chain");
+  var nodesEl = document.getElementById("nodes");
+
+  chain.forEach(function (c, i) {
+    var x = startX + i * (CARD_W + gap);
+    var node = document.createElement("div");
+    node.className = "node";
+    node.style.left = x + "px";
+    node.innerHTML = '<div class="idx">' + (i + 1) + "</div>" +
+      (c.label ? '<span class="lab">' + c.label + "</span><br>" : "") +
+      '<span class="txt">' + (c.text || "") + "</span>";
+    nodesEl.appendChild(node);
+    if (i < n - 1) {
+      var x1 = x + CARD_W + 6, x2 = x + CARD_W + gap - 6, y = TOP + 105;
+      var path = document.createElementNS(NS, "path");
+      path.setAttribute("d", "M " + x1 + " " + y + " L " + x2 + " " + y);
+      svg.appendChild(path);
+      var arrow = document.createElementNS(NS, "polygon");
+      arrow.setAttribute("points", x2 + 8 + "," + y + " " + (x2 - 8) + "," + (y - 10) + " " + (x2 - 8) + "," + (y + 10));
+      arrow.setAttribute("fill", "var(--accent, #3b82f6)");
+      arrow.setAttribute("class", "chain-arrow");
+      svg.appendChild(arrow);
+    }
+  });
+
+  var EASE = "cubic-bezier(0.16, 1, 0.3, 1)";
+  var SPRING = "cubic-bezier(0.34, 1.56, 0.64, 1)";
+  function add(el, kf, o) { el.animate(kf, Object.assign({ fill: "both" }, o)); }
+
+  add(document.getElementById("kicker"), [{ opacity: 0, transform: "translateY(24px)" }, { opacity: 1, transform: "translateY(0)" }], { duration: 450, easing: EASE });
+  add(document.getElementById("title"), [{ opacity: 0, transform: "translateY(30px)" }, { opacity: 1, transform: "translateY(0)" }], { duration: 550, delay: 140, easing: EASE });
+
+  var stagger = Math.min(1.1, Math.max(0.4, (D * 0.62 - 1.2) / Math.max(n - 1, 1)));
+  document.querySelectorAll(".node").forEach(function (node, i) {
+    var d0 = 750 + i * stagger * 1000;
+    add(node, [{ opacity: 0, transform: "translateY(60px) scale(0.94)" }, { opacity: 1, transform: "translateY(0) scale(1)" }], { duration: 620, delay: d0, easing: SPRING });
+    // 激活脉冲光环
+    var halo = node.querySelector(".idx");
+    add(halo, [{ boxShadow: "0 0 0 0 color-mix(in srgb, var(--accent,#3b82f6) 55%, transparent)" },
+      { boxShadow: "0 0 0 26px transparent" }], { duration: 600, delay: d0 + 400, easing: "ease-out" });
+  });
+  svg.querySelectorAll("path").forEach(function (p, i) {
+    var len = p.getTotalLength();
+    p.style.strokeDasharray = String(len);
+    p.style.strokeDashoffset = String(len);
+    p.animate([{ strokeDashoffset: len }, { strokeDashoffset: 0 }],
+      { duration: 400, delay: 750 + i * stagger * 1000 + stagger * 550, fill: "both", easing: EASE });
+  });
+  svg.querySelectorAll(".chain-arrow").forEach(function (a, i) {
+    a.animate([{ opacity: 0 }, { opacity: 0.9 }], { duration: 300, delay: 1050 + i * stagger * 1000 + stagger * 550, fill: "both" });
+  });
+  // 全链贯通:末端整体脉冲
+  add(document.getElementById("nodes"), [{ filter: "brightness(1)" }, { filter: "brightness(1.25)" }, { filter: "brightness(1)" }],
+    { duration: 600, delay: 750 + (n - 1) * stagger * 1000 + 900, easing: EASE });
+  add(document.getElementById("glow"), [{ opacity: 0.09 }, { opacity: 0.16 }, { opacity: 0.09 }], { duration: Math.round(D * 1000), easing: "ease-in-out" });
+})();
+</script>
+</body>
+</html>

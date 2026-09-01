@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; width: 1920px; height: 1080px; overflow: hidden; }
+  body { background: var(--bg, #0f1b2d); font-family: var(--font-display, "Noto Sans CJK SC", "Microsoft YaHei", sans-serif); position: relative; }
+  .grid-bg { position: absolute; inset: 0;
+    background-image: linear-gradient(var(--bg-grid, rgba(148,163,184,.05)) 1px, transparent 1px),
+      linear-gradient(90deg, var(--bg-grid, rgba(148,163,184,.05)) 1px, transparent 1px);
+    background-size: 96px 96px; }
+  .glow { position: absolute; left: 50%; top: 520px; width: 1400px; height: 800px; transform: translate(-50%,-50%);
+    background: radial-gradient(circle, var(--accent, #3b82f6) 0%, transparent 60%); opacity: .15; pointer-events: none; }
+  .kicker { position: absolute; top: 320px; left: 0; right: 0; text-align: center;
+    font-size: 28px; letter-spacing: 10px; color: var(--accent, #3b82f6); font-weight: 500; }
+  .bigtitle { position: absolute; top: 400px; left: 120px; right: 120px; text-align: center;
+    font-size: 120px; font-weight: 900; color: var(--text, #f1f5f9); line-height: 1.25; letter-spacing: 2px; }
+  .bigtitle .accent { background: linear-gradient(135deg, var(--accent-2, #60a5fa), var(--accent, #3b82f6));
+    -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .subtitle { position: absolute; top: 620px; left: 320px; right: 320px; text-align: center;
+    font-size: 36px; color: var(--text-sub, #94a3b8); line-height: 1.6; font-weight: 400; }
+  .rule { position: absolute; top: 570px; left: 50%; transform: translateX(-50%); height: 4px; width: 0;
+    background: linear-gradient(90deg, transparent, var(--accent, #3b82f6), transparent); }
+  .corner { position: absolute; width: 72px; height: 72px; opacity: .4;
+    border-color: var(--accent, #3b82f6); border-style: solid; border-width: 0; }
+  .corner.tl { top: 56px; left: 56px; border-top-width: 5px; border-left-width: 5px; }
+  .corner.tr { top: 56px; right: 56px; border-top-width: 5px; border-right-width: 5px; }
+  .corner.bl { bottom: 56px; left: 56px; border-bottom-width: 5px; border-left-width: 5px; }
+  .corner.br { bottom: 56px; right: 56px; border-bottom-width: 5px; border-right-width: 5px; }
+  .source { position: absolute; bottom: 28px; left: 96px; font-size: 22px; color: var(--text-sub, #94a3b8); opacity: .8; }
+</style>
+</head>
+<body>
+<div class="grid-bg"></div><div class="glow" id="glow"></div>
+<div class="kicker" id="kicker"></div>
+<div class="bigtitle" id="bigtitle"></div>
+<div class="rule" id="rule"></div>
+<div class="subtitle" id="subtitle"></div>
+<div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+<div class="source" id="source"></div>
+<script>
+(function () {
+  var style = document.createElement("style");
+  style.textContent = window.__THEME_CSS__ || "";
+  document.head.appendChild(style);
+  var P = window.__PARAMS__ || {};
+  var D = P.duration || 6;
+
+  document.getElementById("kicker").textContent = P.kicker || "";
+  var title = P.title || "";
+  // accent 词:params.accent 指定的子句染渐变,或默认后四字
+  var bt = document.getElementById("bigtitle");
+  var accentText = P.accent || title.slice(-Math.min(4, title.length));
+  var idx = accentText ? title.lastIndexOf(accentText) : -1;
+  if (idx >= 0 && accentText) {
+    bt.innerHTML = title.slice(0, idx) + '<span class="accent">' + accentText + "</span>" + title.slice(idx + accentText.length);
+  } else {
+    bt.textContent = title;
+  }
+  document.getElementById("subtitle").textContent = P.subtitle || "";
+  document.getElementById("source").textContent = P.source ? "来源:" + P.source : "";
+  if (!P.source) document.getElementById("source").style.display = "none";
+  if (!P.subtitle) document.getElementById("subtitle").style.display = "none";
+
+  var EASE = "cubic-bezier(0.16, 1, 0.3, 1)";
+  var SPRING = "cubic-bezier(0.34, 1.56, 0.64, 1)";
+  function add(el, kf, o) { el.animate(kf, Object.assign({ fill: "both" }, o)); }
+
+  // 片头节奏:辉光淡入 → kicker 落定 → 巨字遮罩揭示 → 分隔线扫开 → 副题上浮
+  add(document.getElementById("glow"), [{ opacity: 0 }, { opacity: 0.15 }], { duration: 800, easing: EASE });
+  add(document.getElementById("kicker"), [{ opacity: 0, transform: "translateY(18px)" }, { opacity: 1, transform: "translateY(0)" }], { duration: 500, delay: 350, easing: EASE });
+  add(bt, [{ opacity: 0, transform: "scale(0.94)", filter: "blur(10px)" }, { opacity: 1, transform: "scale(1)", filter: "blur(0px)" }], { duration: 850, delay: 700, easing: SPRING });
+  add(document.getElementById("rule"), [{ width: "0px" }, { width: "420px" }], { duration: 700, delay: 1500, easing: EASE });
+  if (P.subtitle) add(document.getElementById("subtitle"), [{ opacity: 0, transform: "translateY(26px)" }, { opacity: 1, transform: "translateY(0)" }], { duration: 550, delay: 1900, easing: EASE });
+  add(document.getElementById("glow"), [{ opacity: 0.15 }, { opacity: 0.22 }, { opacity: 0.15 }], { duration: Math.max(2000, Math.round((D - 2) * 1000)), delay: 2000, easing: "ease-in-out" });
+})();
+</script>
+</body>
+</html>

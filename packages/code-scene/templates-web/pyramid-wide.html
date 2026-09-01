@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; width: 1920px; height: 1080px; overflow: hidden; }
+  body { background: var(--bg, #0f1b2d); font-family: var(--font-display, "Noto Sans CJK SC", "Microsoft YaHei", sans-serif); position: relative; }
+  .grid-bg { position: absolute; inset: 0;
+    background-image: linear-gradient(var(--bg-grid, rgba(148,163,184,.05)) 1px, transparent 1px),
+      linear-gradient(90deg, var(--bg-grid, rgba(148,163,184,.05)) 1px, transparent 1px);
+    background-size: 96px 96px; }
+  .kicker { position: absolute; top: 72px; left: 96px; font-size: 26px; letter-spacing: 6px;
+    color: var(--accent, #3b82f6); border: 1px solid color-mix(in srgb, var(--accent, #3b82f6) 45%, transparent);
+    padding: 10px 22px 10px 28px; border-radius: 999px; font-weight: 500; white-space: nowrap; }
+  .title { position: absolute; top: 140px; left: 96px; font-size: 54px; font-weight: 700; color: var(--text, #f1f5f9); }
+  .count { position: absolute; top: 240px; left: 96px; font-size: 28px; color: var(--text-sub, #94a3b8); font-weight: 500; }
+  .count b { color: var(--accent, #3b82f6); font-size: 40px; font-weight: 900; }
+  .layer { position: absolute; left: 0; height: 0; display: flex; align-items: center; justify-content: center;
+    color: #fff; font-weight: 800; text-shadow: 0 2px 8px rgba(0,0,0,.35);
+    clip-path: polygon(var(--clip)); border-radius: 6px; }
+  .side { position: absolute; font-size: 26px; color: var(--text-sub, #94a3b8); display: flex; align-items: center; gap: 12px; }
+  .side::before { content: ""; width: 4px; height: 26px; background: var(--accent, #3b82f6); border-radius: 2px; }
+  .corner { position: absolute; width: 56px; height: 56px; opacity: .35;
+    border-color: var(--accent, #3b82f6); border-style: solid; border-width: 0; }
+  .corner.tl { top: 40px; left: 40px; border-top-width: 4px; border-left-width: 4px; }
+  .corner.tr { top: 40px; right: 40px; border-top-width: 4px; border-right-width: 4px; }
+  .corner.bl { bottom: 40px; left: 40px; border-bottom-width: 4px; border-left-width: 4px; }
+  .corner.br { bottom: 40px; right: 40px; border-bottom-width: 4px; border-right-width: 4px; }
+  .source { position: absolute; bottom: 28px; left: 96px; font-size: 22px; color: var(--text-sub, #94a3b8); opacity: .8; }
+</style>
+</head>
+<body>
+<div class="grid-bg"></div>
+<div class="kicker" id="kicker"></div><div class="title" id="title"></div>
+<div class="count" id="count"></div>
+<div id="pyramid"></div>
+<div id="sides"></div>
+<div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+<div class="source" id="source"></div>
+<script>
+(function () {
+  var style = document.createElement("style");
+  style.textContent = window.__THEME_CSS__ || "";
+  document.head.appendChild(style);
+  var P = window.__PARAMS__ || {};
+  var D = P.duration || 8;
+
+  // levels 自下而上(与竖屏版语义一致)
+  var levels = (P.levels || [
+    { text: "流量基础", desc: "全域铺量获客" },
+    { text: "内容资产", desc: "模板化批量生产" },
+    { text: "转化承接", desc: "私域加直播间联动" },
+    { text: "复购经营", desc: "会员体系锁客" },
+    { text: "品牌溢价", desc: "心智占领定价权" },
+  ]).slice(0, 5);
+  var n = levels.length;
+
+  document.getElementById("kicker").textContent = P.kicker || "层级拆解";
+  document.getElementById("title").textContent = P.title || "";
+  document.getElementById("source").textContent = P.source ? "来源:" + P.source : "";
+
+  // 金字塔居左半:中心 x=560,底宽 760,顶宽 260;层区 y∈[230, 880](字幕带 900 起)
+  var CX = 560, BOT = 880, TOP = 230;
+  var layerH = (BOT - TOP) / n - 14;
+  var W_BOT = 760, W_TOP = 260;
+  var pyr = document.getElementById("pyramid");
+  var sides = document.getElementById("sides");
+
+  levels.forEach(function (lv, i) {
+    // i=0 最底层
+    var y1 = BOT - (i + 1) * ((BOT - TOP) / n);
+    var wBottom = W_BOT - (W_BOT - W_TOP) * (i / n);
+    var wTop = W_BOT - (W_BOT - W_TOP) * ((i + 1) / n);
+    var isTop = i === n - 1;
+    var div = document.createElement("div");
+    div.className = "layer";
+    var shade = 1 - i * 0.13;
+    div.style.left = (CX - wBottom / 2) + "px";
+    div.style.top = y1 + "px";
+    div.style.width = wBottom + "px";
+    div.style.height = layerH + "px";
+    div.style.fontSize = "34px";
+    // 梯形裁剪:左下x 右下x 右上x 左上x(百分比)
+    var lb = 0, rb = 100;
+    var lt = (wBottom - wTop) / 2 / wBottom * 100;
+    var rt = 100 - lt;
+    div.style.setProperty("--clip", lb + "% 100%, " + rb + "% 100%, " + rt + "% 0%, " + lt + "% 0%");
+    div.style.background = "linear-gradient(135deg, " +
+      "color-mix(in srgb, var(--accent, #3b82f6) " + Math.round((isTop ? 100 : 72 * shade + 18)) + "%, transparent), " +
+      "color-mix(in srgb, var(--accent, #3b82f6) " + Math.round((isTop ? 88 : 55 * shade + 12)) + "%, transparent))";
+    div.style.border = "1px solid color-mix(in srgb, var(--accent, #3b82f6) 55%, transparent)";
+    div.textContent = lv.text || "";
+    pyr.appendChild(div);
+
+    // 右侧注释
+    if (lv.desc) {
+      var side = document.createElement("div");
+      side.className = "side";
+      side.style.left = (CX + W_BOT / 2 + 70) + "px";
+      side.style.top = (y1 + layerH / 2 - 17) + "px";
+      side.textContent = lv.desc;
+      sides.appendChild(side);
+    }
+  });
+
+  var EASE = "cubic-bezier(0.16, 1, 0.3, 1)";
+  var SPRING = "cubic-bezier(0.34, 1.56, 0.64, 1)";
+  function add(el, kf, o) { el.animate(kf, Object.assign({ fill: "both" }, o)); }
+
+  add(document.getElementById("kicker"), [{ opacity: 0 }, { opacity: 1 }], { duration: 400, easing: EASE });
+  add(document.getElementById("title"), [{ opacity: 0, transform: "translateY(26px)" }, { opacity: 1, transform: "translateY(0)" }], { duration: 550, delay: 130, easing: EASE });
+  add(document.getElementById("count"), [{ opacity: 0 }, { opacity: 1 }], { duration: 500, delay: 500, easing: EASE });
+
+  // 自下而上逐层搭建
+  var stagger = Math.min(0.9, Math.max(0.35, (D * 0.6 - 1) / Math.max(n - 1, 1)));
+  document.querySelectorAll(".layer").forEach(function (layer, i) {
+    add(layer, [{ opacity: 0, transform: "translateY(60px) scale(0.92)" }, { opacity: 1, transform: "translateY(0) scale(1)" }],
+      { duration: 620, delay: 700 + i * stagger * 1000, easing: SPRING });
+    var side = sides.children[i];
+    if (side) add(side, [{ opacity: 0, transform: "translateX(30px)" }, { opacity: 1, transform: "translateX(0)" }],
+      { duration: 450, delay: 950 + i * stagger * 1000, easing: EASE });
+  });
+  // 顶层高光脉冲
+  var topLayer = document.querySelectorAll(".layer")[n - 1];
+  add(topLayer, [{ filter: "brightness(1)" }, { filter: "brightness(1.35)" }, { filter: "brightness(1)" }],
+    { duration: 550, delay: 700 + (n - 1) * stagger * 1000 + 700, easing: EASE });
+
+  window.__seek = function (t) {
+    var v = 0;
+    for (var i = 0; i < n; i++) if (t >= 0.7 + i * stagger + 0.25) v = i + 1;
+    // 进度后缀只用一个字,防与塔尖视觉交叠
+    document.getElementById("count").innerHTML = "共 <b>" + n + "</b> 层 · 第 <b>" + v + "</b> 层";
+  };
+  window.__seek(0);
+})();
+</script>
+</body>
+</html>
