@@ -348,7 +348,36 @@ def group_words_into_lines(words: list[dict], max_words: int = 8, max_chars: int
     if current_line:
         lines.append(current_line)
 
-    return lines
+    return merge_orphan_punctuation(lines)
+
+
+# 不得出现在行首/孤行的标点(避头尾):句读、闭口括号、英文标点
+_ORPHAN_PUNCT = set("，。、；：？！…—·,.;:!?》」』】)〕〉\"'”’")
+
+
+def _is_punct_only(text: str) -> bool:
+    t = text.strip()
+    return bool(t) and all(ch in _ORPHAN_PUNCT for ch in t)
+
+
+def merge_orphan_punctuation(lines: list[list[dict]]) -> list[list[dict]]:
+    """标点避头尾后处理.
+
+    ASR/TTS 词流中句号逗号常是独立 token, 且句末自带 >0.5s 停顿,
+    会被间隙/长度规则单独切成一行, karaoke 渲染下表现为标点孤行。
+    规则: ①整行纯标点 → 并入上一行; ②行首为纯标点 token → 挪到上一行尾。
+    词的 \\kf 时间戳不动, 只改行的归属, 不影响高亮时序。
+    """
+    merged: list[list[dict]] = []
+    for line in lines:
+        if merged and _is_punct_only("".join(str(w["word"]) for w in line)):
+            merged[-1].extend(line)
+            continue
+        while merged and line and _is_punct_only(str(line[0]["word"])):
+            merged[-1].append(line.pop(0))
+        if line:
+            merged.append(line)
+    return merged
 
 
 def compute_lead_times(lines: list[list[dict]], lead_time_ms: int = 80) -> list[float]:

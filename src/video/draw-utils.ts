@@ -181,13 +181,15 @@ export function wrapTextLines(text: string, fontSize: number, maxWidth?: number)
   const hardLines = text.split(/\r?\n/);
   if (!maxWidth || maxWidth <= 0) return hardLines;
   const maxUnits = Math.max(maxWidth / fontSize, 2);
+  // 避头:这些标点不得出现在行首(否则边界处切出标点孤行),宁可让上一行略微超宽
+  const noLineStart = new Set("，。、；：？！…—·』」》）〕〉”’,.;:!?)]}\"'");
   const lines: string[] = [];
   for (const raw of hardLines) {
     let cur = "";
     let units = 0;
     for (const ch of raw) {
       const w = charUnits(ch);
-      if (units + w > maxUnits && cur.length > 0) {
+      if (units + w > maxUnits && cur.length > 0 && !noLineStart.has(ch)) {
         lines.push(cur);
         cur = ch;
         units = w;
