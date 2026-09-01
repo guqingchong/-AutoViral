@@ -37,4 +37,18 @@ describe.skipIf(!edgeExists)("web-worker 确定性截帧", () => {
     expect(r.success, r.error).toBe(true);
     expect(r.duration).toBeGreaterThanOrEqual(5.9);
   });
+
+  it("big-number 短镜头 duration=3 走短分支出片", { timeout: 120_000 }, async () => {
+    // 回归:web 支路须把 targetDuration 注入 __PARAMS__.duration,
+    // 否则模板永远走默认 6s 长分支(2026-09-01 修复 code-scene.ts:227)
+    const { renderCodeScene } = await import("../../src/services/code-scene.js");
+    const r = await renderCodeScene({
+      workId: "w_web_bignumber_test", filename: "bignumber-web-short",
+      template: { name: "big-number", params: { title: "社融增量", kicker: "金融数据", value: 38.5, format: "percent", caption: "增速回升", source: "中国人民银行" } },
+      theme: "finance_dark", duration: 3,
+    } as any);
+    expect(r.success, r.error).toBe(true);
+    expect(r.duration).toBeGreaterThanOrEqual(2.9);
+    expect(r.duration).toBeLessThanOrEqual(3.2);
+  });
 });
