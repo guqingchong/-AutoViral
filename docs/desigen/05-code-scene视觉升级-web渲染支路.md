@@ -26,8 +26,11 @@ HTML 支路。Playwright 1.58 已是主仓依赖(RPA 发布器在用),零新增�
 ## 二、设计
 
 ### S1 字幕安全区(layout 层)
-- 常量:`SUBTITLE_ZONE = { yMin: 720, yMax: 864 }`(1080×1920 设计空间,
-  距底 96~240px 的 144px 高带);`MARGIN = 96`;`CONTENT_TOP = -816`
+- 常量:`SUBTITLE_ZONE = { yMin: 458, yMax: 602 }`(1080×1920 设计空间,中心原点;
+  基线 y=530,即屏幕第 1490 行、ass MarginV=430)
+- **位置受平台 UI 约束,不是纯审美选择**:抖音底部 20% UI 遮挡区为屏幕 y>1536,
+  caption_generate.py 现有 margin_v=430 的注释即为此而设;安全区必须贴在其上沿,
+  不能沉入底部(首轮 spec 的 yMin720/yMax864 会落入遮挡区,计划阶段纠正)
 - 约束:所有模板内容禁止进入 SUBTITLE_ZONE;常量同时供机器门禁与合成层引用
 - web 模板侧以 design token(`--safe-zone-h: 144px`)表达同一约定
 
@@ -80,10 +83,11 @@ HTML 支路。Playwright 1.58 已是主仓依赖(RPA 发布器在用),零新增�
 - `VALID_THEMES` 增加 `magazine_light`
 
 ### S4 字幕胶囊(caption_generate.py)
-- ass 样式:BorderStyle=3(不透明底盒)、BackColour 深色半透明(&H720A101E,
-  即 rgba(10,16,30,.72))、Outline 作 padding、圆角不可控(ass 限制,接受方底)
-- 位置:Alignment=2(底部居中)+ MarginV 使字幕垂直中心落入 SUBTITLE_ZONE
-  (默认 MarginV=168,即 1080×1920 下距底 168px)
+- ass 样式:BorderStyle=3(不透明底盒)、BackColour 深色半透明(&H471E100A,
+  即 rgb(10,16,30) 72% 不透明;hex_to_ass_color 已有 alpha 参数,直接复用)、
+  Outline 作 padding(≥12)、圆角不可控(ass 限制,接受方底)
+- 位置:Alignment=2(底部居中)+ MarginV **保持 430**(基线 y=1490,贴抖音 UI
+  遮挡区上沿,与 SUBTITLE_ZONE 一致);不改现有数值
 - 模板 safeZone 元数据经渲染产物 meta 传递,合成期优先读取,缺省用默认带
 
 ### S5 测试与验收
