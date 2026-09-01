@@ -9,6 +9,7 @@
 import { log } from "../logger.js";
 import { broadcastProgress } from "./progress-events.js";
 import { voiceNotify } from "./voice-notify.js";
+import { getDb } from "../db/connection.js";
 
 export function failVisible(
   scope: { workId?: string; stage?: string },
@@ -28,4 +29,10 @@ export function failVisible(
   // 2026-08-31:关键失败加系统语音播报(voice-notify 内部有同文本 3min 防抖聚合,
   // watchdog 启动批量告警不会连环播报)
   voiceNotify(`${scope.stage ?? "系统"}失败:${reason.slice(0, 60)}`, `fail:${scope.stage ?? "system"}:${reason.slice(0, 40)}`);
+  // 2026-09-01 批次12c:失败原因落 works.last_error,作品列表卡片可见(状态恢复时由调用方清)
+  if (scope.workId) {
+    try {
+      getDb().prepare("UPDATE works SET last_error = ? WHERE id = ?").run(`${scope.stage ?? "系统"}:${reason.slice(0, 200)}`, scope.workId);
+    } catch { /* 落库失败不阻断 */ }
+  }
 }
