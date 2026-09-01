@@ -31,6 +31,18 @@ const framesDir = join(spec.outDir, `${spec.jobId}_frames`);
 await mkdir(framesDir, { recursive: true });
 await mkdir(spec.outDir, { recursive: true });
 
+// 参数中的本地绝对路径转 file:/// URL(file:// 页面下裸路径不可加载;网络隔离只放行 file:)
+function pathsToFileUrls(v) {
+  if (typeof v === "string") {
+    if (/^[A-Za-z]:[\\/]/.test(v)) return "file:///" + v.replace(/\\/g, "/");
+    if (v.startsWith("/") && existsSync(v)) return "file://" + v;
+    return v;
+  }
+  if (Array.isArray(v)) return v.map(pathsToFileUrls);
+  if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, val]) => [k, pathsToFileUrls(val)]));
+  return v;
+}
+
 const edgeCandidates = [
   "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
   "C:/Program Files/Microsoft/Edge/Application/msedge.exe",
@@ -56,7 +68,7 @@ try {
   await page.addInitScript((injected) => {
     window.__PARAMS__ = injected.params;
     window.__THEME_CSS__ = injected.css;
-  }, { params: spec.params ?? {}, css: themeCss });
+  }, { params: pathsToFileUrls(spec.params ?? {}), css: themeCss });
   await page.goto("file:///" + spec.templatePath.replaceAll("\\", "/"));
   await page.evaluate(() => document.fonts.ready);
 
@@ -65,6 +77,19 @@ try {
     await page.evaluate((t) => {
       document.getAnimations({ subtree: true }).forEach((a) => { a.pause(); a.currentTime = t; });
       window.__seek?.(t / 1000);
+    }, tMs);
+    // 模板内嵌 <video>(如数字人窗口)按帧同步:seek 到同一时刻并等 seeked,
+    // 否则截帧拿到的是未解码帧(黑/首帧)
+    await page.evaluate(async (t) => {
+      const videos = [...document.querySelectorAll("video")];
+      await Promise.all(videos.map((v) => new Promise((res) => {
+        const target = Math.min(t / 1000, (v.duration || 0) - 0.05);
+        if (!Number.isFinite(target) || target < 0) return res(null);
+        const onSeeked = () => { v.removeEventListener("seeked", onSeeked); res(null); };
+        v.addEventListener("seeked", onSeeked);
+        v.currentTime = target;
+        setTimeout(() => { v.removeEventListener("seeked", onSeeked); res(null); }, 1500);
+      })));
     }, tMs);
     await page.screenshot({ path: join(framesDir, `f${String(f).padStart(5, "0")}.png`), type: "png" });
   }
