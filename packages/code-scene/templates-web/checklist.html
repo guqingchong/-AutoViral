@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>checklist · 清单打勾</title>
+<!-- 渲染器经 addInitScript 注入 window.__THEME_CSS__,先挂到页首 -->
+<style id="theme-vars"></style>
+<style>
+  html, body { margin: 0; width: 1080px; height: 1920px; overflow: hidden; }
+  body {
+    background: var(--bg, #0f1b2d);
+    font-family: var(--font-display, "Noto Sans CJK SC", "Microsoft YaHei", sans-serif);
+    position: relative;
+  }
+  /* 网格底(纯 CSS 渐变网格,token 驱动) */
+  .grid-bg {
+    position: absolute; inset: 0;
+    background-image:
+      linear-gradient(var(--bg-grid, rgba(148,163,184,.05)) 1px, transparent 1px),
+      linear-gradient(90deg, var(--bg-grid, rgba(148,163,184,.05)) 1px, transparent 1px);
+    background-size: 108px 108px;
+  }
+  /* 列表区中心辉光(呼吸) */
+  .glow {
+    position: absolute; left: 50%; top: 900px; width: 1000px; height: 1000px;
+    transform: translate(-50%, -50%);
+    background: radial-gradient(circle, var(--accent, #3b82f6) 0%, transparent 60%);
+    opacity: .10; pointer-events: none;
+  }
+  .kicker {
+    position: absolute; top: 120px; left: 96px;
+    font-size: 28px; letter-spacing: 6px; color: var(--accent, #3b82f6);
+    border: 1px solid color-mix(in srgb, var(--accent, #3b82f6) 45%, transparent);
+    padding: 10px 28px; border-radius: 999px; font-weight: 500;
+    white-space: nowrap;
+  }
+  .title {
+    position: absolute; top: 190px; left: 96px;
+    font-size: 64px; font-weight: 700; color: var(--text, #f1f5f9);
+    white-space: nowrap;
+  }
+  /* 计数徽章:已核对 k/n(计数走 __seek) */
+  .badge {
+    position: absolute; top: 300px; left: 96px;
+    font-size: 34px; color: var(--text-sub, #94a3b8); font-weight: 500;
+    white-space: nowrap;
+  }
+  .badge b { color: var(--accent, #3b82f6); font-size: 54px; font-weight: 900; }
+  .badge .done-all { color: var(--accent, #3b82f6); font-weight: 700; }
+
+  /* 行卡片:毛玻璃质感 */
+  .row {
+    position: absolute; left: 96px; width: 888px;
+    background: color-mix(in srgb, var(--text, #f1f5f9) 6%, transparent);
+    backdrop-filter: blur(12px);
+    border: 1px solid color-mix(in srgb, var(--text, #f1f5f9) 12%, transparent);
+    border-radius: var(--radius-card, 24px);
+    box-shadow: var(--shadow-lg, 0 24px 64px rgba(2,8,23,.55));
+    box-sizing: border-box;
+    display: flex; align-items: center;
+    padding: 0 32px;
+  }
+  .row .box { flex: none; width: 72px; height: 72px; }
+  .row .txt {
+    margin-left: 28px;
+    font-size: 38px; font-weight: 600; color: var(--text, #f1f5f9);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    max-width: 720px;
+  }
+  /* 未完成行:整体降调,叉号用暗红 */
+  .row.miss { border-color: color-mix(in srgb, var(--danger, #f87171) 30%, transparent); }
+  .row.miss .txt { color: var(--text-sub, #94a3b8); }
+
+  .box svg { display: block; width: 72px; height: 72px; overflow: visible; }
+  .box .frame {
+    fill: color-mix(in srgb, var(--accent, #3b82f6) 10%, transparent);
+    stroke: color-mix(in srgb, var(--accent, #3b82f6) 55%, transparent);
+    stroke-width: 3;
+  }
+  .row.miss .box .frame {
+    fill: color-mix(in srgb, var(--danger, #f87171) 8%, transparent);
+    stroke: color-mix(in srgb, var(--danger, #f87171) 50%, transparent);
+  }
+  .box .tick {
+    fill: none; stroke: var(--accent, #3b82f6);
+    stroke-width: 8; stroke-linecap: round; stroke-linejoin: round;
+  }
+  .box .cross {
+    fill: none; stroke: var(--danger, #f87171);
+    stroke-width: 8; stroke-linecap: round;
+  }
+
+  /* 角标(取景框语言) */
+  .corner { position: absolute; width: 64px; height: 64px; opacity: .35;
+    border-color: var(--accent, #3b82f6); border-style: solid; border-width: 0; }
+  .corner.tl { top: 56px; left: 56px; border-top-width: 4px; border-left-width: 4px; }
+  .corner.tr { top: 56px; right: 56px; border-top-width: 4px; border-right-width: 4px; }
+  .corner.bl { bottom: 56px; left: 56px; border-bottom-width: 4px; border-left-width: 4px; }
+  .corner.br { bottom: 56px; right: 56px; border-bottom-width: 4px; border-right-width: 4px; }
+
+  .source {
+    position: absolute; bottom: 170px; left: 96px;
+    font-size: 24px; color: var(--text-sub, #94a3b8); opacity: .8;
+    white-space: nowrap;
+  }
+</style>
+</head>
+<body>
+<div class="grid-bg"></div>
+<div class="glow" id="glow"></div>
+<div class="kicker" id="kicker"></div>
+<div class="title" id="title"></div>
+<div class="badge" id="badge"></div>
+<div id="rows"></div>
+<div class="corner tl"></div><div class="corner tr"></div>
+<div class="corner bl"></div><div class="corner br"></div>
+<div class="source" id="source"></div>
+
+<script>
+(function () {
+  // 主题令牌注入(web-worker 契约)
+  document.getElementById("theme-vars").textContent = window.__THEME_CSS__ || "";
+
+  const P = window.__PARAMS__ || {};
+  const DURATION = typeof P.duration === "number" && isFinite(P.duration) ? P.duration : 8;
+
+  // ── 参数(与 Revideo 版语义一致;done 默认 true) ──
+  const rawItems = Array.isArray(P.items) ? P.items.slice(0, 6) : [];
+  const items = rawItems.map((it) =>
+    typeof it === "string" ? { text: it, done: true } : { text: it.text || "", done: it.done !== false });
+  const n = Math.max(items.length, 2);
+  while (items.length < 2) items.push({ text: "", done: true });
+
+  const kickerEl = document.getElementById("kicker");
+  const titleEl = document.getElementById("title");
+  const badgeEl = document.getElementById("badge");
+  const srcEl = document.getElementById("source");
+  if (P.kicker) kickerEl.textContent = P.kicker; else kickerEl.style.display = "none";
+  titleEl.textContent = P.title || "";
+  if (P.source) srcEl.textContent = "来源:" + P.source; else srcEl.style.display = "none";
+
+  // ── 布局:列表区 y∈[420,1390],字幕带(1418-1562)下方留白避让 ──
+  const AREA_TOP = 420, AREA_H = 970, GAP = 24;
+  const rowH = Math.min(178, Math.floor(AREA_H / n));
+  const cardH = rowH - GAP;
+  const startY = AREA_TOP + Math.max(0, Math.round((AREA_H - n * rowH) / 2));
+
+  const NS = "http://www.w3.org/2000/svg";
+  const rowsEl = document.getElementById("rows");
+  const tickPaths = [];   // { path, len, done }
+  const rowDivs = [];
+
+  items.forEach((it, i) => {
+    const row = document.createElement("div");
+    row.className = "row" + (it.done ? "" : " miss");
+    row.style.top = (startY + i * rowH) + "px";
+    row.style.height = cardH + "px";
+
+    const box = document.createElement("div");
+    box.className = "box";
+    const svg = document.createElementNS(NS, "svg");
+    svg.setAttribute("viewBox", "0 0 72 72");
+
+    const frame = document.createElementNS(NS, "rect");
+    frame.setAttribute("class", "frame");
+    frame.setAttribute("x", "4"); frame.setAttribute("y", "4");
+    frame.setAttribute("width", "64"); frame.setAttribute("height", "64");
+    frame.setAttribute("rx", "18");
+    svg.appendChild(frame);
+
+    if (it.done) {
+      // 对勾:两段折线,stroke-dashoffset 描出
+      const tick = document.createElementNS(NS, "path");
+      tick.setAttribute("class", "tick");
+      tick.setAttribute("d", "M 19 38 L 31 50 L 54 23");
+      svg.appendChild(tick);
+      tickPaths.push({ path: tick, len: 0, done: true, idx: i });
+    } else {
+      // 叉号:两条描边线
+      const c1 = document.createElementNS(NS, "path");
+      c1.setAttribute("class", "cross");
+      c1.setAttribute("d", "M 24 24 L 48 48");
+      const c2 = document.createElementNS(NS, "path");
+      c2.setAttribute("class", "cross");
+      c2.setAttribute("d", "M 48 24 L 24 48");
+      svg.appendChild(c1); svg.appendChild(c2);
+      tickPaths.push({ path: c1, path2: c2, len: 0, done: false, idx: i });
+    }
+
+    box.appendChild(svg);
+    row.appendChild(box);
+
+    const txt = document.createElement("div");
+    txt.className = "txt";
+    txt.textContent = it.text;
+    row.appendChild(txt);
+
+    rowsEl.appendChild(row);
+    rowDivs.push({ row, box, frame });
+  });
+
+  // ── 动画时间轴(全部 WAAPI,fill:"both",渲染器逐帧 seek) ──
+  const EASE = (getComputedStyle(document.documentElement).getPropertyValue("--ease-out") || "").trim()
+    || "cubic-bezier(0.16, 1, 0.3, 1)";
+  const SPRING = "cubic-bezier(0.34, 1.56, 0.64, 1)";
+  const anims = [];
+  const add = (el, kf, opts) => anims.push(el.animate(kf, { fill: "both", ...opts }));
+
+  // 0.0-0.75s: kicker + 标题 + 徽章错峰入场
+  if (P.kicker) add(kickerEl,
+    [{ opacity: 0, transform: "translateY(30px)" }, { opacity: 1, transform: "translateY(0)" }],
+    { duration: 500, easing: EASE });
+  add(titleEl,
+    [{ opacity: 0, transform: "translateY(40px)" }, { opacity: 1, transform: "translateY(0)" }],
+    { duration: 600, delay: 150, easing: EASE });
+  add(badgeEl, [{ opacity: 0 }, { opacity: 1 }], { duration: 500, delay: 400, easing: EASE });
+
+  // 行错峰步长:总时长驱动,短镜头压缩
+  const totalMs = DURATION * 1000;
+  const step = Math.round(Math.min(900, Math.max(320, (totalMs - 2400) / n)));
+  const ROW_IN = 550, TICK_DELAY = 420, TICK_DUR = 420;
+  const tickEndAt = new Array(n); // 每项打勾完成时刻(秒),供 __seek 计数
+
+  rowDivs.forEach((rd, i) => {
+    const base = 850 + i * step;
+    // 行卡片:左滑弹簧入场
+    add(rd.row,
+      [{ opacity: 0, transform: "translateX(-72px) scale(0.97)" },
+       { opacity: 1, transform: "translateX(0) scale(1)" }],
+      { duration: ROW_IN, delay: base, easing: SPRING });
+
+    // 勾选框:描边绘制 + 轻微回弹(scale pop 打在 .box 上)
+    const tp = tickPaths[i];
+    const tickStart = base + TICK_DELAY;
+    if (tp.done) {
+      const len = tp.path.getTotalLength();
+      tp.path.style.strokeDasharray = String(len);
+      tp.path.style.strokeDashoffset = String(len);
+      anims.push(tp.path.animate(
+        [{ strokeDashoffset: len }, { strokeDashoffset: 0 }],
+        { duration: TICK_DUR, delay: tickStart, fill: "both", easing: EASE }));
+    } else {
+      [tp.path, tp.path2].forEach((p, k) => {
+        const len = p.getTotalLength();
+        p.style.strokeDasharray = String(len);
+        p.style.strokeDashoffset = String(len);
+        anims.push(p.animate(
+          [{ strokeDashoffset: len }, { strokeDashoffset: 0 }],
+          { duration: 260, delay: tickStart + k * 140, fill: "both", easing: EASE }));
+      });
+    }
+    // 框体回弹强调("打勾"瞬间的满足感)
+    add(rd.box,
+      [{ transform: "scale(1)" },
+       { transform: "scale(1.14)", offset: 0.45 },
+       { transform: "scale(1)" }],
+      { duration: 320, delay: tickStart + (tp.done ? TICK_DUR - 120 : 300), easing: EASE });
+    // 框底填充加深(打勾后着色)
+    const fillTo = tp.done
+      ? "color-mix(in srgb, var(--accent, #3b82f6) 26%, transparent)"
+      : "color-mix(in srgb, var(--danger, #f87171) 16%, transparent)";
+    anims.push(rd.frame.animate(
+      [{ fill: "rgba(0,0,0,0)" }, { fill: fillTo }],
+      { duration: 350, delay: tickStart + 60, fill: "both", easing: EASE }));
+
+    tickEndAt[i] = (tickStart + (tp.done ? TICK_DUR : 400)) / 1000;
+  });
+
+  // 收尾:全部打勾完成后徽章轻微脉冲强调
+  const lastTick = Math.max.apply(null, tickEndAt) * 1000;
+  add(badgeEl,
+    [{ transform: "scale(1)" }, { transform: "scale(1.06)", offset: 0.5 }, { transform: "scale(1)" }],
+    { duration: 420, delay: Math.min(lastTick + 150, totalMs - 500), easing: "ease-in-out" });
+
+  // 全程:辉光呼吸
+  add(document.getElementById("glow"),
+    [{ opacity: 0.07 }, { opacity: 0.14 }, { opacity: 0.07 }],
+    { duration: Math.round(totalMs), easing: "ease-in-out" });
+
+  // 来源标注淡入
+  if (P.source) add(srcEl, [{ opacity: 0 }, { opacity: 0.8 }],
+    { duration: 500, delay: 600, easing: "ease-out" });
+
+  // ── 计数徽章(__seek 驱动,确定性):已核对 k/n,全完成时追加标识 ──
+  const doneTotal = items.filter((it) => it.done).length;
+  window.__seek = function (t) {
+    let k = 0;
+    for (let i = 0; i < n; i++) {
+      if (items[i].done && t >= tickEndAt[i] - 0.12) k++;
+    }
+    let html = "已核对 <b>" + k + "</b> / " + n;
+    if (k === n && n === doneTotal) html += ' <span class="done-all">· 全部完成</span>';
+    badgeEl.innerHTML = html;
+  };
+  window.__seek(0);
+})();
+</script>
+</body>
+</html>
