@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>big-number · 深色数据科技(方向A)</title>
+<!-- 渲染器经 addInitScript 注入 window.__THEME_CSS__(:root{--bg … --safe-zone-h}),先挂到页首 -->
+<style id="theme-vars"></style>
+<style>
+  html, body {
+    margin: 0; width: 1080px; height: 1920px; overflow: hidden;
+    background: var(--bg, #0f1b2d);
+    font-family: var(--font-display, "Microsoft YaHei", sans-serif);
+  }
+  /* 网格底:CSS 线性渐变网格,非 DOM 线条 */
+  body {
+    background-image:
+      linear-gradient(var(--bg-grid, rgba(148,163,184,.05)) 1px, transparent 1px),
+      linear-gradient(90deg, var(--bg-grid, rgba(148,163,184,.05)) 1px, transparent 1px);
+    background-size: 216px 216px;
+  }
+  /* 右上 L 形角标(accent 50% 透明) */
+  #corner {
+    position: absolute; top: 100px; right: 100px; width: 150px; height: 150px;
+    border-top: 8px solid var(--corner-c, rgba(59,130,246,.5));
+    border-right: 8px solid var(--corner-c, rgba(59,130,246,.5));
+    opacity: 0;
+  }
+  /* 左上 kicker chip 胶囊 */
+  #kicker {
+    position: absolute; top: 190px; left: 120px;
+    font-size: 48px; letter-spacing: 12px; font-weight: 600;
+    color: var(--accent, #3b82f6);
+    border: 2px solid var(--chip-bd, rgba(59,130,246,.4));
+    padding: 16px 46px 16px 58px; /* 字距末字补偿 */
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+  /* 日期副行(可选,params.date 提供时才渲染) */
+  #date {
+    position: absolute; top: 415px; left: 120px;
+    font-size: 65px; font-weight: 600; color: var(--text-sub, #94a3b8);
+    white-space: nowrap;
+  }
+  /* 主标题 */
+  #title {
+    position: absolute; top: 520px; left: 120px; right: 120px;
+    font-size: 90px; font-weight: 700; color: var(--text, #f1f5f9);
+    line-height: 1.25;
+  }
+  /* 标题块整体做入场动画 */
+  #title-block { opacity: 0; }
+  /* 渐变巨字:字号 230/900,单位 30% */
+  #num-wrap { position: absolute; top: 760px; left: 120px; right: 60px; }
+  #num {
+    font-size: 230px; font-weight: 900; line-height: 1;
+    background: linear-gradient(135deg, var(--accent-2, #60a5fa), var(--accent, #3b82f6));
+    -webkit-background-clip: text; background-clip: text;
+    color: transparent;
+    transform-origin: left center;
+    opacity: 0;
+    white-space: nowrap;
+    letter-spacing: 2px;
+  }
+  #num-unit { font-size: 30%; font-weight: 700; letter-spacing: 0; }
+  /* 数字下方渐变基线(width 动画展开) */
+  #underline {
+    position: absolute; top: 1050px; left: 120px;
+    width: 0; height: 16px; border-radius: 8px;
+    background: linear-gradient(90deg, var(--accent, #3b82f6), var(--accent-2, #60a5fa));
+    opacity: 0.9;
+  }
+  /* caption 解读行 */
+  #caption {
+    position: absolute; top: 1120px; left: 120px; right: 120px;
+    font-size: 56px; color: var(--text-sub, #94a3b8); line-height: 1.7;
+    opacity: 0;
+  }
+  /* 底部来源标注:避开字幕安全区 y∈[1418,1562] 与底部 144px 区,落在 ~y1700-1750 */
+  #source {
+    position: absolute; bottom: 170px; left: 120px;
+    font-size: 44px; color: var(--text-sub, #94a3b8); opacity: 0.7;
+    white-space: nowrap;
+  }
+</style>
+</head>
+<body>
+  <div id="corner"></div>
+  <div id="title-block">
+    <div id="kicker"></div>
+    <div id="date"></div>
+    <div id="title"></div>
+  </div>
+  <div id="num-wrap"><div id="num"><span id="num-main"></span><span id="num-unit"></span></div></div>
+  <div id="underline"></div>
+  <div id="caption"></div>
+  <div id="source"></div>
+
+<script>
+(function () {
+  // 主题变量注入(渲染器先于页面脚本写入 __THEME_CSS__)
+  document.getElementById("theme-vars").textContent = window.__THEME_CSS__ || "";
+
+  var P = window.__PARAMS__ || {};
+  var D = typeof P.duration === "number" && isFinite(P.duration) ? P.duration : 6;
+  var shortMode = D <= 4.5;
+
+  // accent 透明度派生色(注入后变量可见,放 JS 里用 color-mix 兜底链)
+  var rootStyle = document.createElement("style");
+  rootStyle.textContent =
+    ":root{--chip-bd:color-mix(in srgb,var(--accent,#3b82f6) 40%,transparent);" +
+    "--corner-c:color-mix(in srgb,var(--accent,#3b82f6) 50%,transparent);}";
+  document.head.appendChild(rootStyle);
+
+  // 文本填充(textContent,杜绝注入)
+  var kickerEl = document.getElementById("kicker");
+  var dateEl = document.getElementById("date");
+  var titleEl = document.getElementById("title");
+  var capEl = document.getElementById("caption");
+  var srcEl = document.getElementById("source");
+  if (P.kicker) kickerEl.textContent = P.kicker; else kickerEl.style.display = "none";
+  if (P.date) dateEl.textContent = P.date; else dateEl.style.display = "none";
+  titleEl.textContent = P.title || "";
+  if (P.caption) capEl.textContent = P.caption; else capEl.style.display = "none";
+  if (P.source) srcEl.textContent = "来源:" + P.source; else srcEl.style.display = "none";
+
+  // 数字格式化:规则从 Revideo 版 fmt 原样移植
+  // wan/yi 下 |v|<1000 视为已换算值直接使用,>=1000 才按原始数值换算(防御 agent 双重换算)
+  function fmt(v, format, unit) {
+    var abs = Math.abs(v);
+    var core =
+      format === "percent" ? v.toFixed(1) + "%"
+      : format === "wan" ? (abs < 1000 ? v : v / 10000).toFixed(1) + "万"
+      : format === "yi" ? (abs < 1000 ? v : v / 100000000).toFixed(2) + "亿"
+      : v >= 10000 ? Math.round(v).toLocaleString("en-US").replaceAll(",", " ") : String(Math.round(v));
+    return core + unit;
+  }
+  var format = P.format || "plain";
+  var unit = P.unit || "";
+  var target = typeof P.value === "number" ? P.value : 0;
+
+  // 巨字主/副(单位 30% 字号)拆分渲染:尾部非数字片段进小号 span
+  var numMain = document.getElementById("num-main");
+  var numUnit = document.getElementById("num-unit");
+  function renderNum(text) {
+    var m = text.match(/^([\d\s.,%]+)([\s\S]*)$/);
+    if (m) { numMain.textContent = m[1]; numUnit.textContent = m[2]; }
+    else { numMain.textContent = text; numUnit.textContent = ""; }
+  }
+
+  // 计数窗口与起点(短镜头从 60% 起滚压缩中间值窗口)
+  var countStart = shortMode ? 0.5 : 1.1;
+  var countDur = shortMode ? 0.7 : 1.4;
+  var fromVal = shortMode ? target * 0.6 : 0;
+
+  // 计数经 __seek(t) 驱动:进度 cubic-out 缓动 1-(1-t)^3
+  window.__seek = function (t) {
+    var x = Math.min(Math.max((t - countStart) / countDur, 0), 1);
+    var p = 1 - Math.pow(1 - x, 3);
+    renderNum(fmt(fromVal + (target - fromVal) * p, format, unit));
+  };
+  window.__seek(0);
+
+  // ---- WAAPI 动画(全部 fill:"both",渲染器逐帧 seek)----
+  var easeOut = (getComputedStyle(document.documentElement).getPropertyValue("--ease-out") || "").trim()
+    || "cubic-bezier(0.16, 1, 0.3, 1)";
+  var titleBlock = document.getElementById("title-block");
+  var numEl = document.getElementById("num");
+  var numWrap = document.getElementById("num-wrap");
+  var underline = document.getElementById("underline");
+  var corner = document.getElementById("corner");
+
+  // 装饰件淡入(两种模式一致)
+  corner.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 800, fill: "both", easing: "ease-out" });
+  srcEl.animate([{ opacity: 0 }, { opacity: 0.7 }], { delay: 800, duration: 500, fill: "both", easing: "ease-out" });
+
+  if (shortMode) {
+    // 短镜头(≤4.5s):0.25s 标题淡入 → 0.25s 数字淡入 → 0.7s 基线展开(计数并行)
+    titleBlock.animate(
+      [{ opacity: 0, transform: "translateY(20px)" }, { opacity: 1, transform: "translateY(0)" }],
+      { duration: 250, fill: "both", easing: easeOut });
+    numEl.animate([{ opacity: 0 }, { opacity: 1 }], { delay: 250, duration: 250, fill: "both", easing: "ease-out" });
+    underline.animate([{ width: "0px" }, { width: "520px" }], { delay: 500, duration: 700, fill: "both", easing: easeOut });
+    capEl.animate([{ opacity: 0 }, { opacity: 1 }], { delay: 1200, duration: 300, fill: "both", easing: "ease-out" });
+  } else {
+    // 长镜头:0.5s 标题 → 0.6s 数字弹簧入场(scale .6→1.05→1)→ 1.4s 基线+计数 → 0.4s 脉冲
+    titleBlock.animate(
+      [{ opacity: 0, transform: "translateY(24px)" }, { opacity: 1, transform: "translateY(0)" }],
+      { duration: 500, fill: "both", easing: easeOut });
+    numEl.animate(
+      [{ opacity: 0, transform: "scale(.6)" },
+       { opacity: 1, transform: "scale(1.05)", offset: 0.7 },
+       { opacity: 1, transform: "scale(1)" }],
+      { delay: 500, duration: 600, fill: "both", easing: easeOut });
+    underline.animate([{ width: "0px" }, { width: "520px" }], { delay: 1100, duration: 1400, fill: "both", easing: easeOut });
+    // 脉冲打在 wrapper 上,避免与 numEl 的入场 transform 动画互相覆盖
+    numWrap.animate(
+      [{ transform: "scale(1)" }, { transform: "scale(1.05)", offset: 0.5 }, { transform: "scale(1)" }],
+      { delay: 2500, duration: 400, fill: "both", easing: "ease-in-out" });
+    capEl.animate(
+      [{ opacity: 0, transform: "translateY(16px)" }, { opacity: 1, transform: "translateY(0)" }],
+      { delay: 2500, duration: 500, fill: "both", easing: easeOut });
+  }
+})();
+</script>
+</body>
+</html>
