@@ -3035,7 +3035,15 @@ export async function runEvaluation(workId: string, completedStep: string, nextS
       });
 
       // Check iteration limit
+      // 2026-09-01(系统审查实证):plan/assembly 第 3 轮起转机器门禁兜底——dde 第 3-5 轮
+      // 已只剩 minor/边界问题,继续烧 LLM 评审轮次(一轮 = 修复回合 6-8min + 评审 2.6min)
+      // 边际收益极低。门禁过硬项(时长/字数/交付物/模板契约)拦住实质问题即可。
+      // 其余阶段(无机禁兜底可依赖)保持 3 轮熔断交人工。
       if (attempt >= 3) {
+        if (!gateFallback && (completedStep === "plan" || completedStep === "assembly")) {
+          log("info", "api", "eval_gate_fallback_at_limit", workId, { step: completedStep, attempt });
+          return runEvaluation(workId, completedStep, nextStep, evalErrorRetries, evalModelSpec, true);
+        }
         await markEvalBlocked(workId, completedStep, { attempt, result: evalResult });
         return;
       }
