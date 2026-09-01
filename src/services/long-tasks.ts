@@ -109,3 +109,60 @@ export async function submitAsrTask(opts: {
 
   return getLongTask(id)!;
 }
+
+/**
+ * 批量渲染长任务(2026-09-01 批次12b,系统审查效率实证):
+ * agent 一次提交全部镜头渲染,服务端走 code-scene 并发池(模板 2 路),
+ * 一次任务一个完成事件——消灭"单条同步 curl + sleep 轮询"(8-31 dde 实测
+ * assets 阶段轮询循环吃掉 45min+ 纯等待)。
+ * 在进程内异步执行(renderCodeScene 本就在进程内,池内自动排队),不 spawn。
+ */
+export async function submitRenderBatchTask(opts: {
+  workId: string;
+  renders: Array<Record<string, unknown>>;
+}): Promise<LongTask> {
+  const id = `lt_${randomUUID().slice(0, 8)}`;
+  const now = new Date().toISOString();
+  getDb().prepare(
+    `INSERT INTO long_tasks (id, kind, work_id, status, input_json, created_at, updated_at)
+     VALUES (?, 'render-batch', ?, 'running', ?, ?, ?)`,
+  ).run(id, opts.workId, JSON.stringify({ count: opts.renders.length }), now, now);
+
+  broadcastProgress({ workId: opts.workId, kind: "system", text: `批量渲染已提交:${opts.renders.length} 个镜头(task ${id}),完成时自动通知` });
+
+  (async () => {
+    const { renderCodeScene } = await import("./code-scene.js");
+    const results = await Promise.allSettled(
+      opts.renders.map((r) => renderCodeScene({ ...(r as object), workId: opts.workId } as never)),
+    );
+    const summary = results.map((r, i) => ({
+      filename: (opts.renders[i] as { filename?: string }).filename ?? `render-${i}`,
+      ok: r.status === "fulfilled" && (r.value as { success?: boolean }).success === true,
+      url: r.status === "fulfilled" ? (r.value as { url?: string }).url : undefined,
+      error: r.status === "rejected"
+        ? String(r.reason)
+        : (r.value as { error?: string }).error,
+    }));
+    const failCount = summary.filter((s) => !s.ok).length;
+    getDb().prepare("UPDATE long_tasks SET status = ?, output_json = ?, error = ?, updated_at = ? WHERE id = ?")
+      .run(
+        failCount === 0 ? "done" : "failed",
+        JSON.stringify({ results: summary }),
+        failCount ? `${failCount}/${summary.length} 个镜头渲染失败` : null,
+        new Date().toISOString(),
+        id,
+      );
+    broadcastProgress({
+      workId: opts.workId,
+      kind: "system",
+      text: failCount === 0
+        ? `✅ 批量渲染完成:${summary.length} 个镜头全部出片`
+        : `⚠️ 批量渲染:${failCount}/${summary.length} 个失败,GET /api/long-tasks/${id} 查明细`,
+    });
+  })().catch((err) => {
+    getDb().prepare("UPDATE long_tasks SET status = 'failed', error = ?, updated_at = ? WHERE id = ?")
+      .run(String(err), new Date().toISOString(), id);
+  });
+
+  return getLongTask(id)!;
+}

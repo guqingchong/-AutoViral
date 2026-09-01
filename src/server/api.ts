@@ -3677,6 +3677,31 @@ apiRoutes.get("/api/works/:id/timing", async (c) => {
 // 长任务作业化(批次9.5):ASR 等长任务提交-轮询,不占 agent 回合/bash 上限
 // ---------------------------------------------------------------------------
 
+// POST /api/assets/code-scene/batch - 批量渲染长任务(2026-09-01 批次12b)
+// agent 一次提交全部镜头,服务端走渲染并发池,完成事件驱动通知。
+// 替代"单条同步 curl + sleep 轮询"(实测 dde 单此模式浪费 80min+)。
+apiRoutes.post("/api/assets/code-scene/batch", async (c) => {
+  const body = await c.req.json<{ workId?: string; renders?: Array<Record<string, unknown>> }>().catch(() => ({} as any));
+  if (!body.workId || !Array.isArray(body.renders) || !body.renders.length) {
+    return c.json({ error: "workId 与 renders 数组(非空)必填" }, 400);
+  }
+  if (body.renders.length > 50) return c.json({ error: "单批 ≤50 个镜头" }, 400);
+  // 逐项过校验(与单条端点同一套),任一不合法整批拒收——agent 改完一起重提
+  const { validateCodeSceneInput } = await import("../services/code-scene.js");
+  const invalid = body.renders
+    .map((r: Record<string, unknown>, i: number) => ({ i, errors: validateCodeSceneInput({ ...r, workId: body.workId } as never) }))
+    .filter((x: { errors: string[] }) => x.errors.length);
+  if (invalid.length) {
+    return c.json({
+      error: `${invalid.length} 个镜头参数不合法`,
+      details: invalid.map((x: { i: number; errors: string[] }) => ({ index: x.i, errors: x.errors })),
+    }, 400);
+  }
+  const { submitRenderBatchTask } = await import("../services/long-tasks.js");
+  const task = await submitRenderBatchTask({ workId: body.workId, renders: body.renders });
+  return c.json({ taskId: task.id, count: body.renders.length, statusUrl: `/api/long-tasks/${task.id}` }, 202);
+});
+
 // POST /api/long-tasks { kind: "asr", workId, inputPath, outputPath, model?, style? }
 apiRoutes.post("/api/long-tasks", async (c) => {
   const body = await c.req.json<{ kind?: string; workId?: string; inputPath?: string; outputPath?: string; model?: string; style?: string }>().catch(() => ({} as any));
