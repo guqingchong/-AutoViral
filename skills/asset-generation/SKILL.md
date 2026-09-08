@@ -386,7 +386,7 @@ python3 skills/asset-generation/scripts/music_generate.py \
 1. **视频生成（本地 H3，首选）** → 当作品素材来源为 `ai`/`auto` 且非 hero 精品镜头时，**优先用本地 H3**（MiniMax H3，AutoDL ComfyUI，约 ¥0.13/条 vs 即梦 ¥1.4）：
    ```bash
    # 图生视频(i2v,主流程):首帧 + 运动描述
-   curl -X POST http://localhost:3271/api/generate/video \
+   curl -X POST http://localhost:3271/api/generate/video -H "Authorization: Bearer $AUTOVIRAL_TOKEN" \
      -H "Content-Type: application/json" \
      -d '{
        "workId": "{workId}",
@@ -428,14 +428,14 @@ python3 skills/asset-generation/scripts/music_generate.py \
 
 ```bash
 # 简单数据(推荐):传 [{label,value}],图表类型自动判断(时间序列→折线,占比→饼图,其他→柱状)
-curl -X POST http://localhost:3271/api/assets/data-card \
+curl -X POST http://localhost:3271/api/assets/data-card -H "Authorization: Bearer $AUTOVIRAL_TOKEN" \
   -H "Content-Type: application/json" \
   --data-binary @req.json
 # req.json: {"title":"2025年专项债发行规模","source":"财政部","unit":"万亿元","theme":"finance_dark",
 #            "data":[{"label":"2021","value":3.58},{"label":"2022","value":4.04}]}
 
 # 复杂图表(双轴/堆叠/雷达等):传完整 ECharts option
-curl -X POST http://localhost:3271/api/assets/chart -H "Content-Type: application/json" --data-binary @req.json
+curl -X POST http://localhost:3271/api/assets/chart -H "Authorization: Bearer $AUTOVIRAL_TOKEN" -H "Content-Type: application/json" --data-binary @req.json
 # req.json: {"title":"...","theme":"finance_dark","option":{"xAxis":{...},"series":[...]}}
 ```
 
@@ -448,7 +448,7 @@ curl -X POST http://localhost:3271/api/assets/chart -H "Content-Type: applicatio
 讲政策/新闻/文件原文时使用,权威感是 AI 画面给不了的:
 
 ```bash
-curl -X POST http://localhost:3271/api/assets/snapshot-card -H "Content-Type: application/json" --data-binary @req.json
+curl -X POST http://localhost:3271/api/assets/snapshot-card -H "Authorization: Bearer $AUTOVIRAL_TOKEN" -H "Content-Type: application/json" --data-binary @req.json
 # req.json: {"url":"https://xxx.gov.cn/zhengce/xxx.htm",   ← 或 "imagePath":"本地图片路径"
 #            "title":"关于XX的通知","source":"财政部官网",
 #            "highlights":[{"left":10,"top":30,"width":80,"height":8,"label":"关键条款"}]}
@@ -645,7 +645,7 @@ dreamina query_result --submit_id=<返回的id> \
   --download_dir={workDir}/assets/clips/
 
 # ── 备用：API 调用（Dreamina CLI 不可用时）──
-curl -X POST http://localhost:3271/api/generate/video \
+curl -X POST http://localhost:3271/api/generate/video -H "Authorization: Bearer $AUTOVIRAL_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "workId": "{workId}",
@@ -1174,7 +1174,7 @@ ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p
 ### 素材管理
 
 - 所有下载的素材保存到作品的 `assets/clips/` 目录
-- 使用 API 上传：`curl -X POST http://localhost:3271/api/works/{workId}/assets -F "file=@clip-01.mp4" -F "path=clips/clip-01.mp4"`
+- 使用 API 上传：`curl -X POST http://localhost:3271/api/works/{workId}/assets -H "Authorization: Bearer $AUTOVIRAL_TOKEN" -F "file=@clip-01.mp4" -F "path=clips/clip-01.mp4"`
 - 或直接保存到作品目录（通过 API 获取路径）
 
 ### 进度跟踪
@@ -1350,7 +1350,7 @@ ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p
 ### 素材管理
 
 - 所有下载的素材保存到作品的 `assets/clips/` 目录
-- 使用 API 上传：`curl -X POST http://localhost:3271/api/works/{workId}/assets -F "file=@clip-01.mp4" -F "path=clips/clip-01.mp4"`
+- 使用 API 上传：`curl -X POST http://localhost:3271/api/works/{workId}/assets -H "Authorization: Bearer $AUTOVIRAL_TOKEN" -F "file=@clip-01.mp4" -F "path=clips/clip-01.mp4"`
 - 或直接保存到作品目录（通过 API 获取路径）
 
 ### 进度跟踪
@@ -1374,7 +1374,7 @@ ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p
 2. 列出所有已生成素材及预览链接
 3. 更新作品流水线状态：
 ```bash
-curl -X POST http://localhost:3271/api/works/{workId}/pipeline/advance \
+curl -X POST http://localhost:3271/api/works/{workId}/pipeline/advance -H "Authorization: Bearer $AUTOVIRAL_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"completedStep":"assets","nextStep":"assembly"}'
 ```

@@ -102,12 +102,15 @@ export async function burnSubtitlesFast(
 
     // 第 2 步:PNG 序列叠加回正片(overlay 快速滤镜,音轨原样拷贝)
     //   -framerate 必须显式给:image2 序列默认 25fps,与正片帧率不一致会音画错位。
+    //   P4 修复:overlay 主/叠顺序——[0:v] 正片为底、[1:v] 字幕 PNG 叠上
+    //   (旧写法 [1:v][0:v] 主叠颠倒,正片盖住字幕层,静默产无字幕坏片);
+    //   eof_action=pass:PNG 序列短于正片时直传正片帧,不定格残影。
     await run(ffmpeg, [
       "-y",
       "-i", video,
       "-framerate", String(fps),
       "-i", patternPath,
-      "-filter_complex", "[1:v][0:v]overlay=0:0",
+      "-filter_complex", "[0:v][1:v]overlay=0:0:eof_action=pass",
       ...encArgs,
       "-c:a", "copy",
       out,

@@ -20,7 +20,7 @@ import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { appendFile } from "node:fs/promises";
 import { logBridge, logBridgeDebug } from "./logger.js";
-import { loadConfig, dataDir } from "./config.js";
+import { loadConfig, getConfig, dataDir } from "./config.js";
 import { MAX_PLAN_DURATION_S } from "./services/quality-gate.js";
 import { buildExplicitParamsBlock } from "./server/explicit-params.js";
 import { getWork, updateWork, saveStepHistory, loadStepHistory, saveWorkChat, loadWorkChat, type Work, type PipelineStep, type EvalResult } from "./work-store.js";
@@ -231,6 +231,11 @@ export class WsBridge {
 
   handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): boolean {
     const url = req.url ?? "";
+    // P2 修复(2026-09-08):WS 写通道鉴权——"send" action 可注入运行中的 agent,
+    // 跨站 WS 不受同源限制,此前 handleUpgrade 无任何校验。
+    // 与 authGuard 同语义:未配置 token 时放行;配置后 ?token= 必须一致。
+    // Origin 存在时仅放行本机源(浏览器跨站页面必带 Origin,curl/脚本不带)。
+    if (!this.authorizeUpgrade(req)) return false;
     if (url.match(/^\/ws\/browser\/[^/]+/)) {
       this.browserWss.handleUpgrade(req, socket, head, (ws) => {
         this.browserWss.emit("connection", ws, req);
@@ -245,6 +250,21 @@ export class WsBridge {
       return true;
     }
     return false;
+  }
+
+  /** WS upgrade 鉴权(P2):token 与 Origin 双校验,语义对齐 authGuard */
+  private authorizeUpgrade(req: IncomingMessage): boolean {
+    // Origin 存在时仅放行本机回环源(防御跨站 WS 注入)
+    const origin = req.headers.origin;
+    if (origin) {
+      let host = "";
+      try { host = new URL(origin).hostname; } catch { return false; }
+      if (!["127.0.0.1", "localhost", "[::1]", "::1"].includes(host)) return false;
+    }
+    const token = getConfig().server?.authToken;
+    if (!token) return true; // 未配置 token:与 authGuard 同样放行
+    const q = new URL(req.url ?? "/", "http://localhost").searchParams;
+    return q.get("token") === token;
   }
 
   /** 全局广播(批次4.6 通知中心):发给所有已连接页面 */
@@ -509,10 +529,10 @@ ${buildExplicitParamsBlock(work)}
 - 公共素材：通过 curl http://localhost:${port}/api/shared-assets 查看可用素材
 - 素材库检索（Pexels/Pixabay，key 由服务端持有——直接调用即可，禁止自行读取 config 找 key、禁止直连 api.pexels.com）：
   搜索：curl "http://localhost:${port}/api/stock-assets/search?q=英文关键词&type=video|image&perPage=10"（英文关键词命中最好，竖版 height>width 优先）
-  下载：curl -X POST http://localhost:${port}/api/stock-assets/download -H "Content-Type: application/json" -d '{"url":"ITEM_URL","provider":"pexels","mediaType":"video","category":"scenes","name":"shot-NN.mp4","description":"...","author":"...","license":"...","duration":12}'
+  下载：curl -X POST http://localhost:${port}/api/stock-assets/download -H "Authorization: Bearer $AUTOVIRAL_TOKEN" -H "Content-Type: application/json" -d '{"url":"ITEM_URL","provider":"pexels","mediaType":"video","category":"scenes","name":"shot-NN.mp4","description":"...","author":"...","license":"...","duration":12}'
   **批量下载(多个素材时必须用,3 路并发,比逐个调快 3 倍)**:POST /api/stock-assets/download-batch body:{"items":[{同上字段},{...}]}——先把 JSON 写成 UTF-8 文件再 --data-binary @file
 - **Windows 中文编码铁律（2026-08-19，违反必出乱码）**：任何含中文的 POST body 禁止 curl -d 内联 JSON——Git Bash 会损坏中文编码（code-scene 中文乱码成片事故真凶）。必须先用 Write 工具把 JSON 写成 UTF-8 文件，再 curl --data-binary @文件名.json。纯 ASCII 的 body 才可内联。
-- 流水线管理：调用 curl -X POST http://localhost:${port}/api/works/${work.id}/pipeline/advance 更新流水线状态
+- 流水线管理：调用 curl -X POST http://localhost:${port}/api/works/${work.id}/pipeline/advance -H "Authorization: Bearer $AUTOVIRAL_TOKEN" 更新流水线状态(所有内部 API 写请求都必须带此 Bearer 头,token 已注入你的环境变量 $AUTOVIRAL_TOKEN)
 
 ## 前置检测（必做）
 
@@ -544,7 +564,7 @@ py -3 ~/.claude/skills/asset-generation/scripts/check_environment.py --format su
 
 **重要：你必须主动管理流水线状态。** 每次回答用户之前，根据对话上下文判断当前阶段是否已经完成、是否需要推进到下一步。
 - 当你判断当前阶段的工作已经完成（例如调研报告已输出、规划方案已确认），**立即调用** pipeline/advance API 更新状态：
-  curl -X POST http://localhost:${port}/api/works/${work.id}/pipeline/advance -H "Content-Type: application/json" -d '{"completedStep":"当前步骤key","nextStep":"下一步骤key"}'
+  curl -X POST http://localhost:${port}/api/works/${work.id}/pipeline/advance -H "Authorization: Bearer $AUTOVIRAL_TOKEN" -H "Content-Type: application/json" -d '{"completedStep":"当前步骤key","nextStep":"下一步骤key"}'
 - 当用户明确要求进入下一阶段时，同样调用此API。
 - 不要等用户来点按钮，你自己判断并更新。
 - 不要在工作未完成时提前推进。

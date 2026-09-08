@@ -237,11 +237,11 @@ function parseDurationCell(cell: string): number | null {
 export function assertPlanDeliverables(workDir: string, maxDurationS = MAX_PLAN_DURATION_S): DeliverableIssue[] {
   const issues: DeliverableIssue[] = [];
 
-  // 定位分镜文档:根目录 plan.md 优先,其次 assets/plan-storyboard.md
-  const planCandidates = [join(workDir, "plan.md"), join(workDir, "assets", "plan-storyboard.md")];
+  // 定位分镜文档:根目录 plan.md 优先,其次 plan/plan.md(v2 契约),再次 assets/plan-storyboard.md
+  const planCandidates = [join(workDir, "plan.md"), join(workDir, "plan", "plan.md"), join(workDir, "assets", "plan-storyboard.md")];
   const planPath = planCandidates.find((p) => existsSync(p));
   if (!planPath) {
-    return [{ key: "plan_doc", detail: "分镜文档缺失(plan.md 或 assets/plan-storyboard.md 均不存在)" }];
+    return [{ key: "plan_doc", detail: "分镜文档缺失(plan.md、plan/plan.md、assets/plan-storyboard.md 均不存在)" }];
   }
   const lines = readFileSync(planPath, "utf-8").split("\n");
 

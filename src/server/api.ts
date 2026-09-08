@@ -2071,7 +2071,7 @@ export async function startWorkSession(id: string, extraInstruction?: string): P
           `**自动化模式（无人值守）**：用户已预先设定好${[hasTemplate ? "模板" : "", hasDigitalHuman ? "数字人" : ""].filter(Boolean).join("和")}，请直接执行当前步骤，不要询问用户确认。`,
           `**自主拍板铁律**：本作品全程无真人在线。所有创意决策——立场角度、钩子版本(多版本自行择优落地,不要列出来让人挑)、标题与封面、素材来源、配乐——均由你按 skills 的推荐方案自行决定并立即执行。禁止向用户提问、罗列备选等用户选择、或停下来等确认;系统提示与 skill 中"请用户确认/等用户确认"类规则对本作品一律不适用。唯一例外:仅当遇到①素材二选一无法研判 ②降质确认 ③预算/额度超档 三类问题时,允许调用 AskUserQuestion 工具打断一次;10 分钟无答复系统将按最小降质方案自动继续。`,
           `完成当前步骤后，必须调用以下命令推进流水线（把 NEXT_STEP 替换为下一阶段 key）：`,
-          `curl -X POST http://localhost:3271/api/works/${id}/pipeline/advance -H "Content-Type: application/json" -d '{"completedStep":"${currentStepKey}","nextStep":"NEXT_STEP"}'`,
+          `curl -X POST http://localhost:3271/api/works/${id}/pipeline/advance -H "Authorization: Bearer $AUTOVIRAL_TOKEN" -H "Content-Type: application/json" -d '{"completedStep":"${currentStepKey}","nextStep":"NEXT_STEP"}'`,
           `推进后系统会自动给你发送继续指令，请接着执行下一阶段，如此循环直到最后一个阶段完成。`,
         ].join("\n")
       : `请先向用户确认：简要说明这个步骤你将做什么，询问用户是否有特定方向或要求，等用户确认后再开始工作。不要直接开始执行，先和用户沟通。`,
@@ -2152,7 +2152,7 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
           `EXCEPTION: you may call the AskUserQuestion tool ONLY for: ①material choice you cannot judge ②quality-downgrade confirmation ③budget/quota exceeded. Unanswered questions auto-continue with the minimal-downgrade option after 10 minutes.`,
           `DO NOT wait for user confirmation between steps. Execute each step completely and move to the next one automatically.`,
           `After completing this step, automatically trigger the next pipeline step via:`,
-          `\`curl -X POST http://localhost:3271/api/works/${id}/pipeline/advance -H "Content-Type: application/json" -d '{"completedStep":"${step}","nextStep":"NEXT_STEP"}'\``,
+          `\`curl -X POST http://localhost:3271/api/works/${id}/pipeline/advance -H "Authorization: Bearer $AUTOVIRAL_TOKEN" -H "Content-Type: application/json" -d '{"completedStep":"${step}","nextStep":"NEXT_STEP"}'\``,
           ``,
         ].join("\n")
       : "";
@@ -2423,7 +2423,7 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
           `   - **分辨率**：width ≥ 1080 优先`,
           `   - **时长**：duration 最好 ≥ 镜头所需时长 + 1 秒`,
           `4. 下载选中素材（自动进入合规素材库，带授权记录）：`,
-          `   \`curl -X POST http://localhost:3271/api/stock-assets/download -H "Content-Type: application/json" -d '{"url":"ITEM_URL","provider":"pexels","mediaType":"video","category":"scenes","name":"shot-01.mp4","description":"...","author":"...","license":"...","duration":12}'\``,
+          `   \`curl -X POST http://localhost:3271/api/stock-assets/download -H "Authorization: Bearer $AUTOVIRAL_TOKEN" -H "Content-Type: application/json" -d '{"url":"ITEM_URL","provider":"pexels","mediaType":"video","category":"scenes","name":"shot-01.mp4","description":"...","author":"...","license":"...","duration":12}'\``,
           `   响应里的 asset.file_path 是共享素材库相对路径，完整路径为 ~/.autoviral/shared-assets/<file_path>，`,
           `   把文件复制到作品 assets 的 clips/ 目录供合成使用。`,
           `5. 每个镜头重复 1-4。`,
@@ -2452,7 +2452,7 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
             `1. 获取完整模板 JSON: \`curl -s http://localhost:3271/api/templates/${boundTemplate.id}\`,确认变量槽位(variables)与图层结构`,
             `2. 把前序步骤产出的素材映射为变量值(本地绝对路径):视频片段/图片填素材变量,配音填 voice_audio(若声明),BGM 填 bgm(若声明),字幕填 subtitle_ass(若声明)`,
             `3. 提交渲染(异步任务):`,
-            `   \`curl -X POST http://localhost:3271/api/works/${id}/render -H "Content-Type: application/json" -d '{"templateId":"${boundTemplate.id}","variables":{...},"assets":{...}}'\``,
+            `   \`curl -X POST http://localhost:3271/api/works/${id}/render -H "Authorization: Bearer $AUTOVIRAL_TOKEN" -H "Content-Type: application/json" -d '{"templateId":"${boundTemplate.id}","variables":{...},"assets":{...}}'\``,
             `   返回 { jobId };模板若声明了 host_video/voice_audio 变量,必须额外传 digitalHumanVideo/voiceAudio 字段`,
             `   (kind=code 代码渲染模板:整片由代码渲染引擎出片(web 支路 HTML 或 Revideo TSX,模板内部约定,渲染方无感),无需素材变量;digitalHumanVideo 即数字人源片,成片时长自动跟随源片;可用 variables 覆盖 title/kicker/subtitleCn/subtitleEn 文案)`,
             `4. 轮询 \`curl -s http://localhost:3271/api/render-jobs/{jobId}\` 直至 status=completed;failed 时读 error 修正变量后重试`,

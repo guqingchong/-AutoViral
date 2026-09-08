@@ -303,18 +303,18 @@ export async function startServer(port: number): Promise<{ server: Server }> {
 
   // S1(2026-09):根路径 index.html 注入 authToken——前端 fetch 封装据此为写请求注入 Authorization 头。
   // 必须挂在 serveStatic 之前，否则静态 index.html 会先命中而拿不到注入机会。
+  const injectAuthToken = (html: string): string =>
+    html.replace(
+      "</head>",
+      `<script>window.__AUTH_TOKEN__ = ${JSON.stringify(config.server?.authToken ?? "")};(function(){var _f=window.fetch.bind(window);window.fetch=function(u,i){var m=(i&&i.method)||"GET";if(m!=="GET"&&m!=="HEAD"&&window.__AUTH_TOKEN__){var h=new Headers(i&&i.headers);h.set("Authorization","Bearer "+window.__AUTH_TOKEN__);i=Object.assign({},i,{headers:h});}return _f(u,i);};})();</script></head>`,
+    );
   app.get("/", async (c) => {
     try {
       const indexPath = join(WEB_DIST, "index.html");
       const html = await readFile(indexPath, "utf-8");
-      const token = config.server?.authToken ?? "";
       // 注入 authToken + 包装 window.fetch：所有前端写请求自动带上 Authorization 头
       // （覆盖 lib/api.ts 的统一封装，也覆盖 Topics/Templates 等页面里的直接 fetch）。
-      const injected = html.replace(
-        "</head>",
-        `<script>window.__AUTH_TOKEN__ = ${JSON.stringify(token)};(function(){var _f=window.fetch.bind(window);window.fetch=function(u,i){var m=(i&&i.method)||"GET";if(m!=="GET"&&m!=="HEAD"&&window.__AUTH_TOKEN__){var h=new Headers(i&&i.headers);h.set("Authorization","Bearer "+window.__AUTH_TOKEN__);i=Object.assign({},i,{headers:h});}return _f(u,i);};})();</script></head>`,
-      );
-      return c.html(injected);
+      return c.html(injectAuthToken(html));
     } catch {
       return c.text("Dashboard not built. Run: npm run build:frontend", 404);
     }
@@ -324,11 +324,13 @@ export async function startServer(port: number): Promise<{ server: Server }> {
   app.use("/*", serveStatic({ root: WEB_DIST }));
 
   // SPA fallback: serve index.html for any non-API GET request that didn't match a static file
+  // P2 修复:fallback 同样注入 authToken——深链接直达(刷新/收藏夹)时此前拿未注入版,
+  // 前端写请求与 WS 建连全部 401/被拒
   app.get("*", async (c) => {
     try {
       const indexPath = join(WEB_DIST, "index.html");
       const html = await readFile(indexPath, "utf-8");
-      return c.html(html);
+      return c.html(injectAuthToken(html));
     } catch {
       return c.text("Dashboard not built. Run: npm run build:frontend", 404);
     }

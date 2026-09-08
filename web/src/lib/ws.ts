@@ -1,3 +1,10 @@
+// P2(2026-09-08):WS 建连带服务端注入的 authToken(handleUpgrade 鉴权)
+function wsUrl(path: string): string {
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  const token = (window as any).__AUTH_TOKEN__;
+  return `${proto}//${location.host}${path}${token ? `?token=${encodeURIComponent(token)}` : ""}`;
+}
+
 export function createWsConnection(
   onEvent: (event: string, data: any) => void
 ) {
@@ -7,8 +14,7 @@ export function createWsConnection(
 
   function connect() {
     if (closed) return;
-    const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    ws = new WebSocket(`${proto}//${location.host}/ws`);
+    ws = new WebSocket(wsUrl("/ws"));
 
     ws.onopen = () => {
       retryDelay = 1000;
@@ -54,9 +60,8 @@ export function createWorkWs(
 
   function connect() {
     if (closed) return;
-    const proto = location.protocol === "https:" ? "wss:" : "ws:";
     ws = new WebSocket(
-      `${proto}//${location.host}/ws/browser/${encodeURIComponent(workId)}`
+      wsUrl(`/ws/browser/${encodeURIComponent(workId)}`)
     );
 
     ws.onopen = () => {
@@ -107,9 +112,8 @@ export function createTrendWs(
 
   function connect() {
     if (closed) return;
-    const proto = location.protocol === "https:" ? "wss:" : "ws:";
     ws = new WebSocket(
-      `${proto}//${location.host}/ws/browser/${encodeURIComponent(sessionKey)}`
+      wsUrl(`/ws/browser/${encodeURIComponent(sessionKey)}`)
     );
 
     ws.onmessage = (msg) => {

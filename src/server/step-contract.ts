@@ -59,7 +59,7 @@ export function buildAssetConstraintSection(assetForm?: string, assetSource?: st
       `图表数值与旁白口径必须一致——旁白说"超六成",图表须标">60%"或"超60%",禁止写成精确值 60%;` +
       `结构/流程/逻辑镜头调用 POST /api/assets/code-scene 生成程序化动画(模板清单与参数先 GET /api/assets/code-scene/templates,竖屏 9 款+横屏 11 款 -wide 按成片画幅选);` +
       `**多个镜头必须批量提交(2026-09-01 起,消灭轮询空等)**: 把全部镜头 spec 写进一个 JSON,` +
-      `\`curl -X POST http://localhost:3271/api/assets/code-scene/batch --data-binary @renders.json\` 一次提交(renders.json: {"workId":"本作品id","renders":[{...镜头1},{...镜头2}]}),` +
+      `\`curl -X POST http://localhost:3271/api/assets/code-scene/batch -H "Authorization: Bearer $AUTOVIRAL_TOKEN" --data-binary @renders.json\` 一次提交(renders.json: {"workId":"本作品id","renders":[{...镜头1},{...镜头2}]}),` +
       `立即返回 taskId;服务端 2 路并发渲染,完成时系统会推送通知;其间你去做别的事(写文案/备字幕),` +
       `收到完成通知或 60s 后查一次 GET /api/long-tasks/<taskId> 即可。禁止单条渲染循环、禁止 sleep 轮询渲染产物;` +
       `凡 POST body 含中文(code-scene/chart/snapshot-card 的参数都含),必须先把 JSON 写成 UTF-8 文件再 --data-binary @file,禁止 curl -d 内联(Windows 下必乱码);`,
@@ -188,7 +188,7 @@ export function buildMaterialSearchInstruction(work: { id: string; title: string
     `2. **合规素材库(Pexels 优先,英文关键词命中最好)**:`,
     `   搜索: \`curl -s "http://localhost:3271/api/stock-assets/search?q=英文关键词&type=video&perPage=10"\`(要图片则 type=image)`,
     `   **批量下载(必选,2026-09-01 起)**: 多个候选写进一个 JSON 数组,一次调用全下完:`,
-    `   \`curl -X POST http://localhost:3271/api/stock-assets/download-batch -H "Content-Type: application/json" --data-binary @downloads.json\``,
+    `   \`curl -X POST http://localhost:3271/api/stock-assets/download-batch -H "Authorization: Bearer $AUTOVIRAL_TOKEN" -H "Content-Type: application/json" --data-binary @downloads.json\``,
     `   (downloads.json 内容: {"items":[{"url":"ITEM_URL","provider":"pexels","mediaType":"video","category":"scenes","name":"shot-NN.mp4","description":"...","author":"...","license":"...","duration":12}, ...]},服务端 3 路并发)`,
     `   单个下载端点 /api/stock-assets/download 仍在但仅限补单条;禁止逐条循环调用。`,
     `   禁止直连 api.pexels.com / api.pixabay.com——你本地没有 key,直连必然 401,走上面两个服务端端点即可。`,
@@ -215,7 +215,7 @@ export function buildMaterialSearchInstruction(work: { id: string; title: string
       ? `## 自动化模式: 候选选优由你自行拍板(语义贴合 > 竖版 > 分辨率 > 时长),禁止向用户提问、罗列候选等挑选。完成后直接调用 pipeline/advance 推进。`
       : `## 交互模式: 把候选以 markdown 链接呈现给用户(\`[标题](/api/works/${work.id}/assets/clips/option-01.mp4)\` 可内联播放),请用户选定主素材后再推进。`,
     ``,
-    `完成后推进: \`curl -X POST http://localhost:3271/api/works/${work.id}/pipeline/advance -H "Content-Type: application/json" -d '{"completedStep":"material-search","nextStep":"research"}'\``,
+    `完成后推进: \`curl -X POST http://localhost:3271/api/works/${work.id}/pipeline/advance -H "Authorization: Bearer $AUTOVIRAL_TOKEN" -H "Content-Type: application/json" -d '{"completedStep":"material-search","nextStep":"research"}'\``,
   ].join("\n");
 }
 
@@ -310,7 +310,7 @@ export function buildContentResearchInstruction(
       ? `## 自动化模式: 自主拍板,禁止向用户提问。完成后直接调用 advance 推进。`
       : `## 交互模式: 成文后向用户简要展示文章结构与可行性结论,确认后再推进。`,
     ``,
-    `完成后推进: \`curl -X POST http://localhost:3271/api/works/${work.id}/pipeline/advance -H "Content-Type: application/json" -d '{"completedStep":"content-research","nextStep":"plan-assets"}'\``,
+    `完成后推进: \`curl -X POST http://localhost:3271/api/works/${work.id}/pipeline/advance -H "Authorization: Bearer $AUTOVIRAL_TOKEN" -H "Content-Type: application/json" -d '{"completedStep":"content-research","nextStep":"plan-assets"}'\``,
   ].join("\n");
 }
 
@@ -340,7 +340,7 @@ export function buildPlanAssetsInstruction(
     `4. **缺口处理**(合法出口,不扣分):`,
     `   - 单镜缺素材 → material-candidates.md 写"缺口声明"+ 替代方案(AI 生成/程序化/换写法);`,
     `   - **整段场景缺素材** → 写 \`assets/material-gaps.json\`(\`{"gaps":[{"scene":"…","needed":"…","triedQueries":["…"],"conclusion":"…"}],"requestedAt":"ISO"}\`),然后调用回退端点修订文章:`,
-    `     \`curl -X POST http://localhost:3271/api/works/${work.id}/pipeline/regress -H "Content-Type: application/json" -d '{"fromStep":"plan-assets","toStep":"content-research","reason":"整段场景缺素材","gapsRef":"assets/material-gaps.json"}'\``,
+    `     \`curl -X POST http://localhost:3271/api/works/${work.id}/pipeline/regress -H "Authorization: Bearer $AUTOVIRAL_TOKEN" -H "Content-Type: application/json" -d '{"fromStep":"plan-assets","toStep":"content-research","reason":"整段场景缺素材","gapsRef":"assets/material-gaps.json"}'\``,
     `     **禁止硬凑不贴合素材充数**(ae0 教堂/币圈画面事故的根因)。`,
     ``,
     `## 铁律`,
@@ -352,6 +352,6 @@ export function buildPlanAssetsInstruction(
       ? `## 自动化模式: 自主拍板,禁止向用户提问。完成后直接调用 advance 推进。`
       : `## 交互模式: 分镜表与素材需求清单展示给用户确认后再推进。`,
     ``,
-    `完成后推进: \`curl -X POST http://localhost:3271/api/works/${work.id}/pipeline/advance -H "Content-Type: application/json" -d '{"completedStep":"plan-assets","nextStep":"assets"}'\``,
+    `完成后推进: \`curl -X POST http://localhost:3271/api/works/${work.id}/pipeline/advance -H "Authorization: Bearer $AUTOVIRAL_TOKEN" -H "Content-Type: application/json" -d '{"completedStep":"plan-assets","nextStep":"assets"}'\``,
   ].join("\n");
 }

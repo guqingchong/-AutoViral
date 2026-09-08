@@ -171,10 +171,13 @@ async function collectTrendsInner(platforms: string[], interests: string[] = [],
         } catch { /* 兜底检索失败走原拦截 */ }
       }
       if (!raw) {
+        // P3 修复(2026-09-08):幻觉闸判定与 analyzeTrendsWithAgent 的工具挂载同一事实源
+        // (PROVIDER_PRESETS.builtinSearchTool 现在真实挂载)——本轮能挂搜索工具则放行
+        // 让 $web_search 真搜;工具挂不上且上方 WebSearch 兜底也无结果才拦截。
         const config = await loadConfig();
         const { provider } = resolveModelFor(config, "research");
-        const hasSearch = !!PROVIDER_PRESETS[provider.name]?.builtinSearchTool;
-        if (!hasSearch) {
+        const searchMounted = !!PROVIDER_PRESETS[provider.name]?.builtinSearchTool;
+        if (!searchMounted) {
           p.status = "error";
           p.error = "热搜采集失败且联网兜底也无结果,已拦截(防幻觉选题入库)。" +
             "请检查采集脚本与网络后重试";
@@ -362,7 +365,9 @@ async function analyzeTrendsWithAgent(platform: string, rawData: string, interes
       const parsed = await chatJsonWithSearch<{ topics?: any[] }>(provider, model, prompt, {
         timeoutMs: 480_000, // 8 分钟：深度调研要求多轮搜索，3 分钟必被腰斩
         maxRounds: 12,
-        // F6:去掉 builtinSearchTool(消除"只有 Kimi 能联网"的 $web_search 依赖)——保留内置搜索时改走 WebSearch 客户端编排
+        // P3 修复(2026-09-08):恢复挂载平台内置搜索工具——F6 去掉后"客户端编排"从未实装,
+        // kimi 的 $web_search 声明了却没挂,幻觉闸按预设放行 → 凭先验编造趋势
+        ...(builtinSearchTool ? { builtinSearchTool } : {}),
       });
       const topics = (parsed.topics ?? []).map((t: any) => ({
         platform,

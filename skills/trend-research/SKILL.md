@@ -310,7 +310,7 @@ curl http://localhost:3271/api/memory/profile
 研究完成后，将报告保存为资产：
 ```bash
 # 将研究报告保存到作品的资产中
-curl -X POST http://localhost:3271/api/works/{workId}/pipeline/advance \
+curl -X POST http://localhost:3271/api/works/{workId}/pipeline/advance -H "Authorization: Bearer $AUTOVIRAL_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"completedStep":"research","nextStep":"plan"}'
 ```

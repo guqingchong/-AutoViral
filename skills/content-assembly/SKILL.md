@@ -893,7 +893,7 @@ ffprobe -v error -show_entries stream=codec_type -of csv=p=0 output.mp4 | grep a
 
 2. 更新 pipeline 状态：
 ```bash
-curl -X POST http://localhost:3271/api/works/{workId}/pipeline/advance \
+curl -X POST http://localhost:3271/api/works/{workId}/pipeline/advance -H "Authorization: Bearer $AUTOVIRAL_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"completedStep":"assembly"}'
 ```

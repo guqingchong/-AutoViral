@@ -13,6 +13,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import type { ToolContext, ToolExecutor } from "./index.js";
 import { truncateMiddle } from "./common.js";
+import { getConfig } from "../../config.js";
 
 const DEFAULT_BLOCKLIST = ["rm\\s+-rf\\s+/", "format\\s+[a-z]:", "del\\s+/f\\s+/s\\s+/q"];
 
@@ -52,7 +53,7 @@ export function bashExecutor(blocklist?: string[]): ToolExecutor {
   return {
     def: {
       name: "Bash",
-      description: "执行 shell 命令（Git Bash 语义，支持管道/重定向/ffmpeg/curl/py -3）。默认 120 秒超时。",
+      description: "执行 shell 命令（Git Bash 语义，支持管道/重定向/ffmpeg/curl/py -3）。默认 120 秒超时。调用内部 API 写请求必须带 -H \"Authorization: Bearer $AUTOVIRAL_TOKEN\"（token 已注入你的环境变量）。",
       input_schema: {
         type: "object",
         properties: {
@@ -71,7 +72,8 @@ export function bashExecutor(blocklist?: string[]): ToolExecutor {
       if (/^\s*(:|true|echo\s*)\s*$/.test(command)) {
         return "检测到空操作命令(无实际效果)。如果你不确定下一步,请回顾当前阶段指令;" +
           "如需推进流水线,执行 curl -X POST http://localhost:3271/api/works/<作品ID>/pipeline/advance " +
-          "(body: {\"completedStep\":\"当前阶段\",\"nextStep\":\"下一阶段\"});如需联网搜索,调用 WebSearch 工具。禁止再用空命令占位。";
+          "-H \"Authorization: Bearer $AUTOVIRAL_TOKEN\" -H \"Content-Type: application/json\" " +
+          "-d '{\"completedStep\":\"当前阶段\",\"nextStep\":\"下一阶段\"}';如需联网搜索,调用 WebSearch 工具。禁止再用空命令占位。";
       }
       // 2026-08-28 批次3.2:外网抓站精确拦截(实证:4 作品 curl 抓站 509 次 vs $web_search 8 次,
       // 作品目录散落 20+ 抓站残片)。纪律:内部 API curl 占 70-90%(advance/stock-assets 等),
@@ -85,7 +87,7 @@ export function bashExecutor(blocklist?: string[]): ToolExecutor {
           return (
             `拦截:禁止用 curl/wget 直连外网(${external[0].slice(0, 60)})。换路:` +
             `①联网搜索/调研 → 调用 WebSearch 工具;②素材下载 → POST /api/stock-assets/download;` +
-            `③全网视频下载 → yt-dlp;④内部 API → curl localhost:3271 不受影响。` +
+            `③全网视频下载 → yt-dlp;④内部 API → curl localhost:3271(写请求必须带 -H "Authorization: Bearer $AUTOVIRAL_TOKEN")。` +
             `外网抓取 HTML 页面的成功率极低且已被评审判定为无效路径,请改用上述通道。`
           );
         }
@@ -109,7 +111,13 @@ export function bashExecutor(blocklist?: string[]): ToolExecutor {
       const bash = await detectBash();
       const [cmd, args] = bash ? [bash, ["-lc", command]] : ["cmd", ["/c", command]];
       return new Promise((resolvePromise) => {
-        const p = spawn(cmd, args, { cwd: ctx.workDir, windowsHide: true });
+        const p = spawn(cmd, args, {
+          cwd: ctx.workDir,
+          windowsHide: true,
+          // P1 修复:agent 的内部 API 写请求需要 Bearer token(authGuard),
+          // token 注入 Bash 子进程环境变量,指令层统一用 $AUTOVIRAL_TOKEN 占位
+          env: { ...process.env, AUTOVIRAL_TOKEN: getConfig().server?.authToken ?? "" },
+        });
         // 有界缓冲(2026-08-18 崩溃根因):out += d 无上限,agent 误读二进制视频/大日志时
         // 字符串拼接撞 V8 最大串长(RangeError: Invalid string length)把整服务炸死。
         // 头 512KB 保底命令上下文 + 尾 512KB 滚动保留(错误信息通常在末尾)

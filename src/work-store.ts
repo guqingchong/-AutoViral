@@ -350,7 +350,10 @@ export async function createWork(input: {
     content_form: input.contentForm,
     video_source: input.videoSource,
     video_search_query: input.videoSearchQuery,
-    status: pipelineVersion === 2 ? "researching" : (input.videoSource === "search" ? "researching" : "draft"),
+    // P6 修复(2026-09-08):v1/v2 统一出生为 draft——此前 v2 无条件 researching,
+    // 看门狗对"researching + 10min 无活动 + 无会话"会自动入队拉起,
+    // 手动创建的作品被自动启动堵串行队列。researching 由入队(enqueueWork)/runner 派生。
+    status: pipelineVersion === 2 ? "draft" : (input.videoSource === "search" ? "researching" : "draft"),
     platforms: input.platforms,
     evaluation_mode: input.evaluationMode ?? true,
     topic_hint: input.topicHint,

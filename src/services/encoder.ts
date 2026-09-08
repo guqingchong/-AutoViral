@@ -94,10 +94,12 @@ export async function detectNvenc(ffmpegPath = "ffmpeg"): Promise<boolean> {
     nvencCache = false;
     return false;
   }
+  // 试编码必须用完整参数组:只试 -c:v 会漏掉构建不支持的子选项
+  // (实证:ffmpeg 8.1 essentials 认 h264_nvenc 但参数组不完整时运行期才炸)
   const trial = await run(ffmpegPath, [
     "-hide_banner", "-loglevel", "error",
     "-f", "lavfi", "-i", "color=black:s=256x256:d=1",
-    "-c:v", "h264_nvenc", "-f", "null", "-",
+    ...NVENC_VIDEO_ARGS, "-f", "null", "-",
   ]);
   nvencCache = trial.code === 0;
   return nvencCache;
@@ -121,10 +123,13 @@ export async function detectQsv(ffmpegPath = "ffmpeg"): Promise<boolean> {
     qsvCache = false;
     return false;
   }
+  // 试编码必须用完整参数组(2026-09-08 实证):ffmpeg 8.1 essentials 列得出 h264_qsv、
+  // 裸 -c:v h264_qsv 也能跑,但不认 -qsv_brc——只试 -c:v 会误判 QSV 可用,
+  // 真实渲染首轮必炸再靠回退兜底(每次白交一次失败)
   const trial = await run(ffmpegPath, [
     "-hide_banner", "-loglevel", "error",
     "-f", "lavfi", "-i", "color=black:s=256x256:d=1",
-    "-c:v", "h264_qsv", "-f", "null", "-",
+    ...QSV_VIDEO_ARGS, "-f", "null", "-",
   ]);
   qsvCache = trial.code === 0;
   return qsvCache;
