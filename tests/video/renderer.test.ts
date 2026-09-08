@@ -94,7 +94,7 @@ describe("renderer command builder", () => {
     const args = buildFilterComplexArgs(tl, inputs, 60, "/tmp/out.mp4");
     const fcIndex = args.indexOf("-filter_complex");
     const fc = args[fcIndex + 1];
-    expect(fc).toContain("subtitles=/tmp/subtitles.srt");
+    expect(fc).toContain("subtitles='/tmp/subtitles.srt'"); // B10:路径经 escapeFilterPath 转义+单引号包裹
     expect(fc).toContain("force_style=");
   });
 });

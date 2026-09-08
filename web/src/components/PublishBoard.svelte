@@ -58,6 +58,8 @@
   let approving = $state(false);
   let publishing = $state<Record<string, boolean>>({});
   let publishAllBusy = $state(false);
+  // B8②(2026-09-08):研究成果子作品 assets 未完成时卡片为空——标记后禁用发布("卡片生成中")
+  let cardsPending = $state<Record<string, boolean>>({});
 
   // 图文文章编辑（kind === "image-text" 的审核详情）
   let articleId = $state<number | null>(null);
@@ -169,6 +171,27 @@
         (w) => typeMatches(w) && (w.status === "approved" || w.status === "published"),
       );
       await loadRecordsFor(needRecords.map((w) => w.id));
+      // B8②:研究成果子作品检查卡片是否已生成(空卡禁用发布)
+      if (kind === "image-text") {
+        const researchChildren = works.filter(
+          (w) => w.type === "image-text" && w.status === "approved" && w.title.includes("（研究成果）"),
+        );
+        const entries = await Promise.all(
+          researchChildren.map(async (w) => {
+            try {
+              const res = await fetch(`/api/works/${w.id}/assets`);
+              const data = await res.json();
+              const hasCards = (data.assets ?? []).some((a: string) => a.startsWith("output/cards/") && /\.png$/i.test(a));
+              return [w.id, !hasCards] as const;
+            } catch {
+              return [w.id, false] as const;
+            }
+          }),
+        );
+        const next = { ...cardsPending };
+        for (const [id, pending] of entries) next[id] = pending;
+        cardsPending = next;
+      }
     } catch {}
   }
 
@@ -362,6 +385,10 @@
   }
 
   async function handlePublishClick(workId: string, platform: string, label: string) {
+    if (cardsPending[workId]) {
+      showMessage("error", "卡片生成中：素材阶段完成后系统自动回填,回填后再发布");
+      return;
+    }
     const ok = await publishOne(workId, platform, label);
     if (ok) showMessage("success", `${label} 发布成功`);
   }
@@ -369,6 +396,10 @@
   /** 一键全发布：向所有已配置且未发布的平台依次发布 */
   async function handlePublishAll(workId: string) {
     if (publishAllBusy) return;
+    if (cardsPending[workId]) {
+      showMessage("error", "卡片生成中：素材阶段完成后系统自动回填,回填后再发布");
+      return;
+    }
     const targets = pendingPlatforms(workId);
     if (targets.length === 0) {
       showMessage("error", configuredPlatforms.length === 0
@@ -482,10 +513,11 @@
                 </div>
                 <button
                   class="btn-publish-all"
-                  disabled={publishAllBusy || pendingPlatforms(work.id).length === 0}
+                  disabled={publishAllBusy || cardsPending[work.id] || pendingPlatforms(work.id).length === 0}
+                  title={cardsPending[work.id] ? "卡片生成中,素材阶段完成后自动回填" : ""}
                   onclick={(e) => { e.stopPropagation(); handlePublishAll(work.id); }}
                 >
-                  {publishAllBusy ? "发布中…" : `一键全发布（${pendingPlatforms(work.id).length} 个平台）`}
+                  {cardsPending[work.id] ? "卡片生成中…" : publishAllBusy ? "发布中…" : `一键全发布（${pendingPlatforms(work.id).length} 个平台）`}
                 </button>
               </div>
             </div>

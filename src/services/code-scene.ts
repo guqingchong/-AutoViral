@@ -378,11 +378,15 @@ function releaseRenderSlot(custom: boolean): void {
 export function precheckTemplate(html: string): string | null {
   if (!html) return null;
   const loopCounts = [...html.matchAll(/for\s*\([^)]*\w+\s*<\s*(\d+)/g)].map((m) => Number(m[1]));
-  const varCounts = [...html.matchAll(/(?:const|let|var)\s+\w*(?:count|total|num)\w*\s*=\s*(\d+)/gi)].map((m) => Number(m[1]));
+  // B2 修复(2026-09-08):标识符须以 Count|Total|Num 结尾——旧 `\w*(?:count|total|num)\w*`
+  // 会误吞 number/renumber 等无关变量
+  const varCounts = [...html.matchAll(/(?:const|let|var)\s+\w*(?:Count|Total|Num)\s*=\s*(\d+)/g)].map((m) => Number(m[1]));
   const arrCounts = [...html.matchAll(/new\s+Array\s*\(\s*(\d+)\s*\)|Array\.from\s*\(\s*\{\s*length\s*:\s*(\d+)/g)]
     .map((m) => Number(m[1] ?? m[2]));
-  const particles = [...loopCounts, ...varCounts, ...arrCounts]
-    .reduce((a, n) => a + (Number.isFinite(n) ? n : 0), 0);
+  // B2 修复:三类计数取最大值而非求和——`var techCount=120` + `for(i<120)` 是同一批
+  // 粒子的两种表述,求和双重计数 240 误杀(ae0 模板正是被这样误判的)
+  const maxOf = (ns: number[]) => ns.reduce((a, n) => (Number.isFinite(n) && n > a ? n : a), 0);
+  const particles = Math.max(maxOf(loopCounts), maxOf(varCounts), maxOf(arrCounts));
   const shadowBlurAssigns = (html.match(/shadowBlur\s*=\s*\d+/g) ?? []).length;
   const hasShadowBlur = /shadowBlur\s*=\s*[1-9]/.test(html);
   const infinite = (html.match(/iterations\s*:\s*Infinity|requestAnimationFrame|setInterval/g) ?? []).length;

@@ -556,6 +556,17 @@ export function assertPlanReferences(workDir: string, candidateSources: Array<{ 
   for (const src of candidateSources) {
     for (const f of src.files) known.add(f.split(/[\\/]/).pop()!.toLowerCase());
   }
+  // B12(2026-09-08):指令/评审都声称"引用必须在 registry.json 登记、门禁逐条核验",
+  // 此前 known 并集并不含 registry——登记了但 candidates 未列的引用被误拦。
+  const registryPath = join(workDir, "assets", "registry.json");
+  if (existsSync(registryPath)) {
+    try {
+      const reg = JSON.parse(readFileSync(registryPath, "utf-8")) as { sources?: Array<{ name?: string }> };
+      for (const s of reg.sources ?? []) {
+        if (s.name) known.add(s.name.split(/[\\/]/).pop()!.toLowerCase());
+      }
+    } catch { /* registry 解析失败按未登记处理 */ }
+  }
 
   const planText = readFileSync(planPath, "utf-8");
   for (const m of planText.matchAll(/([^\s|,;：:()\]]+\.(?:mp4|mov|png|jpg|jpeg|webp|wav|mp3))/gi)) {

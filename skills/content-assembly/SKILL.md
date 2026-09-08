@@ -5,6 +5,38 @@ description: Assemble generated assets into final publishable content using ffmp
 
 # 内容组装技能
 
+## 🚀 首选路径（默认，必须）：conform 服务端合成
+
+**整片合成一律调用 conform 端点，一条命令完成 拼接→调色→字幕→混音→编码，禁止手工逐段拼 ffmpeg。**
+
+```bash
+# 1. 把合成 spec 写成 UTF-8 JSON(含中文必须写文件,禁止 -d 内联)
+# conform.json 示例:
+# {
+#   "segments": [{"path": "assets/clips/shot-01.mp4"}, {"path": "assets/clips/shot-02.mp4"}],
+#   "narration": "assets/audio/narration.mp3",
+#   "bgm": "assets/audio/bgm.mp3",
+#   "subtitle": "assets/subs/final.ass",
+#   "width": 1080, "height": 1920, "fps": 30,
+#   "loudness": {"narration": -15, "bgm": -34},
+#   "color": {"contrast": 1.02, "saturation": 1.05}
+# }
+curl -X POST http://localhost:3271/api/works/{workId}/conform \
+  -H "Authorization: Bearer $AUTOVIRAL_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data-binary @conform.json
+```
+
+异步语义：
+- 返回 **202 + taskId**，合成在服务端后台执行（QSV 硬件编码 + 字幕快路径，远比手拼快）
+- **完成时系统会自动通知你**（完成事件注入会话），无需轮询；也可 `curl -s http://localhost:3271/api/long-tasks/<taskId>` 查询（60s 一次即可）
+- 路径规则：所有路径相对于作品目录，服务端强制收敛在作品目录内；产物默认 `output/final.mp4`
+- 提交后去做别的事（写发布文案/备下一个作品），**禁止 sleep 轮询产物文件**
+
+**手工 ffmpeg 仅作异常兜底**：仅当 conform 返回 5xx 或任务 failed 且错误信息表明是 spec 无法表达的特殊需求（如非常规转场、画中画分窗）时，才按下文手工路径合成，并在交付说明中记录原因。conform 能表达的需求（顺序拼接+配音+BGM+字幕+调色+响度）一律走 conform。
+
+---
+
 ## ⚠️ 字幕烧录规范（强制）
 
 **首选路径（默认，必须）：ffmpeg 原生 ass 滤镜。** caption_generate.py 生成的 ASS 字幕（含 `{\kf}` 逐词高亮 karaoke）**必须**用 ffmpeg libass 烧录：

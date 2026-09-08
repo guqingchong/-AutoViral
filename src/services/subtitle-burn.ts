@@ -61,6 +61,9 @@ export interface BurnFastOptions {
   height: number;
   /** 正片帧率,决定 color 源帧率与 PNG 序列回读帧率,必须与正片一致 */
   fps: number;
+  /** B4(2026-09-08):编码参数由调用方贯通(第一段硬件失败切 CPU 后,本段必须沿用);
+   *  不传则内部探测(videoEncoderArgs) */
+  encArgs?: string[];
 }
 
 /**
@@ -90,6 +93,9 @@ export async function burnSubtitlesFast(
   try {
     await run(ffmpeg, [
       "-y",
+      // B5(2026-09-08):静默日志——默认 stats 进度行在长片时会撑爆 64MB maxBuffer
+      // 造成假失败(进程其实成功,execFile 因缓冲溢出报错回退慢速路径白烧一遍)
+      "-loglevel", "error", "-nostats",
       "-f", "lavfi",
       "-i", `color=c=black@0.0:s=${width}x${height}:r=${fps},subtitles='${escapeFilterFilename(assPath)}'`,
       "-frames:v", String(frameCount),
@@ -97,8 +103,9 @@ export async function burnSubtitlesFast(
       patternPath,
     ]);
 
-    // R1:overlay 合成段也走编码器选型(QSV→NVENC→CPU),不回落 ffmpeg 默认
-    const encArgs = await videoEncoderArgs();
+    // R1:overlay 合成段也走编码器选型(QSV→NVENC→CPU),不回落 ffmpeg 默认;
+    // B4:调用方已给出编码参数时沿用(硬件失败知识贯通,不再二次探测连撞)
+    const encArgs = opts.encArgs ?? await videoEncoderArgs();
 
     // 第 2 步:PNG 序列叠加回正片(overlay 快速滤镜,音轨原样拷贝)
     //   -framerate 必须显式给:image2 序列默认 25fps,与正片帧率不一致会音画错位。
@@ -107,6 +114,7 @@ export async function burnSubtitlesFast(
     //   eof_action=pass:PNG 序列短于正片时直传正片帧,不定格残影。
     await run(ffmpeg, [
       "-y",
+      "-loglevel", "error", "-nostats", // B5:同第一步,防 maxBuffer 假失败
       "-i", video,
       "-framerate", String(fps),
       "-i", patternPath,

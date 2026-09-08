@@ -254,7 +254,16 @@ export class AgentLoop {
         }
         // P5 长任务豁免：后台 job（烧录/渲染/下载）运行中时不因回合超时硬杀 jod，只断 LLM 轮次
         const hasLongJob = ctxWorkId ? await hasRunningLongTask(ctxWorkId) : false;
-        if (Date.now() > deadline && !hasLongJob) throw new LoopGuardError("回合超时（maxTurnMinutes）");
+        if (Date.now() > deadline) {
+          if (!hasLongJob) throw new LoopGuardError("回合超时（maxTurnMinutes）");
+          // B3 修复(2026-09-08):豁免的本义是"不硬杀后台 job",不是"LLM 轮次无限续命"——
+          // 旧实现豁免期间照常跑 LLM 轮次,挂死的长任务会让回合永远拖下去。
+          // 断轮次收尾;长任务完成事件(P2 通知注入)会重新驱动会话,ws-bridge 的
+          // auto_continue 在长任务运行中也会跳过续跑,不会立刻把 agent 拉回来。
+          this.state = "idle";
+          this.deps.onLoopEvent({ type: "tool_progress", text: "回合超时但有后台长任务运行中:LLM 轮次收尾,待长任务完成回调接管" });
+          return { resultText: "", stopReason: "long_task_wait" };
+        }
         if ((this.state as LoopState) === "aborted") {
           return { resultText: "", stopReason: "aborted" };
         }

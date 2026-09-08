@@ -6,7 +6,7 @@
 
 ## 评审对象
 
-`research/article.md`（最终作品文章）+ `research/article.json`（机器可读契约）+ 检索留痕 `logs/search-log.jsonl`。
+`research/article.md`（最终作品文章）+ `research/article.json`（机器可读契约）+ 检索留痕 `research/search-log.jsonl`（B9 口径统一 2026-09-08：留痕落作品目录 research/ 下，每条联网检索/抓取一行 JSONL，评审逐条在此取证）。
 
 ## 评审维度
 

@@ -52,7 +52,9 @@ export async function renderTimeline(timeline: Timeline, options: RenderOptions)
 
   const inputs = collectInputs(tl);
   // R1：编码参数从 encoder.ts 动态取（QSV→NVENC→CPU），libx264 不再是硬编码
-  const encArgs = await videoEncoderArgs();
+  // B4(2026-09-08):let 可改写——第一段硬件编码运行时失败回退 CPU 成功后,
+  // 第二段/慢速回退必须沿用 CPU 参数(探测缓存仍认为 QSV 可用,不切换会连撞三次)
+  let encArgs = await videoEncoderArgs();
   // R2 快速路径判定：字幕含逐字 \kf 标签 → 两段式（PNG 预渲染 + overlay），否则原 libass 滤镜
   const subtitleTrack = tl.subtitles;
   let fastSubtitle = false;
@@ -144,6 +146,9 @@ export async function renderTimeline(timeline: Timeline, options: RenderOptions)
       console.warn("[renderer] 硬件编码运行时失败,回退 CPU(libx264)重试:", err);
       const cpuArgs = buildFilterComplexArgs(tl, inputs, renderDuration, noSubVideo ?? targetPath, [...CPU_VIDEO_ARGS], { skipSubtitles: fastSubtitle });
       await runFfmpegArgs(cpuArgs);
+      // B4:CPU 重试成功 = 本进程硬件编码实际不可用——后续段(字幕快路径/慢速回退)
+      // 统一切 CPU 参数,不再用 QSV/NVENC 参数连撞
+      encArgs = [...CPU_VIDEO_ARGS];
     } else {
       throw err;
     }
@@ -157,6 +162,7 @@ export async function renderTimeline(timeline: Timeline, options: RenderOptions)
         width: tl.canvas.width,
         height: tl.canvas.height,
         fps: tl.canvas.fps ?? 30,
+        encArgs, // B4:与第一段共用(可能已因硬件失败切为 CPU)
       });
     } catch (err) {
       // 验收修复(2026-09-07):快路径任何失败(光栅化/overlay/编码器)都回退
@@ -301,7 +307,9 @@ export function buildFilterComplexArgs(tl: Timeline, inputs: InputSlot[], durati
   // R2 PNG 预渲染加速路径接入点：tl.subtitles 含 \kf 时，此处后续替换为 burnSubtitlesFast + overlay）
   if (tl.subtitles && !opts?.skipSubtitles) {
     const assStyle = buildAssHeader(tl.subtitleStyle ?? "douyin-highlight"); // 返回 force_style='...' 完整串
-    videoFilterParts.push(`[base]subtitles=${tl.subtitles.source}:${assStyle}[base]`);
+    // B10 修复(2026-09-08):裸路径在 Windows 盘符(C:\...)下 filter 解析必败——
+    // 慢速回退路径因此必死;复用 escapeFilterPath 转义(与 drawtext 字体同款)
+    videoFilterParts.push(`[base]subtitles='${escapeFilterPath(tl.subtitles.source)}':${assStyle}[base]`);
   }
 
   // Audio mixing

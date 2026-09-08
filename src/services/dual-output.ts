@@ -638,13 +638,20 @@ async function ensureImageTextChild(
   parent: DbWork,
   article: { title: string; content: string; status: string; topic_id?: number },
   deps: DeriveDualOutputsDeps,
+  opts?: { backfillApproved?: boolean },
 ): Promise<{ childId: string; cardFiles: string[]; cardsDir?: string } | null> {
   const existing = getChildWorkByParent(parent.id);
   if (existing && existing.status !== "reviewing") {
-    log("info", "server", "dual_output_child_exists", parent.id, {
-      childId: existing.id, status: existing.status, msg: "子作品已过审,跳过刷新",
-    });
-    return { childId: existing.id, cardFiles: [] };
+    // B8②(2026-09-08):研究成果子作品允许"空卡回填"一次——assets 完成前过审的
+    // 空卡条目(output/cards 无 PNG),assets 完成后照常渲染填入;已有卡的过审作品不动
+    const backfillable = opts?.backfillApproved && !(await hasAnyCards(existing.id));
+    if (!backfillable) {
+      log("info", "server", "dual_output_child_exists", parent.id, {
+        childId: existing.id, status: existing.status, msg: "子作品已过审,跳过刷新",
+      });
+      return { childId: existing.id, cardFiles: [] };
+    }
+    log("info", "server", "dual_output_child_backfill", parent.id, { childId: existing.id, status: existing.status });
   }
 
   const now = new Date().toISOString();
@@ -816,6 +823,22 @@ export async function ensureResearchArticleChild(parentWorkId: string): Promise<
   const existing = getChildWorkByParent(parentWorkId);
   if (existing && existing.status !== "reviewing") return { childId: existing.id };
 
+  // B8①(2026-09-08):v2 文章此前只落文件(research/article.md)不落 articles 表——
+  // deriveDualOutputs 的内容源是 articles 表,v2+dualOutput 作品到 reviewing 时
+  // "无文章"静默失效。派生时同步把研究文章写入主作品 articles 表(幂等 upsert)。
+  const parentArticle = listArticlesByWork(parentWorkId)[0];
+  if (parentArticle) {
+    updateArticle(parentArticle.id, { title: article.title, content: article.content });
+  } else {
+    createArticle({
+      work_id: parentWorkId,
+      topic_id: parent.topic_id,
+      title: article.title,
+      content: article.content,
+      status: article.status as import("../db/types.js").DbArticle["status"],
+    });
+  }
+
   const now = new Date().toISOString();
   const childId = existing?.id ?? generateChildId(); // 与双产物子作品同 ID 格式
   if (!existing) {
@@ -859,6 +882,7 @@ export async function ensureResearchArticleChild(parentWorkId: string): Promise<
  * assets 完成后:把研究文章 + 素材图渲染成卡片,填入"研究成果"子作品
  * (复用 ensureImageTextChild 的 素材复制/卡片渲染/配文/封面 全段)。
  * 子作品不存在(内容研究未派生过)时静默跳过;无文章/渲染失败仅记日志。
+ * B8②:已过审但卡片为空的子作品允许回填一次(backfillApproved)。
  */
 export async function renderResearchChildCards(parentWorkId: string): Promise<void> {
   const child = getChildWorkByParent(parentWorkId);
@@ -867,8 +891,18 @@ export async function renderResearchChildCards(parentWorkId: string): Promise<vo
   if (!parent) return;
   const article = await readResearchArticle(parentWorkId);
   if (!article) return;
-  await ensureImageTextChild(parent, { ...article, topic_id: parent.topic_id }, {});
+  await ensureImageTextChild(parent, { ...article, topic_id: parent.topic_id }, {}, { backfillApproved: true });
   log("info", "server", "research_child_cards_rendered", parentWorkId, { childId: child.id });
+}
+
+/** 子作品 output/cards 下是否已有渲染卡片(PNG) */
+async function hasAnyCards(workId: string): Promise<boolean> {
+  try {
+    const files = await readdir(join(dataDir, "works", workId, "output", "cards"));
+    return files.some((f) => f.endsWith(".png"));
+  } catch {
+    return false;
+  }
 }
 
 /**

@@ -898,6 +898,10 @@ ${unattended
           // 此前 finally 无条件 scheduleAutoContinue,2 秒后"继续执行,不要等确认"
           // 会当场击穿任何提问机制(论证新发现 #4)
           if (session.loop?.pendingAskToolUseId) return;
+          // B3 修复(2026-09-08):后台长任务运行中不续跑——回合因 long_task_wait 收尾后,
+          // 续跑会立刻把 agent 拉回空转(长任务完成事件自会重新驱动会话)
+          const { hasRunningLongTask } = await import("./services/long-tasks.js");
+          if (await hasRunningLongTask(session.workId)) return;
           const work = await getWork(session.workId);
           if (!work?.autoMode) return;
           const active = Object.entries(work.pipeline).find(([, s]) => s.status === "active");

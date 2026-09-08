@@ -6,7 +6,7 @@
  * 600s 上限杀长转写(whisper medium ×3 烧 40min 事故的结构性根源)。
  */
 
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join, dirname, resolve, sep } from "node:path";
@@ -20,6 +20,28 @@ import { escapeFilterPath } from "../video/draw-utils.js";
 const PROJECT_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const PY = process.platform === "win32" ? "py" : "python3";
 const PY_PREFIX = process.platform === "win32" ? ["-3"] : [];
+
+/** B3(2026-09-08):长任务子进程超时上限——挂死的 ffmpeg/whisper 此前无超时永驻 running */
+const ASR_TIMEOUT_MS = 60 * 60_000;   // whisper small 长片 ~20min,60min 封顶
+const FFMPEG_TIMEOUT_MS = 30 * 60_000; // 单片合成实测 <15min,30min 封顶
+
+/**
+ * 子进程超时杀(进程树):超时后标记 timedOut 并杀整棵树
+ * (Windows taskkill /T——bash→py→python 孙进程不杀会成孤儿)。
+ * 返回解除函数,close/error 时调用。
+ */
+function armChildTimeout(child: ChildProcess, ms: number, onTimeout: () => void): () => void {
+  const t = setTimeout(() => {
+    onTimeout();
+    if (process.platform === "win32") {
+      spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true }).unref();
+    } else {
+      try { child.kill("SIGKILL"); } catch { /* already dead */ }
+    }
+  }, ms);
+  t.unref?.();
+  return () => clearTimeout(t);
+}
 
 export interface LongTask {
   id: string;
@@ -120,6 +142,9 @@ export async function submitAsrTask(opts: {
   child.stdout.on("data", (d) => void appendFile(logPath, d.toString("utf8")).catch(() => {}));
   child.stderr.on("data", (d) => void appendFile(logPath, d.toString("utf8")).catch(() => {}));
 
+  let timedOut = false;
+  const disarmTimeout = armChildTimeout(child, ASR_TIMEOUT_MS, () => { timedOut = true; });
+
   const heartbeat = setInterval(() => {
     broadcastProgress({ workId: opts.workId, kind: "system", text: `ASR 转写中(task ${id})…日志: output/${id}.log` });
     getDb().prepare("UPDATE long_tasks SET updated_at = ? WHERE id = ?").run(new Date().toISOString(), id);
@@ -128,17 +153,19 @@ export async function submitAsrTask(opts: {
 
   child.on("error", (err) => {
     clearInterval(heartbeat);
+    disarmTimeout();
     getDb().prepare("UPDATE long_tasks SET status = 'failed', error = ?, updated_at = ? WHERE id = ?")
       .run(`spawn 失败: ${err.message}`, new Date().toISOString(), id);
     notifyTaskCallbacks(getLongTask(id)!);
   });
   child.on("close", (code) => {
     clearInterval(heartbeat);
-    const ok = code === 0 && existsSync(opts.outputPath);
+    disarmTimeout();
+    const ok = code === 0 && existsSync(opts.outputPath) && !timedOut;
     getDb().prepare("UPDATE long_tasks SET status = ?, error = ?, output_json = ?, updated_at = ? WHERE id = ?")
       .run(
         ok ? "done" : "failed",
-        ok ? null : `退出码 ${code}(日志: output/${id}.log)`,
+        ok ? null : timedOut ? `超时(${ASR_TIMEOUT_MS / 60_000}min)强杀(日志: output/${id}.log)` : `退出码 ${code}(日志: output/${id}.log)`,
         ok ? JSON.stringify({ outputPath: opts.outputPath }) : null,
         new Date().toISOString(),
         id,
@@ -152,6 +179,19 @@ export async function submitAsrTask(opts: {
   });
 
   return getLongTask(id)!;
+}
+
+/**
+ * B3(2026-09-08) zombie reaper:服务启动时把 long_tasks 残留 running 行置 failed。
+ * 子进程随服务进程死亡,但 DB 行永远停在 running——hasRunningLongTask 永远为真,
+ * 会反过来卡住 B3 的回合豁免/auto_continue(实证前该类行只能靠手工清库)。
+ */
+export function reapZombieTasks(): number {
+  const now = new Date().toISOString();
+  const r = getDb().prepare(
+    "UPDATE long_tasks SET status = 'failed', error = '服务重启:进程已死(zombie reaper)', updated_at = ? WHERE status = 'running'",
+  ).run(now);
+  return r.changes;
 }
 
 /**
@@ -350,6 +390,9 @@ export async function submitFfmpegTask(opts: { workId: string; spec: FfmpegJobSp
   const child = spawn(ffmpeg, args, { cwd: workDir, windowsHide: true });
   child.stderr?.on("data", (d) => void appendFile(logPath, d.toString("utf8")).catch(() => {}));
 
+  let timedOut = false;
+  const disarmTimeout = armChildTimeout(child, FFMPEG_TIMEOUT_MS, () => { timedOut = true; });
+
   const heartbeat = setInterval(() => {
     broadcastProgress({ workId: opts.workId, kind: "system", text: `ffmpeg ${opts.spec.op} 合成中(task ${id})…` });
     getDb().prepare("UPDATE long_tasks SET updated_at = ? WHERE id = ?").run(new Date().toISOString(), id);
@@ -359,18 +402,20 @@ export async function submitFfmpegTask(opts: { workId: string; spec: FfmpegJobSp
   const outAbs = resolve(workDir, opts.spec.output);
   child.on("error", (err) => {
     clearInterval(heartbeat);
+    disarmTimeout();
     getDb().prepare("UPDATE long_tasks SET status = 'failed', error = ?, updated_at = ? WHERE id = ?")
       .run(`spawn 失败: ${err.message}`, new Date().toISOString(), id);
     notifyTaskCallbacks(getLongTask(id)!);
   });
   child.on("close", (code) => {
     clearInterval(heartbeat);
+    disarmTimeout();
     rm(concatListPath, { force: true }).catch(() => {});
-    const ok = code === 0 && existsSync(outAbs);
+    const ok = code === 0 && existsSync(outAbs) && !timedOut;
     getDb().prepare("UPDATE long_tasks SET status = ?, error = ?, output_json = ?, updated_at = ? WHERE id = ?")
       .run(
         ok ? "done" : "failed",
-        ok ? null : `退出码 ${code}(日志: output/${id}.log)`,
+        ok ? null : timedOut ? `超时(${FFMPEG_TIMEOUT_MS / 60_000}min)强杀(日志: output/${id}.log)` : `退出码 ${code}(日志: output/${id}.log)`,
         ok ? JSON.stringify({ outputPath: outAbs }) : null,
         new Date().toISOString(),
         id,

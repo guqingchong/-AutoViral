@@ -3166,9 +3166,21 @@ export async function runEvaluation(workId: string, completedStep: string, nextS
 
       // Auto-resume creator agent to continue with next step
       // (用顺移后的实际目标阶段命名,避免 agent 重做已完成阶段)
-      if (effectiveNextStep) {
-        const stepLabel = freshWork?.pipeline[effectiveNextStep]?.name ?? effectiveNextStep;
-        const continuePrompt = `评审已通过，pipeline 已自动推进到「${stepLabel}」阶段。请继续执行该阶段的工作。`;
+      if (effectiveNextStep && freshWork) {
+        const stepLabel = freshWork.pipeline[effectiveNextStep]?.name ?? effectiveNextStep;
+        // B1 修复(2026-09-08):评审通过路径此前只发"请继续执行"裸指令,
+        // agent 进新阶段从未见契约(素材约束/验收标准/模板契约全丢)——
+        // 与非评审 advance 路径(3971-3981)对齐拼完整指令
+        const continuePrompt = [
+          `评审已通过，pipeline 已自动推进到「${stepLabel}」阶段。请继续执行该阶段的工作，完成后再次调用 pipeline/advance 推进到下一阶段。`,
+          effectiveNextStep === "material-search" ? buildMaterialSearchInstruction(freshWork, !!freshWork.autoMode)
+            : effectiveNextStep === "content-research"
+              ? buildContentResearchInstruction(freshWork, freshWork.researchDepth ?? resolveResearchDepth(freshWork.purpose, freshWork.contentForm), !!freshWork.autoMode)
+              : effectiveNextStep === "plan-assets" ? buildPlanAssetsInstruction(freshWork, !!freshWork.autoMode)
+              : "",
+          buildStepContractSection(effectiveNextStep, freshWork),
+          freshWork.templateId ? buildTemplateSection(freshWork.templateId) : "",
+        ].filter(Boolean).join("\n\n");
         await wsBridge.sendMessage(workId, continuePrompt);
       }
     } else {
@@ -4830,6 +4842,18 @@ async function runBatchConvert(
       // 事实核查+深度研究由 agent 在 content-research 阶段完成(quick 档允许草稿轻核查直转)。
       const workObjForVersion = await getWork(workId);
       if ((workObjForVersion?.pipelineVersion ?? 1) === 2) {
+        // B6 修复(2026-09-08)幂等:草稿已存在且 topic 已 converted → 重试不再重跑
+        // LLM 生成(此前重试无条件重跑 generateArticleFromTopic,白烧 token 还覆盖草稿)
+        const draftPath = join(dataDir, "works", workId, "research", "draft-from-topic.md");
+        if (existsSync(draftPath) && topic.status === "converted") {
+          if (job.autoPipeline) {
+            enqueueWork(item.workId!);
+            item.stage = "queued";
+          } else {
+            item.stage = "done";
+          }
+          return;
+        }
         item.stage = "generating";
         const platform = platforms[0] ?? "douyin";
         const articleDraft = await generateArticleFromTopic(topic, platform);

@@ -160,6 +160,13 @@ export async function startServer(port: number): Promise<{ server: Server }> {
   // 0.6. Recover render jobs that were stuck "running" or "pending" from a prior crash
   recoverStuckRenderJobs();
 
+  // 0.6a. B3 zombie reaper:long_tasks 残留 running 行(子进程已随服务死亡)置 failed
+  {
+    const { reapZombieTasks } = await import("../services/long-tasks.js");
+    const reaped = reapZombieTasks();
+    if (reaped > 0) console.log(`[long-tasks] zombie reaper:${reaped} 条残留 running 任务置 failed(进程已死)`);
+  }
+
   // 0.6b. Reconcile work states (render_jobs/pipeline_steps → works.status).
   // Fixes works stuck in "assembling" although the final video already exists.
   // 每 1 分钟跑一次(此前 5 分钟):必须显著快于 watchdog 的 10 分钟停滞阈值,

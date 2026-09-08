@@ -126,6 +126,18 @@ export function buildStepContractSection(
   opts: { includeAssets?: boolean } = {},
 ): string {
   const parts: string[] = [];
+  // B0(2026-09-08):assembly 契约段首选 conform 服务端合成——ef9 实证 agent 手拼
+  // 267 次 Bash/61 次 ffmpeg 耗 2.5h+,端点服务化却从未写进指令(agent 不可知=不存在)
+  if (step === "assembly") {
+    parts.push([
+      `## 合成首选路径(默认,必须):conform 端点`,
+      `整片合成一条命令完成 拼接→调色→字幕→混音→编码(QSV 硬件加速+字幕快路径):`,
+      `\`curl -X POST http://localhost:3271/api/works/<本作品ID>/conform -H "Authorization: Bearer $AUTOVIRAL_TOKEN" -H "Content-Type: application/json" --data-binary @conform.json\``,
+      `conform.json 字段: segments[{path}](按分镜顺序)/narration/bgm/subtitle/width/height/fps/loudness{narration:-15,bgm:-34}/color{contrast,saturation};路径相对作品目录,产物默认 output/final.mp4。`,
+      `异步语义:返回 202+taskId,完成时系统自动通知你,无需轮询(也可 60s 一次 GET /api/long-tasks/<taskId>);提交后去做发布文案等别的事,禁止 sleep 轮询产物。`,
+      `手工 ffmpeg 仅当 conform 返回 5xx/任务 failed 且为 spec 无法表达的特殊需求时兜底,并须在交付说明记录原因。`,
+    ].join("\n"));
+  }
   if (opts.includeAssets !== false) {
     const assetSection = buildAssetConstraintSection(work.assetForm, work.assetSource, work.assetBudget, !!work.digitalHumanId);
     if (assetSection) parts.push(assetSection);
@@ -278,6 +290,7 @@ export function buildContentResearchInstruction(
     ``,
     `## 流程(四步,顺序不可跳)`,
     `1. **事实核查**: 拆解选题中必须核验的断言清单(文号/年份/百分比/机构名),逐项 WebSearch + WebFetch 抓原文核验,逐条打「已核验(附 URL)/待核」;`,
+    `   - **检索留痕(强制)**: 每一次检索/抓取追加一行到 \`research/search-log.jsonl\`(JSONL 格式: {"ts":"ISO","tool":"WebSearch|WebFetch","query":"…","hits":["url1","url2"]})——评审在该路径逐条取证,无留痕=未检索;`,
     `2. **可行性论证**: 评估 ①素材可得性(哪些场景素材库可能没有,记入 feasibility.materialRisks) ②合规风险 ③时长适配(文章字数 ÷ 语速 4.5 字/秒 ≈ 目标片长);`,
     `3. **深度研究**: 按下方深度档执行;`,
     `4. **成文落盘**(两个文件都必须写):`,
@@ -291,7 +304,7 @@ export function buildContentResearchInstruction(
     `  "purpose": "${work.purpose ?? ""}",`,
     `  "contentForm": "${work.contentForm ?? ""}",`,
     `  "depth": "${depth}",`,
-    `  "wordCount": 1450,`,
+    `  "wordCount": 800,`,
     `  "speechBudget": { "charsPerSec": 4.5, "targetDurationS": 180, "maxChars": 810 },`,
     `  "facts": [{ "text": "断言原文", "type": "文号|年份|百分比|机构", "verify_status": "已核验|待核", "source_url": "https://…" }],`,
     `  "feasibility": { "verdict": "feasible|conditional|infeasible", "materialRisks": ["…"], "notes": "…" },`,
@@ -300,6 +313,9 @@ export function buildContentResearchInstruction(
     "```",
     ``,
     buildResearchDepthSection(depth),
+    ``,
+    // B9(2026-09-08):SEARCH_PROTOCOL 此前未注入 v2 指令,搜索纪律/降级路径全靠 agent 即兴
+    SEARCH_PROTOCOL,
     ``,
     `## 铁律`,
     `- **article 是唯一事实源**: 后续分镜/口播/素材全部从这里派生,禁止在后续阶段新造事实;`,
@@ -317,11 +333,44 @@ export function buildContentResearchInstruction(
 /**
  * 分镜与素材探查阶段指令(流水线 v2 第二步)——依据作品文章,同时探查素材,
  * 形成脚本/分镜规划。探查是需求驱动(逐镜要什麼查什么),禁止无需求盲下载。
+ * B7(2026-09-08):image-text 作品分版——图文作品拿视频分镜指令会被按视频标准
+ * 评审(两套标准重演),图文版改为卡片规划+配图需求登记(registry/缺口/regress 纪律同款)。
  */
 export function buildPlanAssetsInstruction(
-  work: { id: string; title: string },
+  work: { id: string; title: string; type?: string },
   isAutoMode: boolean,
 ): string {
+  if (work.type === "image-text") {
+    return [
+      `Execute the "内容规划与配图探查" step(流水线 v2 第二步,图文作品)。目标:以 \`research/article.md\` 为唯一事实源,产出卡片规划 + 逐卡配图需求台账。`,
+      ``,
+      `## 输入(先全部读完再动手)`,
+      `- \`research/article.md\`(作品文章,唯一事实源)与 \`research/article.json\`(含 facts/feasibility/sections 锚点);`,
+      ``,
+      `## 流程`,
+      `1. **卡片规划**: 写 \`plan/plan.md\` 卡片规划表——封面卡/内容卡/结尾卡逐卡列出(卡号/标题 ≤20 字/正文 ≤200 字/配图需求);内容必须逐卡溯源到 article 的 sections,禁止塞入文章之外的新事实;`,
+      `2. **配图需求探查**(需求驱动:先有卡片配图需求,再检索):`,
+      `   - 逐卡列出"本卡需要什么配图"(主体/风格/规格);`,
+      `   - 按需求检索:素材库 \`curl -s "http://localhost:3271/api/stock-assets/search?q=英文关键词&type=image"\` / WebSearch;`,
+      `   - **只登记元数据**(名称/来源 URL/分辨率/授权/tier),禁止下载媒体文件——下载是素材准备阶段的事;`,
+      `   - 登记到 \`assets/registry.json\`(\`{"sources":[{"name":"card-01.png","type":"image","source_url":"…","tier":"…"}]}\`)与 \`assets/material-candidates.md\`(人读版,含查询组与命中情况);`,
+      `3. **缺口处理**(合法出口,不扣分):`,
+      `   - 单卡缺配图 → material-candidates.md 写"缺口声明"+ 替代方案(AI 生成/换写法);`,
+      `   - **整段内容缺配图** → 写 \`assets/material-gaps.json\`,然后调用回退端点修订文章:`,
+      `     \`curl -X POST http://localhost:3271/api/works/${work.id}/pipeline/regress -H "Authorization: Bearer $AUTOVIRAL_TOKEN" -H "Content-Type: application/json" -d '{"fromStep":"plan-assets","toStep":"content-research","reason":"整段内容缺配图","gapsRef":"assets/material-gaps.json"}'\``,
+      `     **禁止硬凑不贴合配图充数**。`,
+      ``,
+      `## 铁律`,
+      `- 卡片引用配图必须在 registry.json 里有登记(机器门禁逐条核验,引用不存在素材直接 400);`,
+      `- 卡片文案逐卡必须能溯源到 article 的某个 section;待核断言(verify_status=待核)不得上卡;`,
+      ``,
+      isAutoMode
+        ? `## 自动化模式: 自主拍板,禁止向用户提问。完成后直接调用 advance 推进。`
+        : `## 交互模式: 卡片规划与配图需求清单展示给用户确认后再推进。`,
+      ``,
+      `完成后推进: \`curl -X POST http://localhost:3271/api/works/${work.id}/pipeline/advance -H "Authorization: Bearer $AUTOVIRAL_TOKEN" -H "Content-Type: application/json" -d '{"completedStep":"plan-assets","nextStep":"assets"}'\``,
+    ].join("\n");
+  }
   return [
     `Execute the "分镜与素材探查" step(流水线 v2 第二步)。目标:以 \`research/article.md\` 为唯一事实源,产出脚本 + 分镜 + 逐镜素材需求台账。`,
     ``,
