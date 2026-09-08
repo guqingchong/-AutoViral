@@ -4,11 +4,19 @@
  * 模拟用户从创建作品到发布的完整流程。
  * 使用 Hono app.request() 进行 HTTP 级别测试。
  */
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { Hono } from "hono";
 import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+// X21 验收修复(2026-09-07):dataDir 在 config.ts 模块加载时定型——必须在任何 src import
+// 之前指向临时目录,否则读到真实 ~/.autoviral/config.yaml(含 S1 authToken),POST 恒 401。
+vi.hoisted(() => {
+  const base = process.env.TEMP ?? process.env.TMP ?? "/tmp";
+  process.env.AUTOVIRAL_DATA_DIR = `${base}/av-user-journeys-${process.pid}-${Date.now()}`;
+});
+
 import { apiRoutes } from "../../src/server/api.js";
 import { analyticsApi } from "../../src/server/analytics-api.js";
 import { analyticsRoutes } from "../../src/server/routes/analytics.js";

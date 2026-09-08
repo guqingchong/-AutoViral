@@ -1,0 +1,185 @@
+
+ RUN  v3.2.4 D:/Autoviral
+
+ ✓  default  tests/services/research-depth.test.ts (6 tests) 51ms
+ ✓  default  tests/server/step-contract.test.ts (13 tests) 253ms
+ ✓  default  tests/services/quality-gate-article.test.ts (9 tests) 3421ms
+   ✓ assertArticleContract(流水线 v2) > facts 核验覆盖率不足 standard 档 80% → fail  724ms
+   ✓ assertArticleContract(流水线 v2) > full 档要求 100% 已核验  479ms
+   ✓ assertArticleContract(流水线 v2) > article.md 含未核验文号 → fail(assertFactClaims 联动)  402ms
+   ✓ assertContractArtifacts(流水线 v2 两新步) > 文件齐备 → 无 issue  415ms
+stderr | tests/services/dual-output.test.ts > dual-output service > generateCardCopy（LLM + 回退） > LLM 产出不可用时回退程序化拆分
+[server] dual_output_card_copy_llm_invalid {"title":"文章标题"}
+
+stderr | tests/services/dual-output.test.ts > dual-output service > generateCardCopy（LLM + 回退） > LLM 抛错时回退程序化拆分
+[server] dual_output_card_copy_llm_failed {"error":"CLI 限流"}
+
+ ❯  default  tests/server/eval-blocked.test.ts (1 test | 1 failed) 69594ms
+   × eval_blocked 三轮卡死复现 > 评审连续 3 轮 fail → 第 3 轮后 eval_blocked,前 2 轮回退 active 69587ms
+     → Hook timed out in 60000ms.
+If this is a long-running hook, pass a timeout value as the last argument or configure it globally with "hookTimeout".
+stdout | tests/services/dual-output.test.ts > dual-output service > deriveDualOutputs（派生主流程） > 双产物作品产出卡片 PNG + 清单，文章接线验证通过
+[server] dual_output_child_created
+
+stderr | tests/server/batch-convert-assets.test.ts > batch-convert 素材三维与双产物 > video+image-text：作品 type 为 short-video 且 dual_output=1，素材三维入库
+[api] batch_research_spotcheck_fallback {"from":"eval","to":"script"}
+
+stderr | tests/server/batch-convert-assets.test.ts > batch-convert 素材三维与双产物 > video+image-text：作品 type 为 short-video 且 dual_output=1，素材三维入库
+[api] batch_research_spotcheck_error {"error":"llm.models.script 未配置模型——请在设置页「大模型直连」配置阶段模型"}
+
+stdout | tests/server/pipeline-regress.test.ts > pipeline regress 回退通道(流水线 v2) > 缺 material-gaps.json 被拒;补齐后回退成功且状态迁移正确
+[api] pipeline_regress
+
+stderr | tests/server/batch-convert-assets.test.ts > batch-convert 素材三维与双产物 > short-video 不带素材三维：dual_output=0，素材列为空
+[api] batch_research_spotcheck_fallback {"from":"eval","to":"script"}
+
+stderr | tests/server/batch-convert-assets.test.ts > batch-convert 素材三维与双产物 > short-video 不带素材三维：dual_output=0，素材列为空
+[api] batch_research_spotcheck_error {"error":"llm.models.script 未配置模型——请在设置页「大模型直连」配置阶段模型"}
+
+ ❯  default  tests/server/pipeline-regress.test.ts (4 tests | 1 failed) 95850ms
+   × pipeline regress 回退通道(流水线 v2) > 白名单:非 plan-assets→content-research 的边被拒 70125ms
+     → Hook timed out in 60000ms.
+If this is a long-running hook, pass a timeout value as the last argument or configure it globally with "hookTimeout".
+   ✓ pipeline regress 回退通道(流水线 v2) > v1 作品(旧五步)被拒  16583ms
+   ✓ pipeline regress 回退通道(流水线 v2) > 缺 material-gaps.json 被拒;补齐后回退成功且状态迁移正确  4887ms
+   ✓ pipeline regress 回退通道(流水线 v2) > 幂等:已在 content-research 时重复回退 → 409  4248ms
+stderr | tests/server/batch-convert-assets.test.ts > batch-convert 素材三维与双产物 > image-text：素材三维被忽略，dual_output=0
+[api] batch_research_spotcheck_fallback {"from":"eval","to":"script"}
+
+stderr | tests/server/batch-convert-assets.test.ts > batch-convert 素材三维与双产物 > image-text：素材三维被忽略，dual_output=0
+[api] batch_research_spotcheck_error {"error":"llm.models.script 未配置模型——请在设置页「大模型直连」配置阶段模型"}
+
+stderr | tests/server/batch-convert-assets.test.ts > batch-convert 素材三维与双产物 > 非法素材三维值被静默丢弃，不入库
+[api] batch_research_spotcheck_fallback {"from":"eval","to":"script"}
+
+stderr | tests/server/batch-convert-assets.test.ts > batch-convert 素材三维与双产物 > 非法素材三维值被静默丢弃，不入库
+[api] batch_research_spotcheck_error {"error":"llm.models.script 未配置模型——请在设置页「大模型直连」配置阶段模型"}
+
+stderr | tests/server/batch-convert-assets.test.ts > batch-convert 素材三维与双产物 > smart 精品混合：放行入库，topicHint 含路由表/铁律/H3 规则
+[api] batch_research_spotcheck_fallback {"from":"eval","to":"script"}
+
+stderr | tests/server/batch-convert-assets.test.ts > batch-convert 素材三维与双产物 > smart 精品混合：放行入库，topicHint 含路由表/铁律/H3 规则
+[api] batch_research_spotcheck_error {"error":"llm.models.script 未配置模型——请在设置页「大模型直连」配置阶段模型"}
+
+stderr | tests/server/batch-convert-assets.test.ts > batch-convert 素材三维与双产物 > 程序化素材铁律无条件生效：stock 模式同样注入
+[api] batch_research_spotcheck_fallback {"from":"eval","to":"script"}
+
+stderr | tests/server/batch-convert-assets.test.ts > batch-convert 素材三维与双产物 > 程序化素材铁律无条件生效：stock 模式同样注入
+[api] batch_research_spotcheck_error {"error":"llm.models.script 未配置模型——请在设置页「大模型直连」配置阶段模型"}
+
+ ✓  default  tests/server/batch-convert-assets.test.ts (6 tests) 13253ms
+   ✓ batch-convert 素材三维与双产物 > video+image-text：作品 type 为 short-video 且 dual_output=1，素材三维入库  3039ms
+   ✓ batch-convert 素材三维与双产物 > short-video 不带素材三维：dual_output=0，素材列为空  3994ms
+   ✓ batch-convert 素材三维与双产物 > image-text：素材三维被忽略，dual_output=0  2380ms
+   ✓ batch-convert 素材三维与双产物 > 非法素材三维值被静默丢弃，不入库  1636ms
+   ✓ batch-convert 素材三维与双产物 > smart 精品混合：放行入库，topicHint 含路由表/铁律/H3 规则  1170ms
+   ✓ batch-convert 素材三维与双产物 > 程序化素材铁律无条件生效：stock 模式同样注入  675ms
+stderr | tests/services/dual-output.test.ts > dual-output service > deriveDualOutputs（派生主流程） > 无文章时不渲染卡片、articleReady=false，但不抛异常
+[server] dual_output_no_article {"msg":"双产物作品无文章,无法派生图文子作品"}
+
+stdout | tests/services/dual-output.test.ts > dual-output service > deriveDualOutputs（派生主流程） > 渲染失败不阻塞：记日志并返回部分结果，不抛异常
+[server] dual_output_child_created
+
+stderr | tests/services/dual-output.test.ts > dual-output service > deriveDualOutputs（派生主流程） > 渲染失败不阻塞：记日志并返回部分结果，不抛异常
+[server] dual_output_child_failed {"error":"chromium 启动失败"}
+
+stderr | tests/services/dual-output.test.ts > dual-output service > deriveDualOutputs（派生主流程） > 渲染失败不阻塞：记日志并返回部分结果，不抛异常
+[server] fail_visible {"stage":"dual-output","reason":"图文产物生成失败：chromium 启动失败"}
+
+stdout | tests/services/dual-output.test.ts > dual-output service > deriveDualOutputs（派生主流程） > 渲染失败不阻塞：记日志并返回部分结果，不抛异常
+[server] dual_output_derived
+
+stdout | tests/services/dual-output.test.ts > dual-output service > deriveDualOutputs（派生主流程） > 使用作品自带的 image-text 模板版式渲染
+[server] dual_output_child_created
+
+stderr | tests/services/dual-output.test.ts > dual-output service > deriveDualOutputs（派生主流程） > 使用作品自带的 image-text 模板版式渲染
+[server] dual_output_cover_jpg_failed {"error":"page.evaluate: EncodingError: The source image cannot be decoded."}
+
+stdout | tests/services/dual-output.test.ts > dual-output service > deriveDualOutputs（派生主流程） > 使用作品自带的 image-text 模板版式渲染
+[server] dual_output_derived
+
+stderr | tests/services/dual-output.test.ts > dual-output service > deriveDualOutputs（派生主流程） > 使用作品自带的 image-text 模板版式渲染
+[server] dual_output_cover_jpg_failed {"error":"page.evaluate: EncodingError: The source image cannot be decoded."}
+
+stdout | tests/services/dual-output.test.ts > dual-output service > deriveDualOutputs（派生主流程） > 使用作品自带的 image-text 模板版式渲染
+[server] dual_output_derived
+
+ ❯  default  tests/services/dual-output.test.ts (28 tests | 1 failed) 78997ms
+   ✓ dual-output service > splitArticleToCardCopy（程序化拆分） > 按空行分段打包成内容卡，封面取标题  1595ms
+   ✓ dual-output service > splitArticleToCardCopy（程序化拆分） > 无空行时按单行切分  577ms
+   ✓ dual-output service > splitArticleToCardCopy（程序化拆分） > 段落超过字数上限按句子边界再切  556ms
+   ✓ dual-output service > splitArticleToCardCopy（程序化拆分） > 卡片数量不超过上限  411ms
+   ✓ dual-output service > splitArticleToCardCopy（程序化拆分） > 去掉 markdown 标记 284ms
+   ✓ dual-output service > splitArticleToCardCopy（程序化拆分） > 空正文返回空 pages，封面仍有标题  490ms
+   ✓ dual-output service > normalizeLlmCardCopy（LLM 产出校验） > 接受合法产出并做长度截断  506ms
+   ✓ dual-output service > normalizeLlmCardCopy（LLM 产出校验） > pages 为空/全非字符串 body 时返回 null  554ms
+   ✓ dual-output service > normalizeLlmCardCopy（LLM 产出校验） > coverTitle 缺失回退兜底标题，空 body 页被丢弃，页数封顶 8  503ms
+   ✓ dual-output service > generateCardCopy（LLM + 回退） > LLM 产出合法时直接用 LLM 结果  566ms
+   ✓ dual-output service > generateCardCopy（LLM + 回退） > LLM 产出不可用时回退程序化拆分  435ms
+   ✓ dual-output service > generateCardCopy（LLM + 回退） > LLM 抛错时回退程序化拆分  809ms
+   ✓ dual-output service > buildCardHtml（版式渲染 HTML） > 封面卡包含标题、配色与字体  691ms
+   ✓ dual-output service > buildCardHtml（版式渲染 HTML） > 内容卡含序号装饰，正文换行转 <br/>，HTML 被转义  623ms
+   ✓ dual-output service > 版式解析 > 从 image-text 模板 layers 提取 cover/content 版式  462ms
+   ✓ dual-output service > 版式解析 > video 模板不提取版式  448ms
+   ✓ dual-output service > 版式解析 > resolveCardLayout：作品模板是 image-text 时优先使用  424ms
+   ✓ dual-output service > 版式解析 > resolveCardLayout：作品模板是视频模板时回退到最新图文模板  594ms
+   ✓ dual-output service > 版式解析 > resolveCardLayout：无任何模板时用内置默认版式  523ms
+   ✓ dual-output service > renderCardsToPng（渲染编排，出图 mock） > 封面在前，内容卡按序命名，写入目标目录  836ms
+   ✓ dual-output service > deriveDualOutputs（派生主流程） > 非双产物作品返回 null（不派生）  956ms
+   × dual-output service > deriveDualOutputs（派生主流程） > 双产物作品产出卡片 PNG + 清单，文章接线验证通过 30417ms
+     → Test timed out in 30000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+   ✓ dual-output service > deriveDualOutputs（派生主流程） > 无文章时不渲染卡片、articleReady=false，但不抛异常  1306ms
+   ✓ dual-output service > deriveDualOutputs（派生主流程） > 渲染失败不阻塞：记日志并返回部分结果，不抛异常  1109ms
+   ✓ dual-output service > deriveDualOutputs（派生主流程） > 使用作品自带的 image-text 模板版式渲染  29500ms
+   ✓ dual-output service > buildPublishInput 小红书卡片注入（发布链路接线） > cards 目录存在时注入 imagePaths（封面在前）与配文  1836ms
+   ✓ dual-output service > buildPublishInput 小红书卡片注入（发布链路接线） > 无 cards 目录时不注入 imagePaths（维持视频链路）  602ms
+   ✓ dual-output service > buildPublishInput 小红书卡片注入（发布链路接线） > short-video 作品即使有 cards 也不注入（视频页小红书只发视频）  1358ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL   default  tests/server/eval-blocked.test.ts > eval_blocked 三轮卡死复现 > 评审连续 3 轮 fail → 第 3 轮后 eval_blocked,前 2 轮回退 active
+Error: Hook timed out in 60000ms.
+If this is a long-running hook, pass a timeout value as the last argument or configure it globally with "hookTimeout".
+ ❯ tests/server/eval-blocked.test.ts:23:3
+     21|   let apiRoutes: any;
+     22| 
+     23|   beforeEach(async () => {
+       |   ^
+     24|     dir = await mkdtemp(join(tmpdir(), "av-evalblocked-"));
+     25|     process.env.AUTOVIRAL_DATA_DIR = dir;
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/3]⎯
+
+ FAIL   default  tests/server/pipeline-regress.test.ts > pipeline regress 回退通道(流水线 v2) > 白名单:非 plan-assets→content-research 的边被拒
+Error: Hook timed out in 60000ms.
+If this is a long-running hook, pass a timeout value as the last argument or configure it globally with "hookTimeout".
+ ❯ tests/server/pipeline-regress.test.ts:12:3
+     10|   let apiRoutes: any;
+     11| 
+     12|   beforeEach(async () => {
+       |   ^
+     13|     dir = await mkdtemp(join(tmpdir(), "av-regress-"));
+     14|     process.env.AUTOVIRAL_DATA_DIR = dir;
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/3]⎯
+
+ FAIL   default  tests/services/dual-output.test.ts > dual-output service > deriveDualOutputs（派生主流程） > 双产物作品产出卡片 PNG + 清单，文章接线验证通过
+Error: Test timed out in 30000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ tests/services/dual-output.test.ts:314:5
+    312|     });
+    313| 
+    314|     it("双产物作品产出卡片 PNG + 清单，文章接线验证通过", async () => {
+       |     ^
+    315|       await seedDualWork();
+    316|       const rendered: string[] = [];
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/3]⎯
+
+
+ Test Files  3 failed | 4 passed (7)
+      Tests  3 failed | 64 passed (67)
+   Start at  00:08:56
+   Duration  170.60s (transform 137.53s, setup 0ms, collect 183.64s, tests 261.42s, environment 19ms, prepare 37.76s)
+

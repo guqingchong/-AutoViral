@@ -443,6 +443,9 @@
               <div class="card-body">
                 <h3>{work.title}</h3>
                 <span class="badge badge-review">待审核</span>
+                {#if work.title.endsWith("（研究成果）")}
+                  <span class="badge" style="background: rgba(99,102,241,0.12); color: #6366f1;">研究成果 · 可直接发布</span>
+                {/if}
               </div>
             </div>
           {/each}

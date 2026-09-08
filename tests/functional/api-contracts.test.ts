@@ -8,8 +8,15 @@
  *   4. 创建/更新/删除操作的边界条件
  *   5. 分页与过滤参数的容错性
  */
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { Hono } from "hono";
+
+// X21 验收修复(2026-09-07):dataDir 在 config.ts 模块加载时定型——必须在任何 src import
+// 之前指向临时目录,否则读到真实 ~/.autoviral/config.yaml(含 S1 authToken),POST 恒 401。
+vi.hoisted(() => {
+  const base = process.env.TEMP ?? process.env.TMP ?? "/tmp";
+  process.env.AUTOVIRAL_DATA_DIR = `${base}/av-api-contracts-${process.pid}-${Date.now()}`;
+});
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

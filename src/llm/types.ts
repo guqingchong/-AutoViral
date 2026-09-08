@@ -98,6 +98,7 @@ export interface LlmProvider {
     req: ChatRequest,
     onEvent: (ev: StreamEvent) => void,
   ): Promise<{ stopReason: string; assistant: AgentMessage }>;
-  /** 非流式 JSON 生成（替代 llm-json.ts 的 runJsonPrompt 语义） */
-  chatJson<T>(prompt: string, opts: { model: string; timeoutMs?: number; maxAttempts?: number; usageStage?: string; usageWorkId?: string }): Promise<T>;
+  /** 非流式 JSON 生成（替代 llm-json.ts 的 runJsonPrompt 语义）
+   *  maxTokens(2026-09-07):大产物场景(整片模板 HTML)显式调高输出上限,缺省 32768 */
+  chatJson<T>(prompt: string, opts: { model: string; timeoutMs?: number; maxAttempts?: number; maxTokens?: number; usageStage?: string; usageWorkId?: string }): Promise<T>;
 }

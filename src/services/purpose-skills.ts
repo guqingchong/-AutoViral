@@ -55,11 +55,11 @@ export async function researchPurposeSkills(purposeKey: string): Promise<Purpose
 
   const config = await loadConfig();
   const { provider, model } = resolveModelFor(config, "research");
-  const builtinSearchTool = PROVIDER_PRESETS[provider.name]?.builtinSearchTool;
+  // F6:原内置搜索(builtinSearchTool / $web_search)已移除——统一走客户端 WebSearch 编排
   const parsed = await chatJsonWithSearch<SkillsResponse>(provider, model, prompt, {
     timeoutMs: 8 * 60_000,
     maxRounds: 12,
-    builtinSearchTool,
+    // F6:去掉 builtinSearchTool(消除 $web_search 依赖)——保留内置搜索时改走 WebSearch 客户端编排
   });
 
   const rawSkills = (parsed?.skills ?? [])

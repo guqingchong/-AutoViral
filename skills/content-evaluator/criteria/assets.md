@@ -8,7 +8,7 @@
 
 ## 评审维度
 
-### 1. 技术质量 (technical_quality) 【硬性·机器可判】
+### 1. 技术质量 (technical_quality) 【硬性·机器可判】 min_ai: 7
 检查方法：使用 ffprobe 和 Read 工具
 
 **图片：**
@@ -73,7 +73,7 @@ ffprobe -v error -show_entries stream=width,height,codec_name,r_frame_rate,codec
 - 5-6: 有明显的风格跳跃
 - 1-4: 每张素材看起来像不同风格
 
-### 5. 素材完整性 (completeness) 【硬性·机器可判】
+### 5. 素材完整性 (completeness) 【硬性·机器可判】 min_ai: 7
 - 分镜脚本中的所有镜头是否都有对应素材？
 - 首帧和视频片段是否都已生成？
 - 是否有遗漏的素材？

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Budget control service (PRD §4.3.6).
  *
  * Aggregates actual third-party service costs, tracks a monthly budget cap,
@@ -27,6 +27,8 @@ export interface BudgetStatus {
   status: BudgetStatusLevel;
   warningThresholdPercent: number;
   breakdown: BudgetBreakdown;
+  /** C3(2026-09):作品维成本明细（work_costs 聚合 top N） */
+  perWork: PerWorkCost[];
 }
 
 export interface PreCheckResult {
@@ -125,6 +127,7 @@ export function getBudgetStatus(yearMonth?: string): BudgetStatus {
     status,
     warningThresholdPercent: warning,
     breakdown: { digitalHuman, works },
+    perWork: getPerWorkCosts(),
   };
 }
 
@@ -156,4 +159,33 @@ export function assertWithinBudget(estimatedCostYuan: number): void {
   if (!check.allowed) {
     throw new Error(check.reason ?? "月度预算已耗尽，暂停非必要 AI 调用");
   }
+}
+
+/** C3 补修(2026-09):作品维成本明细——从 work_costs 表按 work_id 聚合，
+ *  返回 top N 作品的分项成本（llm/tts/bgm/gpu），供预算看板"日/月/作品"三维展示。 */
+export interface PerWorkCost {
+  workId: string;
+  total: number;
+  llm: number;
+  tts: number;
+  bgm: number;
+  gpu: number;
+}
+
+export function getPerWorkCosts(limit = 20): PerWorkCost[] {
+  const db = getDb();
+  const rows = db
+    .prepare(`SELECT work_id, category, SUM(amount) AS total FROM work_costs GROUP BY work_id, category`)
+    .all() as Array<{ work_id: string; category: string; total: number }>;
+  const map = new Map<string, PerWorkCost>();
+  for (const r of rows) {
+    const cur = map.get(r.work_id) ?? { workId: r.work_id, total: 0, llm: 0, tts: 0, bgm: 0, gpu: 0 };
+    cur.total += r.total;
+    if (r.category === "llm") cur.llm += r.total;
+    else if (r.category === "tts") cur.tts += r.total;
+    else if (r.category === "bgm") cur.bgm += r.total;
+    else if (r.category === "gpu") cur.gpu += r.total;
+    map.set(r.work_id, cur);
+  }
+  return [...map.values()].sort((a, b) => b.total - a.total).slice(0, limit);
 }

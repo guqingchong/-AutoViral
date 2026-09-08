@@ -2,10 +2,11 @@
 // Each work is a content piece flowing through a 4-step pipeline.
 // Structured data is delegated to SQLite; file-system assets remain on disk.
 
-import { readFile, writeFile, mkdir, readdir, rm } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { readFile, writeFile, mkdir, readdir, rm, rename } from "node:fs/promises";
+import { join, relative, resolve, sep } from "node:path";
 import { dataDir } from "./config.js";
 import { migrateLegacyWorks } from "./db/migrate-legacy.js";
+import { resolveResearchDepth } from "./services/purpose-presets.js";
 import {
   createWork as dbCreateWork,
   getWork as dbGetWork,
@@ -94,6 +95,10 @@ export interface Work {
   evalMode?: "standard" | "express";
   /** 作品画幅(批次12c-A):portrait(竖屏 9:16,缺省)|landscape(横屏 16:9) */
   aspect?: "portrait" | "landscape";
+  /** 流水线版本(2026-09-07 重构):1=旧五步(默认/历史作品), 2=新四步 */
+  pipelineVersion?: number;
+  /** 研究深度档(迁移 v40):full|standard|quick */
+  researchDepth?: "full" | "standard" | "quick";
   createdAt: string;
   updatedAt: string;
 }
@@ -154,8 +159,26 @@ function toSummary(w: Work): WorkSummary {
 
 // ── Pipeline templates ───────────────────────────────────────────────────────
 
-function defaultPipeline(type: WorkType, videoSource?: VideoSource): Record<string, PipelineStep> {
+function defaultPipeline(type: WorkType, videoSource?: VideoSource, version: 1 | 2 = 1): Record<string, PipelineStep> {
   const result: Record<string, PipelineStep> = {};
+
+  // 流水线 v2(2026-09-07 重构,业主拍板):四步——内容研究(深研+事实核查+可行性论证→成文落盘)
+  // → 分镜与素材探查(需求驱动,article 为唯一事实源) → 素材准备 → 视频合成。
+  // 素材探查不再盲下载;article.md/article.json 是后续所有阶段的口径基准。
+  if (version === 2) {
+    const namesV2: Record<string, Record<string, string>> = {
+      "short-video": { "content-research": "内容研究", "plan-assets": "分镜与素材探查", assets: "素材准备", assembly: "视频合成" },
+      "image-text": { "content-research": "内容研究", "plan-assets": "内容规划与配图探查", assets: "图片生成", assembly: "图文排版" },
+    };
+    let first = true;
+    for (const [key, name] of Object.entries(namesV2[type])) {
+      result[key] = first
+        ? { name, status: "active", startedAt: new Date().toISOString() }
+        : { name, status: "pending" };
+      first = false;
+    }
+    return result;
+  }
 
   // Prepend material-search step if user chose web search for video source
   if (type === "short-video" && videoSource === "search") {
@@ -233,6 +256,8 @@ function dbWorkToWork(w: DbWork, steps?: DbPipelineStep[]): Work {
     explicitParams: (() => { try { return w.explicit_params ? JSON.parse(w.explicit_params) : undefined; } catch { return undefined; } })(),
     evalMode: (w.eval_mode as "standard" | "express" | undefined) ?? undefined,
     aspect: (w.aspect as "portrait" | "landscape" | undefined) ?? "portrait",
+    pipelineVersion: w.pipeline_version ?? 1,
+    researchDepth: (w.research_depth as "full" | "standard" | "quick" | undefined) ?? undefined,
     createdAt: w.created_at,
     updatedAt: w.updated_at,
   };
@@ -309,10 +334,14 @@ export async function createWork(input: {
   evalMode?: "standard" | "express";
   /** 作品画幅(批次12c-A):缺省 portrait */
   aspect?: "portrait" | "landscape";
+  /** 研究深度档(流水线重构,批次3 resolveResearchDepth 计算;批次1 仅透传) */
+  researchDepth?: "full" | "standard" | "quick";
 }): Promise<Work> {
   await maybeMigrateLegacy();
   const now = new Date().toISOString();
   const id = generateId();
+  // 流水线版本(2026-09-07 重构):默认新四步(v2);explicitParams.pipelineVersion=1 显式逃生回旧五步
+  const pipelineVersion = input.explicitParams?.pipelineVersion === 1 ? 1 : 2;
   const work: DbWork = {
     id,
     title: input.title,
@@ -321,7 +350,7 @@ export async function createWork(input: {
     content_form: input.contentForm,
     video_source: input.videoSource,
     video_search_query: input.videoSearchQuery,
-    status: input.videoSource === "search" ? "researching" : "draft",
+    status: pipelineVersion === 2 ? "researching" : (input.videoSource === "search" ? "researching" : "draft"),
     platforms: input.platforms,
     evaluation_mode: input.evaluationMode ?? true,
     topic_hint: input.topicHint,
@@ -338,12 +367,18 @@ export async function createWork(input: {
     purpose: input.purpose,
     explicit_params: input.explicitParams ? JSON.stringify(input.explicitParams) : undefined,
     eval_mode: input.evalMode,
+    quality_mode: input.evalMode === "express" ? "express" : undefined,
     aspect: input.aspect ?? "portrait",
+    pipeline_version: pipelineVersion,
+    // 深度档(批次3):用户显式 > 用途×内容形式映射(优先级宪法)
+    research_depth: input.researchDepth
+      ?? ((input.explicitParams?.researchDepth as "full" | "standard" | "quick" | undefined)
+        ?? resolveResearchDepth(input.purpose, input.contentForm)),
     tags: [],
     created_at: now,
     updated_at: now,
   };
-  const steps = Object.entries(defaultPipeline(input.type, input.videoSource as VideoSource | undefined)).map(([key, s], idx) => ({
+  const steps = Object.entries(defaultPipeline(input.type, input.videoSource as VideoSource | undefined, pipelineVersion as 1 | 2)).map(([key, s], idx) => ({
     work_id: id,
     step_key: key,
     name: s.name,
@@ -353,6 +388,16 @@ export async function createWork(input: {
     note: s.note,
     sort_order: idx,
   }));
+  // M1:用户「选择绑定模板」（显式传 templateId）时才强制校验模板真实存在——失败则拒绝创建。
+  // 未传（用户选「不绑定」）是合法状态，不强制。
+  // X9 验收修复(2026-09-07):校验必须前置到落库之前——此前先 dbCreateWork 后校验,
+  // 模板不存在时 throw 但 works/pipeline_steps 已落库,留下孤儿作品。
+  if (input.templateId) {
+    const { getTemplate } = await import("./db/templates-repo.js");
+    if (!getTemplate(input.templateId)) {
+      throw new Error(`模板 ${input.templateId} 不存在——无法绑定，请重新选择模板`);
+    }
+  }
   dbCreateWork(work, steps);
 
   // Keep on-disk workspace directories for assets
@@ -459,7 +504,15 @@ export async function listAssets(id: string): Promise<string[]> {
 }
 
 export function getAssetPath(id: string, filename: string): string {
-  return join(workDir(id), filename);
+  // S2 路径穿越防护：resolve 后必须仍以 workDir 为前缀，拒绝 ../ 与绝对路径
+  // X19 验收修复(2026-09-07):分隔符从硬编码 "\\" 改 path.sep(POSIX 兼容)
+  const base = resolve(workDir(id));
+  const target = resolve(base, filename);
+  const prefix = base.endsWith(sep) ? base : base + sep;
+  if (target !== base && !target.startsWith(prefix)) {
+    throw new Error("非法路径（越界 workDir）");
+  }
+  return target;
 }
 
 /** Save execution history for a pipeline step. */
@@ -479,9 +532,12 @@ export async function loadStepHistory(id: string, stepKey: string): Promise<unkn
   }
 }
 
-/** Save full conversation to chat.json (single file per work). */
+/** Save full conversation to chat.json (single file per work). S4: 原子写（先 tmp 后 rename），防崩溃撕裂。 */
 export async function saveWorkChat(id: string, data: unknown): Promise<void> {
-  await writeFile(join(workDir(id), "chat.json"), JSON.stringify(data), "utf-8");
+  const target = join(workDir(id), "chat.json");
+  const tmp = target + ".tmp";
+  await writeFile(tmp, JSON.stringify(data), "utf-8");
+  await rename(tmp, target);
 }
 
 /** Load full conversation from chat.json. */
@@ -506,7 +562,7 @@ export interface EvalResult {
   timestamp: string;
 }
 
-export async function saveEvalResult(id: string, step: string, attempt: number, result: EvalResult): Promise<void> {
+export async function saveEvalResult(id: string, step: string, attempt: number, result: EvalResult, opts?: { judgeModel?: string; timeoutDegraded?: boolean }): Promise<void> {
   const dir = workDir(id);
   await mkdir(dir, { recursive: true });
   // 防覆盖(2026-08-26):评审通过后 evalAttempts 清零,阶段若被重新打开再评审,
@@ -523,6 +579,28 @@ export async function saveEvalResult(id: string, step: string, attempt: number, 
   }
   result.attempt = n;
   await writeFile(join(dir, `eval-${step}-${n}.json`), JSON.stringify(result, null, 2), "utf-8");
+
+  // Q4(2026-09 补修):评审结论结构化落库（eval_results 表，每作品一行最新快照）。
+  // 此前只写 eval-*.json 文件，eval_results 表恒 0 行——评审历史无法结构化查询。
+  try {
+    const { upsertEvalResult } = await import("./db/eval-results-repo.js");
+    const scoreVals = Object.values(result.scores ?? {}).map(Number).filter(Number.isFinite);
+    const overallScore = scoreVals.length
+      ? Math.round((scoreVals.reduce((a, b) => a + b, 0) / scoreVals.length) * 10) / 10
+      : undefined;
+    upsertEvalResult(id, {
+      overall_score: overallScore,
+      dimensions: result.scores ?? {},
+      summary: (result.suggestions ?? []).join("；").slice(0, 500) || undefined,
+      verdict: result.verdict,
+      issues: JSON.stringify(result.issues ?? []),
+      judge_model: opts?.judgeModel,
+      timeout_degraded: opts?.timeoutDegraded ? 1 : 0,
+    });
+  } catch (err) {
+    // 落库失败不阻断评审主流程（eval-*.json 已是事实源）
+    console.warn("[work-store] eval_results 落库失败(不阻断):", err instanceof Error ? err.message : err);
+  }
 }
 
 export async function loadEvalResult(id: string, step: string, attempt: number): Promise<EvalResult | null> {
@@ -570,6 +648,9 @@ const STEP_TO_STATUS: Record<string, WorkStatus> = {
   plan: "planning",
   assets: "assetting",
   assembly: "assembling",
+  // 流水线 v2(2026-09-07):新四步 key → 状态
+  "content-research": "researching",
+  "plan-assets": "planning",
 };
 
 export function statusOrder(s: WorkStatus): number {

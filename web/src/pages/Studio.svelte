@@ -44,8 +44,10 @@
   let showCategoryDropdown = $state(false);
 
   const pipelineTemplates: Record<string, Record<string, string>> = {
-    "short-video": { research: "话题调研", plan: "分镜规划", assembly: "视频合成" },
-    "image-text": { research: "话题调研", plan: "内容规划", assets: "图片生成", assembly: "图文排版" },
+    // 流水线 v2(2026-09-07 重构):四步键与 defaultPipeline(version=2) 保持一致
+    // (类型切换是罕见人工操作,仅按 v2 结构重建;v1 旧作品不切类型)
+    "short-video": { "content-research": "内容研究", "plan-assets": "分镜与素材探查", assets: "素材准备", assembly: "视频合成" },
+    "image-text": { "content-research": "内容研究", "plan-assets": "内容规划与配图探查", assets: "图片生成", assembly: "图文排版" },
   };
 
   async function switchType(newType: string) {
@@ -53,10 +55,10 @@
     // Abort any running task
     if (streaming) handleAbort();
     // Rebuild pipeline: keep research status, reset everything else
-    const researchStatus = work.pipeline["research"]?.status ?? "pending";
+    const researchStatus = (work.pipeline["content-research"] ?? work.pipeline["research"])?.status ?? "pending";
     const newPipeline: Record<string, any> = {};
     for (const [key, name] of Object.entries(pipelineTemplates[newType] ?? {})) {
-      newPipeline[key] = { name, status: key === "research" ? researchStatus : "pending" };
+      newPipeline[key] = { name, status: key === "content-research" || key === "research" ? researchStatus : "pending" };
     }
     work.type = newType as any;
     work.pipeline = newPipeline;

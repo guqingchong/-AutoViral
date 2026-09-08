@@ -25,6 +25,11 @@
   let refineSaveAsCopy = $state(false);
   let refining = $state(false);
   let refineMessage = $state("");
+  /** 已耗时(秒,2026-09-02):静态"约1-2分钟"在大模型故障期严重失真,改为实时计时 */
+  let refineElapsed = $state(0);
+  function fmtElapsed(s: number): string {
+    return s >= 60 ? `${Math.floor(s / 60)}分${s % 60}秒` : `${s}秒`;
+  }
 
   // 品牌 Logo(2026-08-13 模板库改造 功能 c)
   const BRAND_POSITIONS = [
@@ -84,6 +89,8 @@
     }
     refining = true;
     refineMessage = "";
+    refineElapsed = 0;
+    const elapsedTimer = setInterval(() => { refineElapsed += 1; }, 1000);
     try {
       const res = await fetch(`/api/templates/${template.id}/refine`, {
         method: "POST",
@@ -92,8 +99,9 @@
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const { jobId } = await res.json();
-      // 轮询直至完成
-      for (let i = 0; i < 120; i++) {
+      // 轮询直至完成(2026-09-02 上限 10→20 分钟:大模型故障期服务端走
+      // 2×3min 主档超时 + 备用通道回退 + 试渲染,最坏 ~10 分钟,10 分钟封顶会误报超时)
+      for (let i = 0; i < 240; i++) {
         await new Promise((r) => setTimeout(r, 5000));
         const st = await (await fetch(`/api/templates/refine/status/${jobId}`)).json();
         if (st.status === "done") {
@@ -104,6 +112,11 @@
             // 覆盖写回:重新拉取模板刷新编辑器
             const loaded = await fetchTemplate(template.id);
             template = loaded;
+            // 再加工已同步重写预览文件(2026-09-02 修复):加时间戳强制 <video> 重新拉取,
+            // 否则浏览器缓存旧 preview-file,出现"加工完成但预览没变"
+            if ((loaded as { kind?: string }).kind === "code" && loaded.previewUrl) {
+              template.previewUrl = `${loaded.previewUrl.split("?")[0]}?t=${Date.now()}`;
+            }
             jsonText = JSON.stringify(template, null, 2);
           }
           refineInstruction = "";
@@ -111,10 +124,15 @@
         }
         if (st.status === "error") throw new Error(st.error ?? "加工失败");
       }
-      throw new Error("加工超时(10 分钟)");
+      throw new Error("加工超时(20 分钟)——服务端任务可能仍在运行,请稍后刷新页面查看模板是否已更新");
     } catch (err) {
-      refineMessage = "✗ " + (err instanceof Error ? err.message : String(err));
+      // 2026-09-07:原始 AbortError 黑话("This operation was aborted")转人话
+      const raw = err instanceof Error ? err.message : String(err);
+      refineMessage = "✗ " + (/aborted|timed? ?out/i.test(raw)
+        ? "加工超时:大模型本次响应过慢(长输出/高峰期常见)。建议把加工指令拆成 2-3 条分次执行(例如先改底板、再改字体线框),或稍后重试"
+        : raw);
     } finally {
+      clearInterval(elapsedTimer);
       refining = false;
     }
   }
@@ -305,13 +323,20 @@
         <div class="refine-box">
           <span class="refine-title">AI 再加工</span>
           <textarea class="refine-input" bind:value={refineInstruction} placeholder="用自然语言描述修改,如:配色改成墨绿系 / 标题字号加大 / 转场全部换成淡入淡出" spellcheck="false"></textarea>
+          <!-- 2026-09-07 指令分流提示:结构类指令走强模型+视觉回译打磨(约 3-8 分钟);
+               写实底板建议 AI 生图槽位(照片级质感,确定性交付) -->
+          <p class="refine-hint">💡 调色/字号/布局微调秒级完成；新增场景元素（底板/装置类）会进入强模型多轮打磨（约 3-8 分钟）；照片级写实底板（舱门/操作台等）建议改用「AI 生图 + bgImage 槽位」，质感更好且稳定。</p>
           <div class="refine-actions">
             <label class="refine-copy">
               <input type="checkbox" bind:checked={refineSaveAsCopy} />
               另存为新模板(保留原版)
             </label>
             <button class="btn-secondary" disabled={refining} onclick={refine}>
-              {refining ? "加工中…(约1-2分钟)" : "开始加工"}
+              {refining
+                ? refineElapsed > 180
+                  ? `加工中…已 ${fmtElapsed(refineElapsed)}(大模型响应缓慢,正在自动切换备用通道)`
+                  : `加工中…已 ${fmtElapsed(refineElapsed)}(通常 1-3 分钟)`
+                : "开始加工"}
             </button>
           </div>
           {#if refineMessage}
@@ -353,6 +378,7 @@
   .refine-box { display: flex; flex-direction: column; gap: 0.5rem; padding: 0.75rem; border: 1px solid var(--border); border-radius: 6px; margin-bottom: 0.75rem; background: var(--bg-inset); }
   .refine-title { font-size: var(--size-sm); color: var(--text-secondary); font-weight: 600; }
   .refine-input { min-height: 60px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 0.45rem 0.6rem; font-family: var(--font-body); resize: vertical; }
+  .refine-hint { font-size: 0.72rem; color: var(--text-dim); line-height: 1.5; margin: 0.35rem 0 0; }
   .refine-actions { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
   .refine-copy { display: flex; align-items: center; gap: 0.35rem; font-size: 0.75rem; color: var(--text-muted); cursor: pointer; }
   .refine-msg { margin: 0; font-size: 0.75rem; color: var(--text-secondary); }

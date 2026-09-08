@@ -18,6 +18,33 @@ function rowToRule(row: Record<string, unknown>): DbEvolutionRule {
   };
 }
 
+/**
+ * 新建进化规则提案(供自动写提案/人工审批转正路径)。
+ *
+ * 与 createRule 同一存储路径,仅对"提案"调用语义做了两点约定:
+ * - `rule_type` 放宽为 string,容纳施工图使用的 `eval` 等扩展类型;
+ * - `enabled` 默认 0(待人工审批后转正),避免自动写入的提案直接生效。
+ */
+export function createEvolutionRule(input: {
+  rule_type: string;
+  target_key?: string;
+  condition_json?: Record<string, unknown>;
+  action: string;
+  confidence: number;
+  source: string;
+  enabled?: boolean;
+}): DbEvolutionRule {
+  return createRule({
+    rule_type: input.rule_type as DbRuleType,
+    target_key: input.target_key,
+    condition_json: input.condition_json ?? {},
+    action: input.action,
+    confidence: input.confidence,
+    source: input.source,
+    enabled: input.enabled ?? false,
+  });
+}
+
 export function createRule(
   rule: Omit<DbEvolutionRule, "id" | "created_at" | "updated_at" | "applied_count">
 ): DbEvolutionRule {

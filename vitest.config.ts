@@ -13,6 +13,10 @@ export default defineConfig({
           name: "default",
           include: ["tests/**/*.test.ts"],
           exclude: RENDER_SERIAL,
+          // 2026-09-07:api.ts 已 6600+ 行,beforeEach 的 resetModules+reimport 在高负载
+          // 机器上超 10s 默认 hookTimeout(CLI 旗标在 projects 模式下不下发)——提到 60s
+          hookTimeout: 60_000,
+          testTimeout: 30_000,
         },
       },
       {

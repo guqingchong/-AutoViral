@@ -284,6 +284,8 @@ export async function createWorkApi(input: {
   evalMode?: "standard" | "express";
   /** 作品画幅（批次12c-A）：缺省竖屏 portrait */
   aspect?: "portrait" | "landscape";
+  /** 绑定模板（X9,2026-09-07）：缺省不绑定（合法状态,无模板约束） */
+  templateId?: string;
 }): Promise<Work> {
   return request<Work>("/api/works", {
     method: "POST",
@@ -739,6 +741,11 @@ export async function fetchCodeSceneTemplates(): Promise<CodeSceneTemplatesRespo
   return get<CodeSceneTemplatesResponse>("/api/assets/code-scene/templates");
 }
 
+/** 镜头模板样片预览(2026-09-02):内建 sample 参数渲染 4s 样片,默认走缓存 */
+export async function previewSceneTemplate(name: string, refresh = false): Promise<{ success: boolean; url?: string; error?: string }> {
+  return post<{ success: boolean; url?: string; error?: string }>("/api/assets/code-scene/preview", { name, refresh });
+}
+
 
 export function getAnalyticsRecords(): Promise<{ records: unknown[] }> {
   return request<{ records: unknown[] }>("/api/analytics/records");
@@ -957,11 +964,21 @@ export async function renderPreview(id: string, variables?: Record<string, strin
 }
 
 // ── DesignBrief 意图稿(2026-08-25) ──
+export interface BriefPage {
+  role: "cover" | "content" | "ending";
+  goal: string;
+  layout: Array<{ region: string; content: string; position: string }>;
+  motionOverride?: string;
+  elementsExtra?: string[];
+}
+
 export interface DesignBrief {
   styleSummary: string;
   palette: Array<{ hex: string; role: string; note?: string }>;
   layout: Array<{ region: string; content: string; position: string }>;
   elements: string[];
+  /** 分页结构(2026-09-02):存在时为分页整片(封面/正文/结尾) */
+  pages?: BriefPage[];
   motion: { entrance: string; loop: string };
   referenceNotes?: string;
   sourceText: string;
@@ -971,6 +988,8 @@ export async function createBrief(input: {
   style: string;
   orientation?: "portrait" | "landscape";
   withDigitalHuman?: boolean;
+  /** 分页模式(2026-09-02):brief 产出 cover/content/ending 三页设计 */
+  multiPage?: boolean;
   referenceImage?: { data: string; mediaType: string };
 }): Promise<{ briefId: string; brief: DesignBrief }> {
   return post<{ briefId: string; brief: DesignBrief }>("/api/templates/brief", input);
@@ -980,8 +999,9 @@ export async function chatBrief(briefId: string, message: string): Promise<{ bri
   return post<{ brief: DesignBrief; diffSummary: string }>(`/api/templates/brief/${encodeURIComponent(briefId)}/chat`, { message });
 }
 
-export async function generateFromBrief(briefId: string): Promise<{ jobId: string; message?: string }> {
-  return post<{ jobId: string; message?: string }>(`/api/templates/brief/${encodeURIComponent(briefId)}/generate`, {});
+/** 按设计稿生成:target=full 整片代码模板 / scene 镜头模板(web);renderer 仅 full 有效,默认 web(2026-09-02 整片 web 出口) */
+export async function generateFromBrief(briefId: string, target: "full" | "scene" = "full", renderer: "web" | "revideo" = "web"): Promise<{ jobId: string; message?: string }> {
+  return post<{ jobId: string; message?: string }>(`/api/templates/brief/${encodeURIComponent(briefId)}/generate`, { target, renderer });
 }
 
 export async function fetchRenderJobs(status?: string): Promise<RenderJob[]> {

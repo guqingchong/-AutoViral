@@ -8,7 +8,7 @@
 
 ## 评审维度
 
-### 1. 技术参数 (technical_params) 【硬性·机器可判】
+### 1. 技术参数 (technical_params) 【硬性·机器可判】 min_ai: 8
 检查方法：使用 ffprobe 检查最终输出
 
 ```bash
@@ -44,7 +44,7 @@ ffprobe -v error -show_entries format=duration,size -show_entries stream=width,h
 - 5-6: 有部分段落节奏失衡
 - 1-4: 整体节奏混乱或极度拖沓
 
-### 3. 音画协调 (audio_visual_sync) 【硬性·机器可判】
+### 3. 音画协调 (audio_visual_sync) 【硬性·机器可判】 min_ai: 7
 评审依据：content-assembly/modules/audio-spec.md（评审前必读）
 
 - **响度实测（必做）**：`ffmpeg -i final.mp4 -af ebur128=peak=true -f null -` 实测 I 值命中 -16~-14 LUFS、TP ≤ -1dBTP？
@@ -59,7 +59,7 @@ ffprobe -v error -show_entries format=duration,size -show_entries stream=width,h
 - 5-6: BGM 局部盖过人声，或响度偏离平台区间
 - 1-4: 音画严重不协调/无 BGM/响度严重超标（外放刺耳或听不清人声）
 
-### 4. 字幕质量 (subtitle_quality) 【硬性·机器可判】
+### 4. 字幕质量 (subtitle_quality) 【硬性·机器可判】 min_ai: 7
 - 字幕是否与画面同步？
 - 字幕位置是否合理（不遮挡主体）？
 - **单行字数是否超标（中文 ≤15 字/行）？抽 3 个长句时间点截帧核对：字幕不得超出画面左右边界（部分 ffmpeg 构建的 libass 无 CJK 断词，长行不换行会直接出框）**
@@ -73,7 +73,7 @@ ffprobe -v error -show_entries format=duration,size -show_entries stream=width,h
 - 5-6: 字幕存在小问题（位置不佳、偶有不同步）
 - 1-4: 字幕严重影响观看体验
 
-### 4.5 模板约束遵守 (template_adherence) 【硬性·条件触发】
+### 4.5 模板约束遵守 (template_adherence) 【硬性·条件触发】 min_ai: 8
 > 仅当作品信息中标注"绑定模板"时启用本维度;未绑定模板的作品跳过本维度。
 
 模板契约：模板约束视觉呈现(版式/配色/动效/图层),不约束选题与文案。

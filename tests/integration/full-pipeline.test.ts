@@ -4,11 +4,20 @@
  * 验证多模块协同：Works → Topics → Templates → Render → Publish → Analytics → Evolution
  * 使用真实 in-memory DB，不 mock 内部服务。
  */
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { Hono } from "hono";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+// X21 验收修复(2026-09-07):dataDir 在 config.ts 模块加载时定型,beforeEach 里再设
+// AUTOVIRAL_DATA_DIR 太晚——模块 import 时已读真实 ~/.autoviral(含 S1 authToken),
+// POST 恒 401。必须在 import 之前 hoisted 指向临时目录。
+vi.hoisted(() => {
+  const base = process.env.TEMP ?? process.env.TMP ?? "/tmp";
+  process.env.AUTOVIRAL_DATA_DIR = `${base}/av-full-pipeline-${process.pid}-${Date.now()}`;
+});
+
 import { apiRoutes } from "../../src/server/api.js";
 import { analyticsApi } from "../../src/server/analytics-api.js";
 import { analyticsRoutes } from "../../src/server/routes/analytics.js";

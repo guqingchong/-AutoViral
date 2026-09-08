@@ -4,6 +4,10 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { getFFmpegPath } from "./ffmpeg.js";
+import { videoEncoderArgs, CPU_VIDEO_ARGS } from "../services/encoder.js";
+import { buildAssHeader } from "../services/subtitle-style.js";
+import { burnSubtitlesFast } from "../services/subtitle-burn.js";
+import { existsSync, readFileSync } from "node:fs";
 import { parseFFmpegProgress } from "./progress.js";
 import { validateTimeline } from "./schema.js";
 import {
@@ -47,64 +51,124 @@ export async function renderTimeline(timeline: Timeline, options: RenderOptions)
   const renderDuration = options.preview ? Math.min(options.previewDuration ?? 5, outputDuration) : outputDuration;
 
   const inputs = collectInputs(tl);
-  const args = buildFilterComplexArgs(tl, inputs, renderDuration, options.outputPath);
+  // R1：编码参数从 encoder.ts 动态取（QSV→NVENC→CPU），libx264 不再是硬编码
+  const encArgs = await videoEncoderArgs();
+  // R2 快速路径判定：字幕含逐字 \kf 标签 → 两段式（PNG 预渲染 + overlay），否则原 libass 滤镜
+  const subtitleTrack = tl.subtitles;
+  let fastSubtitle = false;
+  let subtitleAssPath: string | undefined;
+  if (subtitleTrack?.source && existsSync(subtitleTrack.source)) {
+    try {
+      const ass = readFileSync(subtitleTrack.source, "utf-8");
+      if (/\\kf?\d/.test(ass)) { fastSubtitle = true; subtitleAssPath = subtitleTrack.source; }
+    } catch { /* 读取失败按非 karaoke 处理 */ }
+  }
+  const targetPath = options.outputPath;
+  const renderArgs = buildFilterComplexArgs(tl, inputs, renderDuration, targetPath, encArgs, { skipSubtitles: fastSubtitle });
+
+  // 快路径第一段：渲出无字幕正片到临时路径
+  let noSubVideo: string | undefined;
+  const args = fastSubtitle
+    ? (() => {
+        noSubVideo = join(tmpdir(), `av-nosub-${randomUUID()}.mp4`);
+        // 替换 args 中 outputPath 为临时路径
+        const idx = renderArgs.lastIndexOf(targetPath);
+        if (idx >= 0) renderArgs[idx] = noSubVideo;
+        return renderArgs;
+      })()
+    : renderArgs;
 
   // If the filter_complex string is very long, write it to a temporary script file to avoid
   // exceeding command-line argument length limits on Windows.
   const MAX_ARG_LENGTH = 8000;
-  const filterIndex = args.indexOf("-filter_complex");
-  let filterScriptPath: string | undefined;
-  if (filterIndex >= 0 && args[filterIndex + 1].length > MAX_ARG_LENGTH) {
-    filterScriptPath = join(tmpdir(), `av-filter-${randomUUID()}.txt`);
-    await writeFile(filterScriptPath, args[filterIndex + 1], "utf-8");
-    args[filterIndex] = "-filter_complex_script";
-    args[filterIndex + 1] = filterScriptPath;
+  const runFfmpegArgs = async (runArgs: string[]): Promise<void> => {
+    const args = runArgs;
+    const filterIndex = args.indexOf("-filter_complex");
+    let filterScriptPath: string | undefined;
+    if (filterIndex >= 0 && args[filterIndex + 1].length > MAX_ARG_LENGTH) {
+      filterScriptPath = join(tmpdir(), `av-filter-${randomUUID()}.txt`);
+      await writeFile(filterScriptPath, args[filterIndex + 1], "utf-8");
+      args[filterIndex] = "-filter_complex_script";
+      args[filterIndex + 1] = filterScriptPath;
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      const proc = spawn(ffmpeg, args, { stdio: ["ignore", "pipe", "pipe"] });
+      let stderr = "";
+      let killed = false;
+
+      const abortHandler = () => {
+        if (!killed) {
+          killed = true;
+          proc.kill("SIGTERM");
+        }
+      };
+      options.abortSignal?.addEventListener("abort", abortHandler);
+
+      proc.stderr?.on("data", (chunk: Buffer) => {
+        const text = chunk.toString();
+        stderr += text;
+        for (const line of text.split("\n")) {
+          const p = parseFFmpegProgress(line, renderDuration);
+          if (p && options.onProgress) {
+            options.onProgress({ percent: p.percent, time: p.time, speed: p.speed });
+          }
+        }
+      });
+
+      proc.on("exit", (code) => {
+        options.abortSignal?.removeEventListener("abort", abortHandler);
+        if (filterScriptPath) {
+          unlink(filterScriptPath).catch(() => {});
+        }
+        if (code === 0) resolve();
+        else reject(new Error(`FFmpeg exited with code ${code}: ${stderr.slice(-500)}`));
+      });
+
+      proc.on("error", (err) => {
+        options.abortSignal?.removeEventListener("abort", abortHandler);
+        if (filterScriptPath) {
+          unlink(filterScriptPath).catch(() => {});
+        }
+        reject(err);
+      });
+    });
+  };
+
+  try {
+    await runFfmpegArgs(args);
+  } catch (err) {
+    // X12 验收修复(2026-09-07,R1):QSV/NVENC 探测可用≠全程可用(核显被占/驱动异常),
+    // 硬件编码运行时失败自动回退 CPU(libx264)重试一次,绝不让加速选型变成失败源。
+    if (encArgs.includes("h264_qsv") || encArgs.includes("h264_nvenc")) {
+      console.warn("[renderer] 硬件编码运行时失败,回退 CPU(libx264)重试:", err);
+      const cpuArgs = buildFilterComplexArgs(tl, inputs, renderDuration, noSubVideo ?? targetPath, [...CPU_VIDEO_ARGS], { skipSubtitles: fastSubtitle });
+      await runFfmpegArgs(cpuArgs);
+    } else {
+      throw err;
+    }
   }
 
-  return new Promise((resolve, reject) => {
-    const proc = spawn(ffmpeg, args, { stdio: ["ignore", "pipe", "pipe"] });
-    let stderr = "";
-    let killed = false;
-
-    const abortHandler = () => {
-      if (!killed) {
-        killed = true;
-        proc.kill("SIGTERM");
-      }
-    };
-    options.abortSignal?.addEventListener("abort", abortHandler);
-
-    proc.stderr?.on("data", (chunk: Buffer) => {
-      const text = chunk.toString();
-      stderr += text;
-      for (const line of text.split("\n")) {
-        const p = parseFFmpegProgress(line, renderDuration);
-        if (p && options.onProgress) {
-          options.onProgress({ percent: p.percent, time: p.time, speed: p.speed });
-        }
-      }
-    });
-
-    proc.on("exit", (code) => {
-      options.abortSignal?.removeEventListener("abort", abortHandler);
-      if (filterScriptPath) {
-        unlink(filterScriptPath).catch(() => {});
-      }
-      if (code === 0) {
-        resolve({ outputPath: options.outputPath, duration: renderDuration });
-      } else {
-        reject(new Error(`FFmpeg exited with code ${code}: ${stderr.slice(-500)}`));
-      }
-    });
-
-    proc.on("error", (err) => {
-      options.abortSignal?.removeEventListener("abort", abortHandler);
-      if (filterScriptPath) {
-        unlink(filterScriptPath).catch(() => {});
-      }
-      reject(err);
-    });
-  });
+  // R2 第二段：PNG 预渲染字幕 + overlay 叠加到 targetPath
+  if (fastSubtitle && noSubVideo && subtitleAssPath) {
+    try {
+      const frameCount = Math.round(renderDuration * (tl.canvas.fps ?? 30));
+      await burnSubtitlesFast(noSubVideo, subtitleAssPath, targetPath, frameCount, {
+        width: tl.canvas.width,
+        height: tl.canvas.height,
+        fps: tl.canvas.fps ?? 30,
+      });
+    } catch (err) {
+      // 验收修复(2026-09-07):快路径任何失败(光栅化/overlay/编码器)都回退
+      // libass 慢速 subtitles 滤镜整片重烧,绝不让"加速优化"变成渲染失败。
+      console.warn("[renderer] 字幕 PNG 快路径失败,回退 libass 慢速烧录:", err);
+      const slowArgs = buildFilterComplexArgs(tl, inputs, renderDuration, targetPath, encArgs, { skipSubtitles: false });
+      await runFfmpegArgs(slowArgs);
+    } finally {
+      unlink(noSubVideo).catch(() => {});
+    }
+  }
+  return { outputPath: targetPath, duration: renderDuration };
 }
 
 export function computeDuration(tl: Timeline): number {
@@ -127,7 +191,7 @@ export function collectInputs(tl: Timeline): InputSlot[] {
   return inputs;
 }
 
-export function buildFilterComplexArgs(tl: Timeline, inputs: InputSlot[], duration: number, outputPath: string): string[] {
+export function buildFilterComplexArgs(tl: Timeline, inputs: InputSlot[], duration: number, outputPath: string, encArgs: string[] = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p"], opts?: { skipSubtitles?: boolean }): string[] {
   const args: string[] = [];
 
   // Input declarations
@@ -233,9 +297,11 @@ export function buildFilterComplexArgs(tl: Timeline, inputs: InputSlot[], durati
     }
   }
 
-  // Subtitles overlay
-  if (tl.subtitles) {
-    videoFilterParts.push(`[base]subtitles=${tl.subtitles.source}:force_style='FontSize=48,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,Outline=2'[base]`);
+  // Subtitles overlay（R3：样式参数化——buildAssHeader(preset) 替代硬编码 force_style；
+  // R2 PNG 预渲染加速路径接入点：tl.subtitles 含 \kf 时，此处后续替换为 burnSubtitlesFast + overlay）
+  if (tl.subtitles && !opts?.skipSubtitles) {
+    const assStyle = buildAssHeader(tl.subtitleStyle ?? "douyin-highlight"); // 返回 force_style='...' 完整串
+    videoFilterParts.push(`[base]subtitles=${tl.subtitles.source}:${assStyle}[base]`);
   }
 
   // Audio mixing
@@ -265,10 +331,9 @@ export function buildFilterComplexArgs(tl: Timeline, inputs: InputSlot[], durati
     args.push("-an");
   }
 
-  // Encoding settings
+  // Encoding settings（R1：encArgs 由 videoEncoderArgs() 动态产出，缺省回退 x264 veryfast crf18）
   args.push(
-    "-c:v", "libx264",
-    "-pix_fmt", "yuv420p",
+    ...encArgs,
     "-r", String(tl.canvas.fps),
     "-s", `${tl.canvas.width}x${tl.canvas.height}`,
     "-t", String(duration),

@@ -882,6 +882,61 @@ ALTER TABLE works ADD COLUMN last_error TEXT;
 ALTER TABLE works ADD COLUMN aspect TEXT DEFAULT 'portrait';
 `,
   },
+  {
+    version: 36,
+    name: "work_costs", // C2 成本口径统一记账
+    sql: `
+-- C2(2026-09 施工):作品级成本分项记账(llm/tts/bgm/gpu),回写 works.actual_cost
+CREATE TABLE IF NOT EXISTS work_costs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  work_id TEXT NOT NULL,
+  category TEXT NOT NULL,
+  provider TEXT,
+  amount REAL NOT NULL,
+  detail TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_work_costs_work ON work_costs(work_id);
+`,
+  },
+  {
+    version: 37,
+    name: "eval_results_structured", // Q4 评审结构化落库
+    sql: `
+-- Q4(2026-09 施工):eval_results 补结构化列(仅最新快照;历史仍由 eval-*.json 序数文件承载)
+ALTER TABLE eval_results ADD COLUMN verdict TEXT;
+ALTER TABLE eval_results ADD COLUMN issues TEXT;
+ALTER TABLE eval_results ADD COLUMN judge_model TEXT;
+ALTER TABLE eval_results ADD COLUMN timeout_degraded INTEGER DEFAULT 0;
+ALTER TABLE works ADD COLUMN quality_mode TEXT;
+`,
+  },
+  {
+    version: 38,
+    name: "templates_stability", // M5 模板稳定性标记
+    sql: `
+-- M5(2026-09 施工):模板连败计数,usage≥10 触发回归
+ALTER TABLE templates ADD COLUMN stability INTEGER DEFAULT 0;
+`,
+  },
+  {
+    version: 39,
+    name: "data_sources_tier", // F2/F5:信源等级列——repo 此前引用但迁移遗漏(生产库无此列会导致沉淀报错)
+    sql: `
+-- F2/F5(2026-09):data_sources 补信源等级列 tier(官方/机构/媒体/厂商/未核验)
+ALTER TABLE data_sources ADD COLUMN tier TEXT;
+`,
+  },
+  {
+    version: 40,
+    name: "pipeline_v2_and_research_depth", // 流水线重构(2026-09-07 业主拍板):五步→四步按作品切换 + 深度分级落库
+    sql: `
+-- 流水线重构(批次1):pipeline_version NULL/1=旧五步(在跑作品零感知), 2=新四步
+-- (content-research → plan-assets → assets → assembly);research_depth=full|standard|quick
+ALTER TABLE works ADD COLUMN pipeline_version INTEGER;
+ALTER TABLE works ADD COLUMN research_depth TEXT;
+`,
+  },
 ];
 
 export function migrate(): void {

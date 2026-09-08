@@ -88,3 +88,38 @@ describe("buildAssetConstraintSection(迁出后行为不变)", () => {
     expect(s).toContain("程序化素材铁律");
   });
 });
+
+// ═══ 流水线 v2(2026-09-07 重构,批次1)═══
+import { buildContentResearchInstruction, buildPlanAssetsInstruction, buildResearchDepthSection } from "../../src/server/step-contract.js";
+
+describe("流水线 v2 阶段指令(批次1)", () => {
+  const W2 = { id: "w_v2_test", title: "AI 城市经营测试", purpose: "authority", contentForm: "policy" };
+
+  it("内容研究指令:含 article 双文件契约 + 深度档 + 四步流程 + advance 示例", () => {
+    const s = buildContentResearchInstruction(W2, "full", true);
+    expect(s).toContain("research/article.md");
+    expect(s).toContain("research/article.json");
+    expect(s).toContain("speechBudget");
+    expect(s).toContain("feasibility");
+    expect(s).toContain("完整深度研究(full)");
+    expect(s).toContain('"completedStep":"content-research"');
+    expect(s).toContain('"nextStep":"plan-assets"');
+  });
+
+  it("quick 档允许从简,standard 档要求核心事实核查", () => {
+    expect(buildResearchDepthSection("quick")).toContain("精简研究");
+    expect(buildResearchDepthSection("standard")).toContain("标准研究");
+  });
+
+  it("分镜与素材探查指令:需求驱动 + 禁下载 + regress 回退示例 + script 溯源", () => {
+    const s = buildPlanAssetsInstruction({ id: "w_v2_test", title: "测试" }, true);
+    expect(s).toContain("research/article.md");
+    expect(s).toContain("assets/script.json");
+    expect(s).toContain("source_section");
+    expect(s).toContain("assets/registry.json");
+    expect(s).toContain("禁止下载媒体文件");
+    expect(s).toContain("/pipeline/regress");
+    expect(s).toContain("material-gaps.json");
+    expect(s).toContain('"completedStep":"plan-assets"');
+  });
+});

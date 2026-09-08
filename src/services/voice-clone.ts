@@ -8,6 +8,7 @@ import * as voicesRepo from "../db/voices-repo.js";
 import type { DbVoice } from "../db/types.js";
 import { uploadVoiceCloneFile, cloneVoiceOnMiniMax } from "../providers/minimax-voice-clone.js";
 import { synthesizeToFile } from "../providers/minimax-tts.js";
+import { getDb } from "../db/connection.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -76,7 +77,10 @@ export async function cloneVoiceFromUpload(name: string, buffer: Buffer, filenam
     const cfg = await getMinimaxCfg();
     const fileId = await uploadVoiceCloneFile(cfg, mp3, "sample.mp3");
     await cloneVoiceOnMiniMax(cfg, fileId, voice.voice_id);
-    return voicesRepo.updateVoice(voice.id, { status: "ready", source_file_path: samplePath })!;
+    const ready = voicesRepo.updateVoice(voice.id, { status: "ready", source_file_path: samplePath })!;
+    // D2-①：克隆成功即计一次使用（usage_count），"我的音色"页真实反映。
+    voicesRepo.incrementVoiceUsage(voice.id);
+    return ready;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     voicesRepo.updateVoice(voice.id, { status: "failed", error: message });
@@ -126,4 +130,28 @@ export async function deleteVoiceWithFiles(id: string): Promise<boolean> {
   if (!voicesRepo.getVoice(id)) return false;
   await rm(voicesDir(id), { recursive: true, force: true });
   return voicesRepo.deleteVoice(id);
+}
+
+/**
+ * D2-③：断言 voice_id 存在于 voices 表（克隆音色 avc-* 已登记）。
+ * 用于配音 / 批量落库前的 voice_id 校验；不存在返回 false，不抛异常。
+ */
+export function assertVoiceExists(voiceId: string): boolean {
+  const row = getDb().prepare("SELECT 1 AS present FROM voices WHERE voice_id = ? LIMIT 1").get(voiceId) as { present: number } | undefined;
+  return !!row;
+}
+
+/**
+ * D2-③(X8 验收修复,2026-09-07):voice_id 落库校验的完整版——voices 表
+ * (克隆/收藏音色)或 MiniMax 内置音色清单(listBuiltinVoices 带静态回退,
+ * 清单不可用时保守放行内置校验,不会因网络抖动误杀)。
+ */
+export async function assertVoiceKnown(voiceId: string): Promise<boolean> {
+  if (assertVoiceExists(voiceId)) return true;
+  try {
+    const { listBuiltinVoices } = await import("./builtin-voices.js");
+    return (await listBuiltinVoices()).some((v) => v.voice_id === voiceId);
+  } catch {
+    return false;
+  }
 }

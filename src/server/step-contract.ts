@@ -54,7 +54,7 @@ export function buildAssetConstraintSection(assetForm?: string, assetSource?: st
   lines.push(
     `- 程序化素材铁律(无条件生效): 凡涉及精确数据(数值/对比/趋势/占比)、政策文件/新闻原文、结构关系的镜头,禁止 AI 生图(数字必错、文字乱码)。` +
       `必须调用本地程序化素材 API: 数据图表 POST /api/assets/data-card(简单数据)或 /api/assets/chart(复杂 ECharts);` +
-      `政策/网页原文快照 POST /api/assets/snapshot-card;图标 GET /api/assets/icons。主题配色须与作品模板一致,数据来源必须署名。` +
+      `政策/网页原文快照 POST /api/assets/snapshot-card;图标 GET /api/assets/icons。数据来源必须署名。` +
       `快照卡必须传 highlights 红框标注关键条款/段落(禁止整页裸截,截正文区避开广告与侧栏);` +
       `图表数值与旁白口径必须一致——旁白说"超六成",图表须标">60%"或"超60%",禁止写成精确值 60%;` +
       `结构/流程/逻辑镜头调用 POST /api/assets/code-scene 生成程序化动画(模板清单与参数先 GET /api/assets/code-scene/templates,竖屏 9 款+横屏 11 款 -wide 按成片画幅选);` +
@@ -72,6 +72,15 @@ export function buildAssetConstraintSection(assetForm?: string, assetSource?: st
         (hasDigitalHuman === false
           ? `口播/讲解内容→配音+字幕卡/图解呈现(本作品未选数字人,禁用数字人镜头)`
           : `口播/讲解人→数字人或 H3 t2v(dialogue)`),
+    );
+  }
+  // programmatic 全程序化档(D4 新增):零版权零 GPU——结构/数据/政策/图表镜头全走本地程序化,
+  // 明确禁止 stock/AI 生图/云端视频/H3(依赖 AutoDL 离线也可产出)
+  if (assetSource === "programmatic") {
+    lines.push(
+      `- 全程序化铁律(programmatic): 所有镜头一律用本地程序化素材(data-card/chart/snapshot-card/icons/code-scene),` +
+        `**禁止 stock 素材库下载、禁止 AI 生图、禁止云端视频(Seedance/即梦)、禁止 H3(依赖 GPU)**——零版权零 GPU 成本,` +
+        `完全不受 AutoDL/H3 离线影响,满足"全 web 渲染程序化动画"作品(数据科普/投资解读类)。`,
     );
   }
   // AI 生成来源下的 H3 本地生成路由规则（MiniMax H3,成本约 ¥0.13/条,远低于云端)
@@ -140,15 +149,20 @@ export function buildStepContractSection(
 export const SEARCH_PROTOCOL = [
   `## 联网搜索规程(必须严格遵守)`,
   ``,
-  `1. **唯一搜索通道是 $web_search 工具**(平台服务端执行,结果自动注入)。` +
-    `禁止用 curl/wget 抓取搜索引擎或网站 HTML 页面——系统已在工具层拦截,此类调用必然失败。`,
-  `2. **查询词构造**:用"主题关键词 + 限定词"组合(如「数字孪生城市 政策」「城市更新 案例」)。` +
+  `1. **搜索通道(2026-09-03 起,所有模型可用)**:` +
+    `用 \`WebSearch\` 工具(客户端执行,Bing 国内版)。` +
+    `**禁止用 curl/wget 抓取搜索引擎或网站 HTML 页面**——系统已在工具层拦截,此类调用必然失败。`,
+  `2. **信源核查**:引用政策/数据/案例前,必须用 \`WebFetch\` 抓取来源 URL 原文核对;` +
+    `查中文视频场景案例可用 \`PlatformSearch\`(bilibili/youtube)。`,
+  `3. **查询词构造**:用"主题关键词 + 限定词"组合(如「数字孪生城市 政策」「城市更新 案例」)。` +
     `每组词只搜 1 次,最多 6 组;逐次换词,禁止同词重搜(重复调用会被系统拦截不再执行)。`,
-  `3. **结果不相关时的改写顺序**:① 去掉限定词只留主题词 → ② 换同义词/近义表达 → ③ 换角度(政策→案例→数据→争议)。`,
-  `4. **信源硬要求**:产出中引用的每条趋势/数据/案例必须附可访问的来源 URL;无法给出来源的内容禁止写入产出(评审将逐条核对,无 URL = fail)。`,
-  `5. **$web_search 不可用时的降级**(报错/无权限):改用本地已采集热搜 ` +
+  `4. **结果不相关时的改写顺序**:① 去掉限定词只留主题词 → ② 换同义词/近义表达 → ③ 换角度(政策→案例→数据→争议)。`,
+  `5. **信源硬要求**:产出中引用的每条趋势/数据/案例必须附可访问的来源 URL;无法给出来源的内容禁止写入产出(评审将逐条核对,无 URL = fail)。`,
+  `6. **搜索全部不可用时的降级**(报错/无结果):改用本地已采集热搜 ` +
     `\`curl -s http://localhost:3271/api/trends/douyin\`(可按需换平台),并在产出开头显式声明` +
     `「本次调研无联网搜索,基于本地热搜缓存」——禁止退化为任何形式的外网抓取。`,
+  `7. **信源复用(F5)**: 引用的权威信源系统会自动沉淀(data_sources 表),同主题二次调研时优先复用——` +
+    `可 \`curl -s http://localhost:3271/api/data-sources\` 查询已沉淀的固定信源(被反复引用的权威源),主题相关时优先直接引用/抓取。`,
 ].join("\n");
 
 /**
@@ -163,6 +177,9 @@ export function buildMaterialSearchInstruction(work: { id: string; title: string
     `搜索主题: "${query}"`,
     ``,
     `## 检索通道(顺序按题材调整;key 由服务端持有,你不需要也不应该去找任何 API key)`,
+    `**默认优先级(与 assets 阶段一致):合规素材库(Pexels→Pixabay)优先,找不到合适的才走全网视频。**`,
+    `唯一例外:题材含具体地名/机构/事件等专有实体(如"上海张园""北京劲松")时,通用素材库几乎没有`,
+    `中国特定地标素材,此时通道 1(全网真实视频)为主力——硬用通用素材凑数必被评审打回(2026-08-26 五轮实证)。`,
     `1. **全网真实视频**: 用 WebSearch 搜索;命中后用 yt-dlp 下载(必须音视频合并,禁止裸 curl):`,
     `   \`yt-dlp -f "bestvideo[height<=720]+bestaudio/best[height<=720]" --merge-output-format mp4 -o "clips/option-NN.mp4" "URL"\``,
     `   ⚠️ 题材含具体地名/机构/事件等专有实体(如"上海张园""北京劲松")时,本通道是主力——`,
@@ -185,6 +202,7 @@ export function buildMaterialSearchInstruction(work: { id: string; title: string
     `   抽帧: \`ffmpeg -y -i 视频.mp4 -ss 1 -frames:v 1 帧1.jpg -sseof -3 -frames:v 1 帧2.jpg\``,
     `4. **筛选与剔除**: 剔除水印/低清/题材不符项并记录剔除理由;保留候选每条写选用理由`,
     `5. **结构化留痕(强制)**: 写 assets/material-candidates.md,含查询组清单与命中情况、候选列表(路径/来源URL/时长/分辨率/授权/选用理由)、剔除记录——plan 阶段按路径直接引用`,
+    `6. **机器可读台账(P1 契约化,2026-09)**: 同时产出 \`assets/registry.json\`(素材库索引): {"sources":[{"name":"shot-01.mp4","path":"clips/shot-01.mp4","type":"video","source_url":"...","duration":12,"tier":"..."}]}——plan 阶段机器预检据此校验素材引用存在性`,
     `6. **缺口声明(合法出口)**: 某场景两轮检索后确实无贴合素材时,在 material-candidates.md 单开"缺口声明"段,`,
     `   写明"X 场景无合规贴合素材"并给出替代方案(AI 生成/真实视频通道再挖/分镜改用程序化素材)——`,
     `   声明缺口不扣分;硬把不贴合素材标成贴合,是评审必打回的重灾区。`,
@@ -198,5 +216,142 @@ export function buildMaterialSearchInstruction(work: { id: string; title: string
       : `## 交互模式: 把候选以 markdown 链接呈现给用户(\`[标题](/api/works/${work.id}/assets/clips/option-01.mp4)\` 可内联播放),请用户选定主素材后再推进。`,
     ``,
     `完成后推进: \`curl -X POST http://localhost:3271/api/works/${work.id}/pipeline/advance -H "Content-Type: application/json" -d '{"completedStep":"material-search","nextStep":"research"}'\``,
+  ].join("\n");
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 流水线 v2(2026-09-07 重构,业主拍板):新四步 content-research → plan-assets → assets → assembly
+// 设计意图:article 是唯一事实源(消灭脚本三道转手的口径漂移);素材探查需求驱动
+// (消灭盲下载);整段缺素材经 /pipeline/regress 契约化回退(消灭硬凑)。
+// ════════════════════════════════════════════════════════════════════════════
+
+/** 研究深度档(与 purpose-presets.resolveResearchDepth 的档位一一对应) */
+export type ResearchDepth = "full" | "standard" | "quick";
+
+/**
+ * 深度档约束段(批次3 buildResearchDepthSection)——评审 criteria/content-research.md 的
+ * depth_compliance 维度按本段核对动作是否做足,两边措辞必须一致。
+ */
+export function buildResearchDepthSection(depth: ResearchDepth): string {
+  if (depth === "full") {
+    return [
+      `## 研究深度档:完整深度研究(full)`,
+      `- ≥6 组查询词(政策原文/权威数据/案例/争议/竞品/国际对照等不同角度),每组记录命中情况;`,
+      `- ≥3 篇权威原文用 WebFetch 抓取全文核对(政策文件库/统计局/官方公告优先);`,
+      `- 文章必须含论证链(论点→证据→推论),禁止观点堆砌;`,
+      `- 争议/不确定性必须显式呈现,禁止单边叙述。`,
+    ].join("\n");
+  }
+  if (depth === "quick") {
+    return [
+      `## 研究深度档:精简研究(quick)`,
+      `- 1-2 组查询词即可;本地热搜缓存(/api/trends/*)可直接作为趋势依据;`,
+      `- 只核查将进入口播的事实断言(文号/年份/百分比/机构名),其余从简;`,
+      `- 时效优先于深度;在 article.json 显式声明 depth="quick"。`,
+    ].join("\n");
+  }
+  return [
+    `## 研究深度档:标准研究(standard)`,
+    `- 2-3 组查询词;核心事实断言(将进入口播的)逐条联网核查并附来源 URL;`,
+    `- ≥1 篇权威原文用 WebFetch 抓取核对;论证链可以简短但必须有证据支撑。`,
+  ].join("\n");
+}
+
+/**
+ * 内容研究阶段指令(流水线 v2 第一步)——趋势调研成果 → 事实核查 → 可行性论证
+ * → 深度研究 → 最终作品文章落盘(research/article.md + research/article.json)。
+ * article 是后续所有阶段(分镜/口播/素材/发布)的唯一事实源。
+ */
+export function buildContentResearchInstruction(
+  work: { id: string; title: string; topicHint?: string; purpose?: string; contentForm?: string },
+  depth: ResearchDepth,
+  isAutoMode: boolean,
+): string {
+  return [
+    `Execute the "内容研究" step(流水线 v2 第一步)。目标:把选题做成一篇**可直接发布的最终作品文章**,并完成事实核查与可行性论证。`,
+    `选题: "${work.title}"${work.topicHint ? `\n选题提示: ${work.topicHint}` : ""}`,
+    ``,
+    `## 输入`,
+    `- 趋势调研成果(若存在): \`research/draft-from-topic.md\`——它是素材,不是成品,其中事实必须重新核查;`,
+    `- 本地热搜缓存: \`curl -s http://localhost:3271/api/trends/douyin\`(可换平台)获取当下热点佐证;`,
+    `- 已沉淀权威信源: \`curl -s http://localhost:3271/api/data-sources\`(同主题优先复用)。`,
+    ``,
+    `## 流程(四步,顺序不可跳)`,
+    `1. **事实核查**: 拆解选题中必须核验的断言清单(文号/年份/百分比/机构名),逐项 WebSearch + WebFetch 抓原文核验,逐条打「已核验(附 URL)/待核」;`,
+    `2. **可行性论证**: 评估 ①素材可得性(哪些场景素材库可能没有,记入 feasibility.materialRisks) ②合规风险 ③时长适配(文章字数 ÷ 语速 4.5 字/秒 ≈ 目标片长);`,
+    `3. **深度研究**: 按下方深度档执行;`,
+    `4. **成文落盘**(两个文件都必须写):`,
+    `   - \`research/article.md\`: 最终作品文章(可直接发布的中文成稿,非调研笔记);`,
+    `   - \`research/article.json\`: 机器可读契约,结构如下(所有字段必填):`,
+    ``,
+    "```json",
+    `{`,
+    `  "version": 1,`,
+    `  "title": "最终标题",`,
+    `  "purpose": "${work.purpose ?? ""}",`,
+    `  "contentForm": "${work.contentForm ?? ""}",`,
+    `  "depth": "${depth}",`,
+    `  "wordCount": 1450,`,
+    `  "speechBudget": { "charsPerSec": 4.5, "targetDurationS": 180, "maxChars": 810 },`,
+    `  "facts": [{ "text": "断言原文", "type": "文号|年份|百分比|机构", "verify_status": "已核验|待核", "source_url": "https://…" }],`,
+    `  "feasibility": { "verdict": "feasible|conditional|infeasible", "materialRisks": ["…"], "notes": "…" },`,
+    `  "sections": [{ "heading": "小节标题", "summary": "小节摘要", "anchor": "sec-1" }]`,
+    `}`,
+    "```",
+    ``,
+    buildResearchDepthSection(depth),
+    ``,
+    `## 铁律`,
+    `- **article 是唯一事实源**: 后续分镜/口播/素材全部从这里派生,禁止在后续阶段新造事实;`,
+    `- **待核断言禁进口播**: verify_status=待核 的内容只允许画面披露+"以官方发布为准"(机器门禁会拦);`,
+    `- **可行性 verdict=infeasible 时不许硬写**: 在 article.json 如实标注并在文章内给出替代叙事角度;`,
+    ``,
+    isAutoMode
+      ? `## 自动化模式: 自主拍板,禁止向用户提问。完成后直接调用 advance 推进。`
+      : `## 交互模式: 成文后向用户简要展示文章结构与可行性结论,确认后再推进。`,
+    ``,
+    `完成后推进: \`curl -X POST http://localhost:3271/api/works/${work.id}/pipeline/advance -H "Content-Type: application/json" -d '{"completedStep":"content-research","nextStep":"plan-assets"}'\``,
+  ].join("\n");
+}
+
+/**
+ * 分镜与素材探查阶段指令(流水线 v2 第二步)——依据作品文章,同时探查素材,
+ * 形成脚本/分镜规划。探查是需求驱动(逐镜要什麼查什么),禁止无需求盲下载。
+ */
+export function buildPlanAssetsInstruction(
+  work: { id: string; title: string },
+  isAutoMode: boolean,
+): string {
+  return [
+    `Execute the "分镜与素材探查" step(流水线 v2 第二步)。目标:以 \`research/article.md\` 为唯一事实源,产出脚本 + 分镜 + 逐镜素材需求台账。`,
+    ``,
+    `## 输入(先全部读完再动手)`,
+    `- \`research/article.md\`(作品文章,唯一事实源)与 \`research/article.json\`(含 facts/feasibility/sections 锚点);`,
+    `- 可行性结论中的 feasibility.materialRisks——标记过风险的场景,探查时优先验证。`,
+    ``,
+    `## 流程`,
+    `1. **成稿脚本**: 从 article 一次成稿 \`assets/script.json\`(scenes 数组:每句旁白带 \`source_section\` 锚定 article.json 的 sections[].anchor;字数 × 语速 4.5 字/秒 ≈ 目标时长,超预算先精简文章语句,禁止塞入文章之外的新事实);`,
+    `2. **分镜规划**: 写 \`plan/plan.md\` 分镜表(表头:镜号/时长/旁白/景别/制作方式/素材——旁白列逐句引 script.json,素材列填素材文件名或"程序化:模板名");`,
+    `3. **需求驱动素材探查**(与盲下载的本质区别:先有镜头需求,再检索):`,
+    `   - 逐镜列出"本镜需要什么素材"(主体/场景/情绪/规格);`,
+    `   - 按需求检索:素材库 \`curl -s "http://localhost:3271/api/stock-assets/search?q=英文关键词&type=video"\` / WebSearch / PlatformSearch;`,
+    `   - **只登记元数据**(名称/来源 URL/时长/分辨率/授权/tier),禁止下载媒体文件——下载是素材准备阶段的事;`,
+    `   - 登记到 \`assets/registry.json\`(\`{"sources":[{"name":"shot-01.mp4","type":"video","source_url":"…","duration":12,"tier":"…"}]}\`)与 \`assets/material-candidates.md\`(人读版,含查询组与命中情况);`,
+    `4. **缺口处理**(合法出口,不扣分):`,
+    `   - 单镜缺素材 → material-candidates.md 写"缺口声明"+ 替代方案(AI 生成/程序化/换写法);`,
+    `   - **整段场景缺素材** → 写 \`assets/material-gaps.json\`(\`{"gaps":[{"scene":"…","needed":"…","triedQueries":["…"],"conclusion":"…"}],"requestedAt":"ISO"}\`),然后调用回退端点修订文章:`,
+    `     \`curl -X POST http://localhost:3271/api/works/${work.id}/pipeline/regress -H "Content-Type: application/json" -d '{"fromStep":"plan-assets","toStep":"content-research","reason":"整段场景缺素材","gapsRef":"assets/material-gaps.json"}'\``,
+    `     **禁止硬凑不贴合素材充数**(ae0 教堂/币圈画面事故的根因)。`,
+    ``,
+    `## 铁律`,
+    `- 分镜引用素材必须在 registry.json 里有登记(机器门禁逐条核验,引用不存在素材直接 400);`,
+    `- 旁白逐句必须能溯源到 article 的某个 section;文章没有的事实禁止进旁白;`,
+    `- 待核断言(article.json 里 verify_status=待核)不得进旁白口播;`,
+    ``,
+    isAutoMode
+      ? `## 自动化模式: 自主拍板,禁止向用户提问。完成后直接调用 advance 推进。`
+      : `## 交互模式: 分镜表与素材需求清单展示给用户确认后再推进。`,
+    ``,
+    `完成后推进: \`curl -X POST http://localhost:3271/api/works/${work.id}/pipeline/advance -H "Content-Type: application/json" -d '{"completedStep":"plan-assets","nextStep":"assets"}'\``,
   ].join("\n");
 }

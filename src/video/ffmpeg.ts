@@ -29,6 +29,9 @@ export interface FFprobeInfo {
   width?: number;
   height?: number;
   hasAudio?: boolean;
+  /** Q1 补齐：采样率(Hz)与声道数——96kHz 事故的机器拦截依据 */
+  sampleRate?: number;
+  channels?: number;
 }
 
 export async function probeMedia(path: string): Promise<FFprobeInfo> {
@@ -52,16 +55,27 @@ export async function probeMedia(path: string): Promise<FFprobeInfo> {
     const audio = await execFileAsync(ffprobe, [
       "-v", "error",
       "-select_streams", "a:0",
-      "-show_entries", "stream=codec_type",
+      "-show_entries", "stream=codec_type,sample_rate,channels",
       "-of", "csv=p=0",
       path,
     ]).then(r => r.stdout.trim()).catch(() => "");
+
+    let sampleRate: number | undefined;
+    let channels: number | undefined;
+    if (audio.includes("audio")) {
+      // CSV 形如 "audio,44100,2"（sample_rate/channels 取首个音频流的后续列）
+      const parts = audio.split("\n")[0]?.split(",") ?? [];
+      sampleRate = Number(parts[1]) || undefined;
+      channels = Number(parts[2]) || undefined;
+    }
 
     return {
       duration,
       width: stream.width ? Number(stream.width) : undefined,
       height: stream.height ? Number(stream.height) : undefined,
       hasAudio: audio.includes("audio"),
+      sampleRate,
+      channels,
     };
   } catch {
     return {};

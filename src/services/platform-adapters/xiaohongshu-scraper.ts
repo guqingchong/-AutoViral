@@ -132,6 +132,46 @@ export class XiaohongshuScraper implements PlatformAdapter {
     }
   }
 
+  /**
+   * 小红书站内搜索（2026-09 F6）。复用同一 persistent context（browser-profiles
+   * 同一画像，不重导 cookie），打开搜索结果页抓笔记列表。
+   * 【待实测校准】DOM 选择器为初版（section.note-item 内 a 标题/链接），页面结构变化可能失效。
+   * 防风控：每条结果间延迟 ≥2s + 抖动。
+   */
+  async search(query: string, limit = 5): Promise<{ title: string; url: string; snippet: string }[]> {
+    const ctx = await getContext(this.contextKey);
+    const page = await ctx.newPage();
+    try {
+      await page.goto(`https://www.xiaohongshu.com/search_result?keyword=${encodeURIComponent(query)}`, {
+        waitUntil: "domcontentloaded",
+        timeout: 30_000,
+      });
+      // 【待实测校准】等待笔记区渲染；选择器基于 section.note-item 内 a 链接
+      await page.waitForSelector("section.note-item a", { timeout: 15_000 }).catch(() => {});
+      const items = await page.$$eval(
+        "section.note-item a",
+        (els) =>
+          els
+            .slice(0, limit)
+            .map((e) => ({
+              title: (e.querySelector(".title")?.textContent ?? e.textContent ?? "").trim(),
+              url: e.getAttribute("href") ?? "",
+              snippet: "",
+            }))
+            .filter((it) => it.url),
+      );
+      // 防风控：每条间延迟 2s+ 抖动
+      const results: Array<{ title: string; url: string; snippet: string }> = [];
+      for (const it of items) {
+        results.push({ ...it, url: it.url.startsWith("http") ? it.url : `https://www.xiaohongshu.com${it.url}` });
+        await page.waitForTimeout(2_000 + Math.floor(Math.random() * 1_500));
+      }
+      return results;
+    } finally {
+      await page.close();
+    }
+  }
+
   async publishReply(_externalCommentId: string, _text: string): Promise<ReplyResult> {
     // Xiaohongshu Creator Platform doesn't support programmatic reply via scraping.
     return { success: false, error: "Xiaohongshu reply not supported via scraping" };

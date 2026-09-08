@@ -107,6 +107,42 @@ interface NdjsonMessage {
  *  在此期间无 cliProcess 属正常,宽限期内仍视为活跃,防止 queue/watchdog 误判假死重复 spawn */
 const ACTIVITY_GRACE_MS = 120_000;
 
+/** H3 开机语音提醒:每作品每进程最多一次(2026-09-03) */
+const h3PowerOnVoiced = new Set<string>();
+
+/** 素材阶段会话启动且分镜确认需要 H3 时,语音提醒开机一次(web 横幅之外的听得见通道) */
+async function maybeVoiceH3PowerOn(work: Work): Promise<void> {
+  try {
+    if (h3PowerOnVoiced.has(work.id)) return;
+    const activeStep = Object.entries(work.pipeline ?? {}).find(([, s]) => s.status === "active")?.[0];
+    if (activeStep !== "assets") return;
+    // 分镜落盘有两处(与 quality-gate planCandidates 一致):plan.md 或 plan/storyboard.md
+    const sbCandidates = [join(dataDir, "works", work.id, "plan", "storyboard.md"), join(dataDir, "works", work.id, "plan.md")];
+    const sbPath = sbCandidates.find((p) => existsSync(p));
+    if (!sbPath) {
+      // 分镜未落盘(或路径漂移):按素材来源预估,与 reminders 端点 possible 档对齐
+      const src = (work as { assetSource?: string }).assetSource;
+      if (!src || !["ai", "auto", "smart"].includes(src)) return;
+      h3PowerOnVoiced.add(work.id);
+      const { voiceNotify } = await import("./services/voice-notify.js");
+      voiceNotify(
+        `作品《${work.title}》已进入素材阶段,可能需要 AI 生成视频,但 AutoDL 实例离线。如分镜包含 AI 视频镜头,请开机 AutoDL 实例`,
+        `h3-poweron:${work.id}`,
+      );
+      return;
+    }
+    const sb = await readFile(sbPath, "utf-8");
+    // 与 /api/autodl/reminders 同一判定正则,保持两个通道口径一致
+    if (!/ai_video|i2v|local-h3|H3|AI\s*生(成)?视频/i.test(sb)) return;
+    h3PowerOnVoiced.add(work.id);
+    const { voiceNotify } = await import("./services/voice-notify.js");
+    voiceNotify(
+      `作品《${work.title}》已进入素材阶段,分镜包含 AI 生成视频镜头,但 AutoDL 实例离线。请开机 AutoDL 实例,以免相关镜头被迫降级`,
+      `h3-poweron:${work.id}`,
+    );
+  } catch { /* 提醒通道故障不影响会话创建 */ }
+}
+
 export class WsBridge {
   private sessions: Map<string, WsSession> = new Map();
   private eventListeners: Map<string, Set<(event: string, data: unknown) => void>> = new Map();
@@ -361,7 +397,13 @@ export class WsBridge {
           // 此前此处统一说"用即梦替代",与 eco 门禁(/api/generate/video 代码级 403)直接互斥
           ? `- H3 本地生成(ComfyUI ${h3Base}):**已配置但当前离线**。本作品为 eco 成本档——禁止使用云端视频生成(即梦/Seedance,系统已在 API 层拦截 403),素材规划改用素材库/程序化渲染;确需 AI 视频镜头时阻塞并在交付说明中显著提醒"H3 离线,请开机后重试该镜头"`
           : `- H3 本地生成(ComfyUI ${h3Base}):**已配置但当前离线**(AutoDL 实例未启动或隧道断开)。本作品素材规划不要依赖 H3;用素材库/即梦/程序化渲染替代,并在最终交付说明中明确注明"H3 离线,已降级"。若后续恢复在线可改用。`;
-      if (!h3Online) console.warn(`[ws-bridge] H3 离线降级声明已注入:workId=${work.id}`);
+      if (!h3Online) {
+        console.warn(`[ws-bridge] H3 离线降级声明已注入:workId=${work.id}`);
+        // 2026-09-03 实测:开机提醒此前只有 web 横幅(前端轮询拉取),用户不在屏前
+        // 就完全无感。进入素材阶段且分镜确认含 AI 视频镜头时语音提醒一次
+        // (每作品每进程一次;时机=素材阶段开始,平衡"提前开机空烧 GPU 计费")。
+        void maybeVoiceH3PowerOn(work);
+      }
     }
 
     // 内部 API 契约(P2 提速 B,2026-08-17):agent 猜 code-scene 契约曾空转 35 分钟——
@@ -440,6 +482,7 @@ ${buildExplicitParamsBlock(work)}
     - **research（话题调研）阶段必读**：\`trend-research/modules/topic-scorecard.md\`（选题评分卡：五要素打分/三无否决/对标拆解法）
     - **plan（内容规划）阶段必读**：\`content-planning/modules/packaging-first.md\`（包装先行：标题四式/封面概念/承诺一致性校验，先于分镜执行）、\`content-planning/modules/hook-engineering.md\`（钩子工程：9类钩子模板/开场三步/多Hook版本）、\`content-planning/modules/script-structure.md\`（口播脚本五段式时间轴/结构选择器）、\`content-planning/modules/storyboard-grammar.md\`（分镜语法：景别功能/运镜理由/pattern interrupt）、\`content-planning/modules/visual-aesthetics.md\`（视觉美学）；财经/政策类内容追加 \`content-planning/modules/finance-compliance.md\`（合规红线）
     - **assets（素材准备）阶段必读**：\`asset-generation/modules/prompt-compiler.md\`（生成prompt编译：五槽公式/单运动约束/负面词库）、\`asset-generation/modules/quality-gate.md\`（生成质量自检）、\`asset-generation/modules/fallback-strategy.md\`（受阻降级决策树）
+    - **assets 阶段产出 shot-map.json（2026-09 新增，必做）**：素材齐备后，把每个分镜的「素材文件路径 + 首/中/尾 3 帧抽帧 + 旁白」写进 \`assets/shot-map.json\`（结构 \`{"shots":[{"i":1,"asset_file":"assets/clips/shot-01.mp4","frames":["assets/frames/shot-01-a.jpg","...","..."],"narration":"...","source":"..."}]}\`）。抽帧：\`ffmpeg -y -i 素材.mp4 -ss 首秒 -frames:v 1 帧.jpg\`（中间帧用 -ss 时长/2，尾帧 -sseof -1）。缺 asset_file 或缺 frames 会在 advance 机器门禁被拦截
     - **assembly（内容合成）阶段必读**：\`content-assembly/modules/audio-spec.md\`（声音设计：LUFS响度/三层混音/SFX音效层）、\`content-assembly/modules/color-grading.md\`（调色）、\`content-assembly/modules/subtitle-aesthetics.md\`（字幕美学）；卡点类内容追加 \`modules/beat-sync.md\`
     - \`modules/emotional-hooks.md\` — 情绪驱动内容公式（comedy 类适用）
     - 评审依据：各阶段评审标准见 \`content-evaluator/criteria/<step>.md\`，评审会逐条核对这些模块的执行情况
@@ -696,8 +739,12 @@ ${unattended
     const workId = session.workId;
 
     // 阶段模型路由：当前流水线步骤 → StageKey
+    // 流水线 v2(2026-09-07):content-research 走 research 档、plan-assets 走 plan 档
     const currentStep = Object.entries(work.pipeline).find(([, s]) => s.status === "active" || s.status === "pending")?.[0] ?? "plan";
-    const stageKey = (currentStep === "material-search" ? "research" : currentStep) as "research" | "plan" | "assets" | "assembly";
+    const stageKey = (currentStep === "material-search" ? "research"
+      : currentStep === "content-research" ? "research"
+      : currentStep === "plan-assets" ? "plan"
+      : currentStep) as "research" | "plan" | "assets" | "assembly";
     const { provider, model: usedModel } = resolveModelFor(config, stageKey in { research: 1, plan: 1, assets: 1, assembly: 1 } ? stageKey : "plan");
     session.routedStage = currentStep;
     session.routedModel = usedModel;
@@ -715,9 +762,10 @@ ${unattended
 
     let systemPrompt = await this.buildSystemPrompt(work);
     if (builtinTools.length) {
-      // 工具名映射声明:skills/提示词按 CLI 命名写死 WebSearch,API loop 下平台内置工具叫 $web_search;
-      // 不显式声明时模型会退回 curl 抓站(2026-08-17 验收实测:kimi 连续 100+ 次 bash curl 打转)
-      systemPrompt += `\n\n**联网搜索工具**:本环境的联网搜索工具名为 \`$web_search\`(即本文档与 skills 中提到的 WebSearch)。调用后平台自动执行搜索并注入结果,无需任何参数处理。**禁止用 curl/wget 抓取网页**代替搜索。`;
+      // 2026-09-03 起环境已有客户端 WebSearch 工具(全模型可用);$web_search 是平台服务端
+      // 执行的补充通道,两者可互换。不显式声明时模型会退回 curl 抓站(2026-08-17 验收实测:
+      // kimi 连续 100+ 次 bash curl 打转)
+      systemPrompt += `\n\n**联网搜索补充通道**:除客户端 \`WebSearch\` 工具外,你还有一个平台服务端执行的 \`$web_search\` 内置工具(调用后平台自动执行搜索并注入结果,无需参数)。两者任选,**禁止用 curl/wget 抓取网页**代替搜索。`;
     }
 
     const sink = createLoopEventSink(session, this);
@@ -856,6 +904,15 @@ ${unattended
           session.autoContinueTotal = (session.autoContinueTotal ?? 0) + 1;
           if ((session.autoContinueCount ?? 0) >= 15 || (session.autoContinueTotal ?? 0) >= 60) {
             console.warn(`[ws-bridge] auto_continue 放弃:${session.workId}/${stepKey} 空转${session.autoContinueCount} 总续跑${session.autoContinueTotal}`);
+            // 2026-09-03 实测缺陷:放弃此前只 console.warn,作品挂 active 无人知晓
+            // (watchdog 见会话"活着"会跳过)。走 failVisible 全局告警+语音,让人介入。
+            try {
+              const { failVisible } = await import("./services/fail-visible.js");
+              failVisible(
+                { workId: session.workId, stage: stepKey },
+                `自动续跑放弃:阶段「${stepKey}」连续空转 ${session.autoContinueCount} 次(总续跑 ${session.autoContinueTotal} 次),agent 疑似陷入死循环,请人工查看`,
+              );
+            } catch { /* 告警失败不阻断 */ }
             return;
           }
           logBridge("auto_continue", session.workId, { step: stepKey, stall: session.autoContinueCount });
@@ -940,8 +997,8 @@ ${unattended
       systemPrompt: [
         "你是专业的社交媒体趋势研究员。使用可用工具完成调研并把结果写入指定文件。",
         searchToolName
-          ? `联网搜索工具名为 \`${searchToolName}\`(即 WebSearch),平台自动执行并注入结果;禁止用 curl/wget 抓网页代替搜索。`
-          : "",
+          ? `首选客户端 WebSearch 工具联网搜索;\`${searchToolName}\` 是平台服务端执行的补充通道(自动注入结果);禁止用 curl/wget 抓网页代替搜索。`
+          : `使用客户端 WebSearch 工具联网搜索,WebFetch 抓取信源原文核查;禁止用 curl/wget 抓网页代替搜索。`,
       ].filter(Boolean).join("\n"),
       tools: buildCreatorTools({ bashBlocklist: config.llm?.guard?.bashBlocklist }),
       builtinTools,

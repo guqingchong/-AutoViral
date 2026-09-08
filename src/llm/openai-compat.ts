@@ -236,9 +236,10 @@ export class OpenAICompatProvider implements LlmProvider {
       }
     };
     let res: Response = await postOnce();
-    // 2026-08-31 实测实证:deepseek-v4-flash-vision-exp 等模型 max_tokens 上限仅 2048
-    // (错误码 1210 "限制数值范围[1,2048]"),loop 层提到 32768 后评审三轮 400 全灭,
-    // a4d 成片终审被冤杀。400 且报文指明上限时自动收敛到上限重试一次——
+    // 2026-08-31 实测:deepseek-v4-flash-vision-exp max_tokens 上限曾仅 2048
+    // (错误码 1210);2026-09-03 复测官方已取消该限制(131072 可正常请求,
+    // 4526 tokens 长输出 finish_reason=stop)。保留自动收敛兜底:若未来任何
+    // 模型再设上限,400 且报文指明上限时自动收敛到上限重试一次——
     // 比逐模型维护上限表皮实(新模型接入即自愈)。
     if (!res.ok && res.status === 400) {
       const peek = await res.clone().text().catch(() => "");
@@ -421,7 +422,7 @@ export class OpenAICompatProvider implements LlmProvider {
     return { stopReason, assistant: { role: "assistant", content: blocks } };
   }
 
-  async chatJson<T>(prompt: string, opts: { model: string; timeoutMs?: number; maxAttempts?: number; usageStage?: string; usageWorkId?: string }): Promise<T> {
+  async chatJson<T>(prompt: string, opts: { model: string; timeoutMs?: number; maxAttempts?: number; maxTokens?: number; usageStage?: string; usageWorkId?: string }): Promise<T> {
     return withRetry(async () => {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 120_000);
@@ -436,6 +437,11 @@ export class OpenAICompatProvider implements LlmProvider {
           body: JSON.stringify({
             model: opts.model,
             messages: [{ role: "user", content: prompt + JSON_OUTPUT_DISCIPLINE }],
+            // 2026-09-07 修复(模板生成"格式异常"根因):此前不传 max_tokens,走供应商缺省
+            // (deepseek 缺省 4096/8192),整片模板 HTML(15k+ tokens)被静默截断 →
+            // JSON 不闭合 → "无法从响应提取 JSON"误导性报错。显式给足上限;
+            // 供应商若报错带 cap,400 收敛逻辑见 streamRequest(此处模型实测 131072 可请求)。
+            max_tokens: opts.maxTokens ?? 32768,
             stream: false,
           }),
           signal: controller.signal,
@@ -460,6 +466,12 @@ export class OpenAICompatProvider implements LlmProvider {
           });
         }
         const text: string = data.choices?.[0]?.message?.content ?? "";
+        // 2026-09-07:finish_reason=length(输出达上限截断)优先于 JSON 提取报错——
+        // 截断是"上限不够"而非"格式异常",重试同参数无意义(noRetry),报错直指根因。
+        const finishReason = data.choices?.[0]?.finish_reason;
+        if (finishReason === "length") {
+          throw noRetry(new Error(`模型输出达 max_tokens(${opts.maxTokens ?? 32768})被截断,JSON 不完整——请缩小产物体积或调高上限`));
+        }
         const extracted = extractJsonFromText(text);
         if (extracted === undefined || extracted === null) {
           throw new Error(`chatJson 无法从响应提取 JSON: ${text.slice(0, 200)}`);

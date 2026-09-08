@@ -69,7 +69,17 @@ describe("eval_blocked 三轮卡死复现", () => {
     const work = await createWork({
       title: "eval_blocked 测试", type: "short-video", platforms: ["douyin"],
       evaluationMode: true,
+      // 流水线重构(2026-09-07):本测试验证旧五步的评审熔断行为,显式钉 v1
+      // (v2 作品无 "research" step,advance 会被守卫 400)
+      explicitParams: { pipelineVersion: 1 },
     } as never);
+
+    // X15(2026-09-07)契约门禁:research 推进要求 facts.json/script.json 落盘,
+    // 测试补最小契约文件(否则 advance 被机器门禁 400 拦截,到不了评审环节)
+    const { writeFile } = await import("node:fs/promises");
+    const workDir = join(dir, "works", work.id);
+    await writeFile(join(workDir, "facts.json"), JSON.stringify({ claims: [] }), "utf-8");
+    await writeFile(join(workDir, "script.json"), JSON.stringify({ scenes: [] }), "utf-8");
 
     for (let attempt = 1; attempt <= 3; attempt++) {
       const res = await apiRoutes.request(`/api/works/${work.id}/pipeline/advance`, {

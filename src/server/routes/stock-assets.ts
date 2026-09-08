@@ -1,4 +1,4 @@
-﻿import { Hono } from "hono";
+import { Hono } from "hono";
 import { searchStockAssets, downloadStockAsset, getConfiguredStockProviders } from "../../services/stock-asset-service.js";
 import type { StockProvider } from "../../services/stock-asset-service.js";
 
@@ -39,7 +39,7 @@ stockAssetRoutes.post("/download-batch", async (c) => {
   if (items.length > 20) return c.json({ error: "单次最多 20 项" }, 400);
   const results: Array<{ ok: boolean; name?: string; asset?: unknown; error?: string }> = new Array(items.length);
   let cursor = 0;
-  const workers = Array.from({ length: 3 }, async () => {
+  const workers = Array.from({ length: 6 }, async () => {
     while (cursor < items.length) {
       const i = cursor++;
       const it = items[i];

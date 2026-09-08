@@ -7,6 +7,9 @@ import * as queueRepo from "../db/work-queue-repo.js";
 import { latestTimestamp, parseTsMs } from "../db/time.js";
 import { kickRunner } from "./work-queue.js";
 import { failVisible } from "./fail-visible.js";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
+import { dataDir } from "../config.js";
 
 /** 停滞阈值：最近活动超过 10 分钟视为停滞 */
 export const STALL_MS = 10 * 60 * 1000;
@@ -87,11 +90,42 @@ export function findStalledWorks(now: Date = new Date()): StalledWork[] {
 
 let timer: ReturnType<typeof setInterval> | null = null;
 let scanning = false;
-/** 批次7.8:扩展维度的告警去重(每个对象每个维度只告警一次,防 60s 扫描刷屏) */
-const alerted = new Set<string>();
+/** 批次7.8:扩展维度的告警去重(每个对象每个维度只告警一次,防 60s 扫描刷屏)
+ *  2026-09-03 修复:改为持久化 24h TTL——此前纯内存 Set,服务重启即清空,
+ *  老作品 reviewing 滞留告警在每次重启时整批重播+连环语音(daemon.log 刷屏实证) */
+const ALERT_TTL_MS = 24 * 3600_000;
+const alerted = new Map<string, number>();
+let alertsLoaded = false;
+
+function alertsFile(): string {
+  return join(dataDir, "tmp", "watchdog-alerts.json");
+}
+
+function loadAlerts(): void {
+  if (alertsLoaded) return;
+  alertsLoaded = true;
+  try {
+    const raw = readFileSync(alertsFile(), "utf-8");
+    const obj = JSON.parse(raw) as Record<string, number>;
+    const now = Date.now();
+    for (const [k, t] of Object.entries(obj)) {
+      if (now - t < ALERT_TTL_MS) alerted.set(k, t);
+    }
+  } catch { /* 无文件/损坏按空处理 */ }
+}
+
+function saveAlerts(): void {
+  try {
+    mkdirSync(join(dataDir, "tmp"), { recursive: true });
+    writeFileSync(alertsFile(), JSON.stringify(Object.fromEntries(alerted)), "utf-8");
+  } catch { /* 持久化失败不阻断 */ }
+}
+
 const alertOnce = (key: string, scope: { workId?: string; stage?: string }, reason: string): void => {
+  loadAlerts();
   if (alerted.has(key)) return;
-  alerted.add(key);
+  alerted.set(key, Date.now());
+  saveAlerts();
   failVisible(scope, reason);
 };
 

@@ -108,7 +108,8 @@ export function runCLI(): void {
       await writeFile(PID_FILE, String(process.pid), "utf-8");
 
       console.log(`Starting AutoViral server (PID ${process.pid})`);
-      console.log(`Model: ${config.model}`);
+      // X19(2026-09-07,S5):死配置 config.model 已删,展示读真实路由 llm.models
+      console.log(`Model: ${config.llm?.models?.research ?? config.llm?.defaultProvider ?? "(未配置大模型直连)"}`);
 
       // Start web server (initializes providers, shared dirs, etc.)
       const { startServer } = await import("./server/index.js");
@@ -223,6 +224,19 @@ export function runCLI(): void {
       const migrated = await migrateLegacyWorks();
       console.log(`Migrated ${migrated} legacy works to SQLite.`);
       console.log(`Config directory: ${getConfigDir()}`);
+    });
+
+  program
+    .command("clean-works")
+    .description("清理 works 目录残留(不在 works 表 + 超30天无活动)——手动触发,改造项 S5")
+    .option("--days <n>", "无活动天数阈值(默认30)", "30")
+    .option("--dry-run", "只统计不实删")
+    .action(async (opts?: { days?: string; dryRun?: boolean }) => {
+      const { cleanWorksDirs } = await import("./services/works-cleanup.js");
+      const days = Number(opts?.days ?? 30) || 30;
+      const r = await cleanWorksDirs(days, opts?.dryRun ?? false);
+      console.log(opts?.dryRun ? `[dry-run] 会删除 ${r.deleted} 个残留目录(保留 ${r.kept} 个),未实删` : `清理完成: 已删除 ${r.deleted} 个残留目录(保留 ${r.kept} 个)`);
+      console.log("提示: 删除不可恢复,建议先 autocode backup 再执行");
     });
 
   program

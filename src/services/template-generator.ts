@@ -132,6 +132,12 @@ async function generateTemplatesBatch(input: GenerateTemplatesInput = {}): Promi
     "13. 空心边框用 stroke 表达:shape 层 fill:'#RRGGBB' 可选 stroke:{width:2-4,color} 画描边框;不要叠两个矩形模拟边框",
     "14. 每个画面至少一个有入场动效(fadein/slidein)的元素,但同一画面动效 ≤3 个,避免杂乱",
     "15. 视频/图片槽位(2026-08-19「假窗口」事故后新增):若版式包含主画面区/视频窗口,必须声明 type:\"video\"(或 \"image\")的变量(如 main_video),并添加 {type:\"video\", source:\"{{main_video}}\", position/size 与窗口一致} 的图层;窗口边框/衬底 shape 保留在视频层之下。禁止用色块+提示文字冒充视频窗口——那样渲染出来是空框,真实素材无处安放",
+    // 分页结构(2026-09-02 分页模板):用户在生成面板勾选「分页结构」时 freeText 带标记,
+    // 此处升级为硬性纪律——三幕必须各以一块 ≥50% 画布的 shape 底版开头,分幕检测(detectScenes)
+    // 靠锚定层 start 聚类,无底版则分幕灯箱/故事板分图全部失效
+    ...(elements.freeText?.includes("分页结构") ? [
+      "16. 分页结构(用户指定,硬性):模板分三幕——封面幕(start=0,1.5-2.5s,大标题冲击)/正文幕(主体信息)/结尾幕(最后 2-3s,收束+关注引导);每幕必须以一块占画布 ≥50% 的 shape 底版图层开始(该幕所有图层 start 落在底版区间内),幕间风格统一(同色系同字体)",
+    ] : []),
     "",
     "## 变量",
     "把主题相关文字抽象为变量（如 topic, card1_title, card1_body, stat_value, cta_text 等，按版式需要增减）。",

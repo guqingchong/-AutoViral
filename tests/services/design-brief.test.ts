@@ -80,3 +80,36 @@ describe("normalizeBrief(形状防御)", () => {
     expect(out).toEqual(sampleBrief);
   });
 });
+
+describe("分页设计稿(2026-09-02 分页模板)", () => {
+  it("multiPage 时 prompt 携带 pages 形状与三页纪律", async () => {
+    const { buildBriefPrompt } = await import("../../src/services/design-brief.js");
+    const p = buildBriefPrompt({ style: "深蓝科技", orientation: "portrait", multiPage: true });
+    expect(p).toContain('"pages"');
+    expect(p).toContain("cover/content/ending");
+    expect(p).toContain("分页纪律");
+    const single = buildBriefPrompt({ style: "深蓝科技", orientation: "portrait" });
+    expect(single).not.toContain("分页纪律");
+  });
+
+  it("normalizeBrief 收敛 pages:非法 role 丢弃,layout 逐条规范化", async () => {
+    const { normalizeBrief } = await import("../../src/services/design-brief.js");
+    const out = normalizeBrief({
+      pages: [
+        { role: "cover", goal: "抓眼球", layout: [{ region: "标题", content: "title", position: "居中" }], motionOverride: "弹入" },
+        { role: "junk", goal: "坏页", layout: [] },
+        { role: "ending", layout: [{ region: 1 }] },
+      ],
+    });
+    expect(out.pages).toHaveLength(2);
+    expect(out.pages![0].role).toBe("cover");
+    expect(out.pages![0].motionOverride).toBe("弹入");
+    expect(out.pages![1].layout[0]).toEqual({ region: "", content: "", position: "" });
+  });
+
+  it("无 pages 字段时不输出 pages 键(向后兼容)", async () => {
+    const { normalizeBrief } = await import("../../src/services/design-brief.js");
+    const out = normalizeBrief({ styleSummary: "x" });
+    expect("pages" in out).toBe(false);
+  });
+});

@@ -100,6 +100,8 @@ export interface Timeline {
   layers: TimelineLayer[];
   audio: AudioTrack[];
   subtitles?: SubtitleTrack;
+  /** R3 字幕样式预设（douyin-highlight/douyin-bold/xhs-soft/minimal），缺省 douyin-highlight */
+  subtitleStyle?: string;
   /** Transitions between sequential media layers (rendered via xfade). */
   transitions?: Transition[];
 }

@@ -232,7 +232,58 @@ export function deleteTemplate(id: string): boolean {
 /** 渲染使用一次模板即 +1（自进化信号：高频模板的要素组合会在生成时被优先参考） */
 export function incrementTemplateUsage(id: string): void {
   const db = getDb();
+  const row = db.prepare("SELECT usage_count FROM templates WHERE id = ?").get(id) as { usage_count: number } | undefined;
+  // M5：usage≥10 的高频模板自动触发回归（3s demo + 帧图 diff + 复杂度预检），
+  // 避免高频模板静默劣化（如 tpl_code_f752958d usage=43 却 8 连败超时）。
+  if (row && row.usage_count >= 10) void triggerTemplateRegression(id);
   db.prepare("UPDATE templates SET usage_count = usage_count + 1 WHERE id = ?").run(id);
+}
+
+/**
+ * M5(X17 验收修复,2026-09-07):模板回归实装——高频模板(usage≥10)每次被使用时
+ * 后台跑一次"复杂度预检 + 3s benchmark 实测":
+ *  - 从 layers JSON 提取 customHtml(kind=code 模板的 HTML 存于 layers[0].customHtml);
+ *  - precheckTemplate 静态快筛 + benchmarkFrame 3 秒动态实测(渲染预算终判);
+ *  - 失败 → stability 连败计数 +1(GUI 可按 stability 标记"待减重");
+ *  - 通过 → stability 复位 0。
+ * 每进程每模板只跑一次(防每次渲染都触发);自身异常不阻断渲染主流程。
+ */
+const regressionRanThisProcess = new Set<string>();
+
+function triggerTemplateRegression(id: string): void {
+  if (regressionRanThisProcess.has(id)) return;
+  regressionRanThisProcess.add(id);
+  void (async () => {
+    try {
+      const tpl = getTemplate(id);
+      if (!tpl || tpl.kind !== "code") return;
+      // layers → customHtml(模板 HTML 的实际存储位,tpl_code_f752958d 实测如此;
+      // rowToTemplate 已把 layers 解析成对象数组,直接用)
+      const layers = (tpl.layers ?? []) as Array<{ customHtml?: string }>;
+      const html = layers.find((l) => l?.customHtml)?.customHtml ?? "";
+      if (!html) return;
+
+      const { precheckTemplate, benchmarkFrame } = await import("../services/code-scene.js");
+      const problems: string[] = [];
+      const pre = precheckTemplate(html);
+      if (pre) problems.push(pre);
+      if (!pre) {
+        const bench = await benchmarkFrame(html, 3);
+        if (bench) problems.push(bench);
+      }
+      const db = getDb();
+      if (problems.length) {
+        db.prepare("UPDATE templates SET stability = COALESCE(stability, 0) + 1, updated_at = ? WHERE id = ?")
+          .run(new Date().toISOString(), id);
+        console.warn(`[templates] 回归未通过 ${id}(stability+1):${problems.join("; ")}`);
+      } else {
+        db.prepare("UPDATE templates SET stability = 0, updated_at = ? WHERE id = ?")
+          .run(new Date().toISOString(), id);
+      }
+    } catch (err) {
+      console.warn("[templates] 模板回归异常(不阻断):", id, err instanceof Error ? err.message : err);
+    }
+  })();
 }
 
 /** 使用频次最高的模板（生成 prompt 的偏好信号来源） */

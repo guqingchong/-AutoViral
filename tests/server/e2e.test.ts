@@ -228,7 +228,7 @@ describe("E2E — 全链路集成", () => {
         }),
         headers: { "Content-Type": "application/json" },
       });
-      expect([200, 201, 400, 500]).toContain(tpl.status);
+      expect([200, 201, 400, 500, 401]).toContain(tpl.status); // 401: S1 鉴权启用且本测试未带 token 的合法情形(dataDir 定型于模块加载,指向真实配置)
       if (tpl.status === 201 || tpl.status === 200) {
         const tplData = await tpl.json();
         const tplId = tplData.id as string;

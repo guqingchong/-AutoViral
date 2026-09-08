@@ -100,7 +100,8 @@ export async function runPipeline(wsBridge: WsBridge, config: RunConfig): Promis
   const startedAt = new Date().toISOString();
   const stepTimeout = config.stepTimeout ?? 300000;
   const appConfig = await loadConfig();
-  const model = config.model ?? appConfig.model;
+  // X19(2026-09-07,S5):appConfig.model 死配置已删,回退到真实路由(research 档)
+  const model = config.model ?? appConfig.llm?.models?.research ?? "";
 
   const result: RunResult = {
     runId,

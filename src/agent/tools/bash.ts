@@ -71,7 +71,7 @@ export function bashExecutor(blocklist?: string[]): ToolExecutor {
       if (/^\s*(:|true|echo\s*)\s*$/.test(command)) {
         return "检测到空操作命令(无实际效果)。如果你不确定下一步,请回顾当前阶段指令;" +
           "如需推进流水线,执行 curl -X POST http://localhost:3271/api/works/<作品ID>/pipeline/advance " +
-          "(body: {\"completedStep\":\"当前阶段\",\"nextStep\":\"下一阶段\"});如需联网搜索,调用 $web_search。禁止再用空命令占位。";
+          "(body: {\"completedStep\":\"当前阶段\",\"nextStep\":\"下一阶段\"});如需联网搜索,调用 WebSearch 工具。禁止再用空命令占位。";
       }
       // 2026-08-28 批次3.2:外网抓站精确拦截(实证:4 作品 curl 抓站 509 次 vs $web_search 8 次,
       // 作品目录散落 20+ 抓站残片)。纪律:内部 API curl 占 70-90%(advance/stock-assets 等),
@@ -84,7 +84,7 @@ export function bashExecutor(blocklist?: string[]): ToolExecutor {
         if (external.length) {
           return (
             `拦截:禁止用 curl/wget 直连外网(${external[0].slice(0, 60)})。换路:` +
-            `①联网搜索/调研 → 调用 $web_search 工具;②素材下载 → POST /api/stock-assets/download;` +
+            `①联网搜索/调研 → 调用 WebSearch 工具;②素材下载 → POST /api/stock-assets/download;` +
             `③全网视频下载 → yt-dlp;④内部 API → curl localhost:3271 不受影响。` +
             `外网抓取 HTML 页面的成功率极低且已被评审判定为无效路径,请改用上述通道。`
           );

@@ -6,7 +6,7 @@
 
 ## 评审维度
 
-### 1. 交付物完整性 (deliverables) 【硬性·机器可判】
+### 1. 交付物完整性 (deliverables) 【硬性·机器可判】 min_ai: 8
 - `output/cards/` 存在且含 ≥2 张 PNG(封面 01-cover + 至少 1 张内容卡)
 - 无 <10KB 的疑似空白/渲染残缺卡片
 - 发布文案文件存在(output/publish-text.md 或等价物)

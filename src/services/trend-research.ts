@@ -1,4 +1,4 @@
-﻿import { execFile } from "node:child_process";
+import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,11 +21,13 @@ const PROJECT_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const SCRIPTS_DIR = join(PROJECT_ROOT, "skills", "trend-research", "scripts");
 
 const PYTHON_BIN = process.platform === "win32" ? "python" : "python3";
+// 2026-09-07:脚本侧已强制 stdout UTF-8,此处环境变量双保险(防脚本被旧副本覆盖回归)
+const PY_ENV = { ...process.env, PYTHONIOENCODING: "utf-8" };
 
 export async function fetchTrendData(platform: string, interests: string[] = []): Promise<string> {
   try {
     if (platform === "douyin") {
-      const { stdout } = await execFileAsync(PYTHON_BIN, [join(SCRIPTS_DIR, "douyin_hot_search.py"), "--top", "30"], { timeout: 30000 });
+      const { stdout } = await execFileAsync(PYTHON_BIN, [join(SCRIPTS_DIR, "douyin_hot_search.py"), "--top", "30"], { timeout: 30000, env: PY_ENV });
       return stdout;
     }
     // 知乎：配置了数据平台 Secret 时优先官方热榜 + 关注领域搜索素材（失败/未配置退回 newsnow）
@@ -33,7 +35,7 @@ export async function fetchTrendData(platform: string, interests: string[] = [])
       const official = await fetchZhihuResearchData(interests);
       if (official) return official;
     }
-    const { stdout } = await execFileAsync(PYTHON_BIN, [join(SCRIPTS_DIR, "newsnow_trends.py"), platform, "--top", "20"], { timeout: 30000 });
+    const { stdout } = await execFileAsync(PYTHON_BIN, [join(SCRIPTS_DIR, "newsnow_trends.py"), platform, "--top", "20"], { timeout: 30000, env: PY_ENV });
     return stdout;
   } catch (err) {
     console.error(`[trends] script error for ${platform} (cmd: ${PYTHON_BIN}):`, err instanceof Error ? err.message : err);
@@ -129,18 +131,53 @@ async function collectTrendsInner(platforms: string[], interests: string[] = [],
     p.status = "running";
     report();
     try {
-      const raw = await fetchTrendData(platform, interests);
+      let raw = await fetchTrendData(platform, interests);
+      // 2026-09-07 修复:newsnow 源故障时脚本是"exit 0 + 空 items"软失败(实测 channels 500),
+      // 绕过 !raw 幻觉闸照样让 LLM 凭记忆编造。空载荷视同采集失败,走下方联网兜底。
+      if (raw) {
+        try {
+          const j = JSON.parse(raw) as { platforms?: Array<{ items?: unknown[]; status?: string }>; items?: unknown[] };
+          const empty = Array.isArray(j.platforms)
+            ? j.platforms.every((p) => !p.items?.length)
+            : Array.isArray(j.items) ? j.items.length === 0 : false;
+          if (empty) {
+            console.warn(`[trends] ${platform} 采集返回空载荷(源站故障软失败),按采集失败处理`);
+            raw = "";
+          }
+        } catch { /* 非 JSON(douyin 原始文本)不动 */ }
+      }
       // 2026-08-28 批次5.1 幻觉闸:采集失败(脚本异常/网络断)且无内置搜索能力时,
       // LLM 会凭先验编造"最新趋势"照常入库(v2 病根 0)——拦在分析前,平台标 error
       // 透出到任务 error 与前端,宁缺毋假。
+      if (!raw) {
+        // 2026-09-07 修复:幻觉闸的初衷是"禁止凭记忆编造",不是"禁止调研"——
+        // F1 起客户端 WebSearch(Bing RSS)全模型可用,热搜脚本失败时先用真实联网
+        // 检索结果兜底(带 tier 信源标记),检索也失败才拦截。
+        try {
+          const { webSearch } = await import("./web-search-service.js");
+          const queries = interests.length ? interests.slice(0, 3) : ["今日热点新闻"];
+          const hits: Array<{ title: string; url: string; snippet: string; tier?: string }> = [];
+          for (const q of queries) {
+            try { hits.push(...await webSearch(`${q} 最新进展`, 6)); } catch { /* 单查询失败继续 */ }
+          }
+          if (hits.length) {
+            raw = JSON.stringify({
+              fallback: "websearch",
+              note: `本平台热搜采集失败,以下为联网搜索(Bing)真实结果,信源等级见 tier`,
+              items: hits.map((h) => ({ title: h.title, url: h.url, snippet: h.snippet, tier: h.tier })),
+            });
+            console.warn(`[trends] ${platform} 热搜采集失败,已用 WebSearch 兜底(${hits.length} 条真实结果)`);
+          }
+        } catch { /* 兜底检索失败走原拦截 */ }
+      }
       if (!raw) {
         const config = await loadConfig();
         const { provider } = resolveModelFor(config, "research");
         const hasSearch = !!PROVIDER_PRESETS[provider.name]?.builtinSearchTool;
         if (!hasSearch) {
           p.status = "error";
-          p.error = "热搜采集失败且当前 research 模型无联网搜索能力,已拦截(防幻觉选题入库)。" +
-            "请检查采集脚本,或为 research 档配置 kimi(内置 $web_search)后重试";
+          p.error = "热搜采集失败且联网兜底也无结果,已拦截(防幻觉选题入库)。" +
+            "请检查采集脚本与网络后重试";
           report();
           return;
         }
@@ -325,7 +362,7 @@ async function analyzeTrendsWithAgent(platform: string, rawData: string, interes
       const parsed = await chatJsonWithSearch<{ topics?: any[] }>(provider, model, prompt, {
         timeoutMs: 480_000, // 8 分钟：深度调研要求多轮搜索，3 分钟必被腰斩
         maxRounds: 12,
-        builtinSearchTool,
+        // F6:去掉 builtinSearchTool(消除"只有 Kimi 能联网"的 $web_search 依赖)——保留内置搜索时改走 WebSearch 客户端编排
       });
       const topics = (parsed.topics ?? []).map((t: any) => ({
         platform,

@@ -131,6 +131,43 @@ export class DouyinScraper implements PlatformAdapter {
     }
   }
 
+  /**
+   * 抖音站内搜索（2026-09 F6）。复用同一 persistent context（browser-profiles
+   * 同一画像，不重导 cookie），打开搜索结果页抓视频列表。
+   * 【待实测校准】DOM 选择器为初版，页面结构变化可能失效。
+   * 防风控：每条结果间延迟 ≥2s + 抖动。
+   */
+  async search(query: string, limit = 5): Promise<{ title: string; url: string; snippet: string }[]> {
+    const ctx = await getContext(this.contextKey);
+    const page = await ctx.newPage();
+    try {
+      await page.goto(`https://www.douyin.com/search/${encodeURIComponent(query)}`, {
+        waitUntil: "domcontentloaded",
+        timeout: 30_000,
+      });
+      // 【待实测校准】等待视频列表渲染；选择器基于常见视频卡 a[href*="/video/"]
+      await page.waitForSelector('a[href*="/video/"]', { timeout: 15_000 }).catch(() => {});
+      const items = await page.$$eval(
+        'a[href*="/video/"]',
+        (els) =>
+          els.slice(0, limit).map((e) => ({
+            title: (e.querySelector("[title]")?.getAttribute("title") ?? e.textContent ?? "").trim(),
+            url: e.getAttribute("href") ?? "",
+            snippet: "",
+          })),
+      );
+      // 防风控：每条间延迟 2s+ 抖动
+      const results: Array<{ title: string; url: string; snippet: string }> = [];
+      for (const it of items) {
+        results.push({ ...it, url: it.url.startsWith("http") ? it.url : `https://www.douyin.com${it.url}` });
+        await page.waitForTimeout(2_000 + Math.floor(Math.random() * 1_500));
+      }
+      return results;
+    } finally {
+      await page.close();
+    }
+  }
+
   async publishReply(_externalCommentId: string, _text: string): Promise<ReplyResult> {
     // Douyin Creator Portal doesn't expose comment reply via scraping easily.
     // Replies must be done manually or through the mobile API (out of scope).

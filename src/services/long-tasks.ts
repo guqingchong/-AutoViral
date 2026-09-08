@@ -9,7 +9,7 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { join, dirname, resolve } from "node:path";
+import { join, dirname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, appendFile, rm } from "node:fs/promises";
 import { getDb } from "../db/connection.js";
@@ -40,6 +40,47 @@ function rowToTask(row: Record<string, unknown>): LongTask {
 export function getLongTask(id: string): LongTask | undefined {
   const row = getDb().prepare("SELECT * FROM long_tasks WHERE id = ?").get(id) as Record<string, unknown> | undefined;
   return row ? rowToTask(row) : undefined;
+}
+
+/**
+ * 指定作品是否存在运行中的长任务(status='running' 且 work_id=?)。
+ *
+ * 供回合 guard 使用:后台长任务(烧字幕/渲染/ffmpeg 等)运行中时,
+ * 不因回合超时打断/杀 job——只断 LLM 轮次,让 job 跑完再由回调接管。
+ */
+export function hasRunningLongTask(workId: string): boolean {
+  const row = getDb()
+    .prepare("SELECT id FROM long_tasks WHERE work_id = ? AND status = 'running' LIMIT 1")
+    .get(workId) as { id: string } | undefined;
+  return Boolean(row);
+}
+
+// ── 任务完成回调注册(进程内 Map,2026-09 回合 guard 解耦) ──────────────
+// 长任务完成/失败后除 broadcastProgress 外,通知 agent 侧注册的处理器,
+// 让 agent 拿到最终 task 结果后推进下一步(回合已断、job 仍在跑的场景)。
+
+const taskCallbacks = new Map<string, ((task: LongTask) => void)[]>();
+
+/** 注册某类长任务的完成/失败回调(kind 精确匹配)。返回注销函数。 */
+export function registerTaskCallback(kind: string, cb: (task: LongTask) => void): () => void {
+  const list = taskCallbacks.get(kind) ?? [];
+  list.push(cb);
+  taskCallbacks.set(kind, list);
+  return () => {
+    const arr = taskCallbacks.get(kind);
+    if (!arr) return;
+    const idx = arr.indexOf(cb);
+    if (idx >= 0) arr.splice(idx, 1);
+    if (!arr.length) taskCallbacks.delete(kind);
+  };
+}
+
+function notifyTaskCallbacks(task: LongTask): void {
+  const list = taskCallbacks.get(task.kind);
+  if (!list?.length) return;
+  for (const cb of list) {
+    try { cb(task); } catch { /* 单回调异常不阻断后续回调 */ }
+  }
 }
 
 export function listLongTasks(workId?: string): LongTask[] {
@@ -89,6 +130,7 @@ export async function submitAsrTask(opts: {
     clearInterval(heartbeat);
     getDb().prepare("UPDATE long_tasks SET status = 'failed', error = ?, updated_at = ? WHERE id = ?")
       .run(`spawn 失败: ${err.message}`, new Date().toISOString(), id);
+    notifyTaskCallbacks(getLongTask(id)!);
   });
   child.on("close", (code) => {
     clearInterval(heartbeat);
@@ -101,6 +143,7 @@ export async function submitAsrTask(opts: {
         new Date().toISOString(),
         id,
       );
+    notifyTaskCallbacks(getLongTask(id)!);
     broadcastProgress({
       workId: opts.workId,
       kind: "system",
@@ -153,6 +196,7 @@ export async function submitRenderBatchTask(opts: {
         new Date().toISOString(),
         id,
       );
+    notifyTaskCallbacks(getLongTask(id)!);
     broadcastProgress({
       workId: opts.workId,
       kind: "system",
@@ -163,6 +207,7 @@ export async function submitRenderBatchTask(opts: {
   })().catch((err) => {
     getDb().prepare("UPDATE long_tasks SET status = 'failed', error = ?, updated_at = ? WHERE id = ?")
       .run(String(err), new Date().toISOString(), id);
+    notifyTaskCallbacks(getLongTask(id)!);
   });
 
   return getLongTask(id)!;
@@ -188,14 +233,56 @@ export interface FfmpegJobSpec {
   startTime?: number;
 }
 
-function assertPathInWorkDir(workDir: string, p: string): string {
+export function assertPathInWorkDir(workDir: string, p: string): string {
   const abs = resolve(workDir, p);
-  if (!abs.startsWith(workDir)) throw new Error(`路径越界(必须在作品目录内): ${p}`);
+  if (abs !== workDir && !abs.startsWith(workDir + sep) && !abs.startsWith(workDir + "/")) {
+    throw new Error(`路径越界(必须在作品目录内): ${p}`);
+  }
   return abs;
 }
 
-/** 服务端拼装 ffmpeg 参数(纯函数,便于测试) */
-export function buildFfmpegArgs(spec: FfmpegJobSpec, workDir: string, concatListPath: string): string[] {
+/**
+ * 合成长任务(X3 验收修复,2026-09-07):conform 流水线作业化。
+ * 此前 POST /api/works/:id/conform 在 HTTP 请求内同步跑完——长片合成挂住请求,
+ * 且正是"被 30 分钟回合上限打断"要解决的问题在服务端化后复发。
+ * 现与 render-batch 同构:提交即返 taskId,进程内异步执行,完成事件注入 agent。
+ */
+export async function submitConformTask(opts: {
+  workId: string;
+  spec: import("./conform.js").ConformSpec;
+}): Promise<LongTask> {
+  const id = `lt_${randomUUID().slice(0, 8)}`;
+  const now = new Date().toISOString();
+  getDb().prepare(
+    `INSERT INTO long_tasks (id, kind, work_id, status, input_json, created_at, updated_at)
+     VALUES (?, 'conform', ?, 'running', ?, ?, ?)`,
+  ).run(id, opts.workId, JSON.stringify({ output: opts.spec.output, segments: opts.spec.segments.length }), now, now);
+
+  broadcastProgress({ workId: opts.workId, kind: "system", text: `合成流水线已提交:${opts.spec.segments.length} 个分段(task ${id}),完成时自动通知` });
+
+  (async () => {
+    const { conformWork } = await import("./conform.js");
+    const result = await conformWork(opts.spec);
+    getDb().prepare("UPDATE long_tasks SET status = 'done', output_json = ?, updated_at = ? WHERE id = ?")
+      .run(JSON.stringify({ outputPath: result.output }), new Date().toISOString(), id);
+    notifyTaskCallbacks(getLongTask(id)!);
+    broadcastProgress({ workId: opts.workId, kind: "system", text: `✅ 合成完成:${result.output}` });
+  })().catch((err) => {
+    const msg = err instanceof Error ? err.message : String(err);
+    getDb().prepare("UPDATE long_tasks SET status = 'failed', error = ?, updated_at = ? WHERE id = ?")
+      .run(msg, new Date().toISOString(), id);
+    notifyTaskCallbacks(getLongTask(id)!);
+    broadcastProgress({ workId: opts.workId, kind: "system", text: `❌ 合成失败(task ${id}):${msg}` });
+  });
+
+  return getLongTask(id)!;
+}
+
+/** 服务端拼装 ffmpeg 参数(纯函数,便于测试)
+ *  X12(2026-09-07):重编码 op(burn/tpad)的视频参数由调用方经 videoEncoderArgs() 传入
+ *  (QSV→NVENC→CPU);缺省回落 libx264 veryfast crf18,保持测试与旧调用方兼容。 */
+export function buildFfmpegArgs(spec: FfmpegJobSpec, workDir: string, concatListPath: string, encArgs?: string[]): string[] {
+  const videoArgs = encArgs ?? ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p"];
   const inputAbs = spec.input ? assertPathInWorkDir(workDir, spec.input) : undefined;
   const outputAbs = assertPathInWorkDir(workDir, spec.output);
   switch (spec.op) {
@@ -209,7 +296,7 @@ export function buildFfmpegArgs(spec: FfmpegJobSpec, workDir: string, concatList
       if (!inputAbs || !spec.ass) throw new Error("burn 需要 input 与 ass");
       const assAbs = assertPathInWorkDir(workDir, spec.ass);
       return ["-i", inputAbs, "-vf", `ass='${escapeFilterPath(assAbs)}'`,
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
+        ...videoArgs,
         "-c:a", "copy", "-y", outputAbs];
     }
     case "loudnorm": {
@@ -220,7 +307,7 @@ export function buildFfmpegArgs(spec: FfmpegJobSpec, workDir: string, concatList
     case "tpad": {
       if (!inputAbs || !(spec.duration! > 0)) throw new Error("tpad 需要 input 与 duration>0");
       return ["-i", inputAbs, "-vf", `tpad=stop_mode=clone:stop_duration=${spec.duration!.toFixed(3)}`,
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
+        ...videoArgs,
         "-an", "-y", outputAbs];
     }
     case "trim": {
@@ -239,8 +326,11 @@ export async function submitFfmpegTask(opts: { workId: string; spec: FfmpegJobSp
   const workDir = join(dataDir, "works", opts.workId);
   const id = `lt_${randomUUID().slice(0, 8)}`;
   const concatListPath = join(workDir, "output", `${id}.concat.txt`);
+  // X12(2026-09-07,R1):重编码 op 接 QSV 硬件加速(探测失败自动回落 CPU 参数)
+  const { videoEncoderArgs } = await import("./encoder.js");
+  const encArgs = await videoEncoderArgs();
   // 参数校验+命令拼装在提交期完成(失败即 400,不产生垃圾任务)
-  const args = buildFfmpegArgs(opts.spec, workDir, concatListPath);
+  const args = buildFfmpegArgs(opts.spec, workDir, concatListPath, encArgs);
 
   const now = new Date().toISOString();
   getDb().prepare(
@@ -271,6 +361,7 @@ export async function submitFfmpegTask(opts: { workId: string; spec: FfmpegJobSp
     clearInterval(heartbeat);
     getDb().prepare("UPDATE long_tasks SET status = 'failed', error = ?, updated_at = ? WHERE id = ?")
       .run(`spawn 失败: ${err.message}`, new Date().toISOString(), id);
+    notifyTaskCallbacks(getLongTask(id)!);
   });
   child.on("close", (code) => {
     clearInterval(heartbeat);
@@ -284,6 +375,7 @@ export async function submitFfmpegTask(opts: { workId: string; spec: FfmpegJobSp
         new Date().toISOString(),
         id,
       );
+    notifyTaskCallbacks(getLongTask(id)!);
     broadcastProgress({
       workId: opts.workId, kind: "system",
       text: ok ? `✅ ffmpeg ${opts.spec.op} 完成:${opts.spec.output}` : `❌ ffmpeg ${opts.spec.op} 失败(退出码 ${code}),日志 output/${id}.log`,

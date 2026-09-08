@@ -78,7 +78,7 @@ export async function researchTemplates(elements: TemplateElements = {}): Promis
   }
   const parsed = await chatJsonWithSearch<LlmSkillsResponse>(provider, model, prompt, {
     timeoutMs: 8 * 60_000,
-    builtinSearchTool,
+    // F6:去掉 builtinSearchTool(消除 $web_search 依赖)——保留内置搜索时改走 WebSearch 客户端编排
   });
   const rawSkills = (parsed?.skills ?? [])
     .map((s) => ({ skill: (s.skill ?? "").trim(), source: (s.source ?? "").trim() }))

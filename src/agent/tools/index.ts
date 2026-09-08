@@ -14,6 +14,7 @@ import { globExecutor } from "./glob.js";
 import { grepExecutor } from "./grep.js";
 import { bashExecutor } from "./bash.js";
 import { askUserQuestionExecutor } from "./ask-user.js";
+import { webSearchExecutor, webFetchExecutor, platformSearchExecutor } from "./web-search.js";
 
 export interface ToolContext {
   workDir: string;
@@ -47,15 +48,26 @@ export function buildCreatorTools(opts: ToolBuildOptions = {}): ToolExecutorMap 
     bashExecutor(opts.bashBlocklist),
     // 2026-08-28 批次2.6:激活"agent 主动问用户"通道(loop 配对回填+前端渲染早已就位)
     askUserQuestionExecutor,
+    // 2026-09-03:provider 无关的客户端联网工具,全模型可用(此前仅 Kimi 内置 $web_search)
+    webSearchExecutor,
+    webFetchExecutor,
+    platformSearchExecutor,
   ];
   const map: ToolExecutorMap = {};
   for (const e of list) map[e.def.name] = e;
   return map;
 }
 
-/** 评审会话只读子集（Read/Glob/Grep/Bash） */
+/** 评审会话只读子集（Read/Glob/Grep/Bash + 联网核查工具：事实性评审需要核信源） */
 export function buildEvaluatorTools(opts: ToolBuildOptions = {}): ToolExecutorMap {
-  const list: ToolExecutor[] = [readExecutor, globExecutor, grepExecutor, bashExecutor(opts.bashBlocklist)];
+  const list: ToolExecutor[] = [
+    readExecutor,
+    globExecutor,
+    grepExecutor,
+    bashExecutor(opts.bashBlocklist),
+    webSearchExecutor,
+    webFetchExecutor,
+  ];
   const map: ToolExecutorMap = {};
   for (const e of list) map[e.def.name] = e;
   return map;

@@ -223,7 +223,7 @@
     return parts.join("\n");
   }
 
-  async function handleCreateWork(data: { title: string; type: string; contentCategory: string; videoSource: string; videoSearchQuery: string; topicHint: string; evalMode: string; aspect: string }) {
+  async function handleCreateWork(data: { title: string; type: string; contentCategory: string; videoSource: string; videoSearchQuery: string; topicHint: string; evalMode: string; aspect: string; templateId?: string }) {
     showNewWorkModal = false;
     prefillTitle = "";
     prefillTopicHint = "";
@@ -238,6 +238,7 @@
         topicHint: data.topicHint || undefined,
         evalMode: data.evalMode === "express" ? "express" : undefined,
         aspect: data.aspect === "landscape" ? "landscape" : undefined,
+        templateId: data.templateId || undefined,
       });
       initialPrompt = buildInitialPrompt(data);
       currentWorkId = newWork.id;
@@ -420,6 +421,13 @@
       try { if (Notification.permission === "default") Notification.requestPermission(); } catch { /* 忽略 */ }
     };
     window.addEventListener("pointerdown", askNotifyPermission, { once: true });
+    // X9/T1 验收修复(2026-09-07):Explore 一键创建派发的 document "createWork" 事件
+    // 此前无人监听(点击静默丢失)。此处承接:带 topicHint 预填打开创建弹窗(含模板选择)。
+    const onCreateWorkEvent = (e: Event) => {
+      const detail = (e as CustomEvent<{ topicHint?: string; platform?: string }>).detail ?? {};
+      handleCreateFromTrend("", detail.topicHint ?? "");
+    };
+    document.addEventListener("createWork", onCreateWorkEvent);
     // 批次4.6:全局通知通道(配额冷却/评审受阻/作品失败,不再依赖"正盯着该作品页")
     const globalWs = createWsConnection((event, data) => {
       if (event === "notify") {
@@ -436,6 +444,7 @@
     return () => {
       unsub();
       globalWs.close();
+      document.removeEventListener("createWork", onCreateWorkEvent);
     };
   });
 

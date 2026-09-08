@@ -1,5 +1,6 @@
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
+import type { Context, Next } from "hono";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { readFile, writeFile, mkdir, appendFile, readdir } from "node:fs/promises";
 import { join, dirname } from "node:path";
@@ -7,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import type { Server } from "node:http";
-import { loadConfig, dataDir } from "../config.js";
+import { loadConfig, getConfig, dataDir, getConfigDir } from "../config.js";
 import { initProviders } from "../providers/registry.js";
 import { ensureSharedDirs } from "../shared-assets.js";
 import { apiRoutes, setWsBridge, startWorkSession, runEvaluation } from "./api.js";
@@ -29,6 +30,7 @@ import { startTrendScheduler } from "../services/scheduler.js";
 import { startMetricsScheduler } from "../services/analytics-scheduler.js";
 import { migrate } from "../db/migrate.js";
 import { closeDb } from "../db/connection.js";
+import { exportBackup } from "../db/backup.js";
 import { migrateLegacyWorks } from "../db/migrate-legacy.js";
 import { recoverStuckJobs, startPublishCron } from "../services/publish-service.js";
 import { recoverStuckRenderJobs } from "../services/video-factory.js";
@@ -123,6 +125,23 @@ function installCrashHandlers(): void {
   });
 }
 
+/**
+ * S3 补全：每日 03:00 在线备份（backup.ts 内已含 N 份滚动清理）。
+ * 用 setTimeout 计算到次日 03:00 的毫秒数触发，之后每 24h 循环；避免引入 node-cron 依赖。
+ */
+function scheduleDailyBackup(): void {
+  const run = () => {
+    const stamp = new Date().toISOString().slice(0, 10);
+    exportBackup(join(getConfigDir(), `autoviral-backup-${stamp}.zip`))
+      .then(() => console.log(`[backup] 每日快照完成 autoviral-backup-${stamp}.zip`))
+      .catch((err) => console.error("[backup] 每日快照失败:", err instanceof Error ? err.message : err));
+  };
+  const now = new Date();
+  const next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 3, 0, 0, 0);
+  const delay = Math.max(1000, next.getTime() - now.getTime());
+  setTimeout(() => { run(); setInterval(run, 24 * 3600 * 1000); }, delay);
+}
+
 export async function startServer(port: number): Promise<{ server: Server }> {
   // 0.0. Install crash protection before anything else
   installCrashHandlers();
@@ -203,6 +222,21 @@ export async function startServer(port: number): Promise<{ server: Server }> {
   const wsBridge = new WsBridge(port);
   setWsBridge(wsBridge);
 
+  // P2(2026-09,用户拍板):长任务完成事件注入 agent 消息流——渲染/烧录/下载完成后
+  // 经 injectNotification 注入 loop,agent 直接收到"任务完成"事实,无需 sleep 轮询(sleep 90~160 消灭)。
+  {
+    const { registerTaskCallback } = await import("../services/long-tasks.js");
+    for (const kind of ["asr", "render-batch", "ffmpeg", "conform"]) {
+      registerTaskCallback(kind, (task) => {
+        const text = task.status === "done"
+          ? `后台任务 ${task.kind}(${task.id})已完成`
+          : `后台任务 ${task.kind}(${task.id})失败: ${task.error ?? "未知错误"}`;
+        const session = task.work_id ? wsBridge.getSession(task.work_id) : undefined;
+        session?.loop?.injectNotification(`【后台任务完成】${text}`);
+      });
+    }
+  }
+
   // 4b. 作品队列：串行 runner + 反停滞看门狗。
   // 必须在 WsBridge 构造之后初始化(isSessionAlive 依赖 wsBridge 会话表)。
   // 存活判定用 isWorkActive(进程存活 OR 最近 120s 有 CLI 活动),而不是只看
@@ -244,6 +278,20 @@ export async function startServer(port: number): Promise<{ server: Server }> {
     return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
   });
 
+  // S1 验收修复(2026-09-07):以下子路由直接挂在 app 上,不经 apiRoutes 的 authGuard,
+  // 其写端点(comments 回复/evolution 生成/analytics 写入)曾可无 token 调用。补齐同款写保护。
+  const subRouteAuth = async (c: Context, next: Next) => {
+    if (c.req.method === "GET" || c.req.method === "HEAD") return next();
+    const token = getConfig().server?.authToken;
+    if (!token) return next();
+    const bearer = c.req.header("Authorization")?.replace(/^Bearer\s+/i, "") ?? "";
+    if (bearer !== token) return c.json({ error: "unauthorized" }, 401);
+    await next();
+  };
+  app.use("/api/analytics/*", subRouteAuth);
+  app.use("/api/comments/*", subRouteAuth);
+  app.use("/api/evolution/*", subRouteAuth);
+
   // 5. Mount Phase 5 analytics / comments / evolution routes (v2 kept first for specificity)
   app.route("/api/analytics/v2", analyticsApi);
   app.route("/api/analytics", analyticsRoutes);
@@ -252,6 +300,25 @@ export async function startServer(port: number): Promise<{ server: Server }> {
 
   // 5. Mount legacy API routes
   app.route("/", apiRoutes);
+
+  // S1(2026-09):根路径 index.html 注入 authToken——前端 fetch 封装据此为写请求注入 Authorization 头。
+  // 必须挂在 serveStatic 之前，否则静态 index.html 会先命中而拿不到注入机会。
+  app.get("/", async (c) => {
+    try {
+      const indexPath = join(WEB_DIST, "index.html");
+      const html = await readFile(indexPath, "utf-8");
+      const token = config.server?.authToken ?? "";
+      // 注入 authToken + 包装 window.fetch：所有前端写请求自动带上 Authorization 头
+      // （覆盖 lib/api.ts 的统一封装，也覆盖 Topics/Templates 等页面里的直接 fetch）。
+      const injected = html.replace(
+        "</head>",
+        `<script>window.__AUTH_TOKEN__ = ${JSON.stringify(token)};(function(){var _f=window.fetch.bind(window);window.fetch=function(u,i){var m=(i&&i.method)||"GET";if(m!=="GET"&&m!=="HEAD"&&window.__AUTH_TOKEN__){var h=new Headers(i&&i.headers);h.set("Authorization","Bearer "+window.__AUTH_TOKEN__);i=Object.assign({},i,{headers:h});}return _f(u,i);};})();</script></head>`,
+      );
+      return c.html(injected);
+    } catch {
+      return c.text("Dashboard not built. Run: npm run build:frontend", 404);
+    }
+  });
 
   // 8. Serve static frontend files from web/dist/
   app.use("/*", serveStatic({ root: WEB_DIST }));
@@ -271,6 +338,7 @@ export async function startServer(port: number): Promise<{ server: Server }> {
   const nodeServer = serve({
     fetch: app.fetch,
     port,
+    hostname: "127.0.0.1",
   });
 
   const httpServer = nodeServer as unknown as Server;
@@ -292,6 +360,8 @@ export async function startServer(port: number): Promise<{ server: Server }> {
   await startTrendScheduler();
   await registerAllAdapters();
   startMetricsScheduler(config.analytics);
+  // 每日备份（S3 补全）：03:00 在线快照，backup.ts 内已含 N 份滚动清理
+  scheduleDailyBackup();
   // 实例手动控制模式：30 秒健康探测驱动 ready/offline 状态，供前端提醒
   startHealthLoop();
   startH3HealthLoop();

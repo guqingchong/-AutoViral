@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { deleteTemplateApi, renderPreview, updateTemplateApi, createBrief, chatBrief, generateFromBrief, fetchCodeSceneTemplates, type Template, type DesignBrief, type CodeSceneTemplate } from "../lib/api.js";
+  import { deleteTemplateApi, renderPreview, updateTemplateApi, createBrief, chatBrief, generateFromBrief, fetchCodeSceneTemplates, previewSceneTemplate, type Template, type DesignBrief, type CodeSceneTemplate } from "../lib/api.js";
   import { t } from "../lib/i18n.js";
   import TemplateEditor from "./TemplateEditor.svelte";
 
@@ -24,6 +24,20 @@
   let codeGenStyle = $state("");
   let codeGenOrientation = $state<"portrait" | "landscape">("portrait");
   let codeGenWithDh = $state(false);
+  /** 生成目标(2026-09-02):full=整片代码模板(Revideo) | scene=镜头模板(web 支路 HTML) */
+  let codeGenTarget = $state<"full" | "scene">("full");
+  /** 整片渲染支路(2026-09-02):web(默认,HTML/WAAPI/WebGL) | revideo(兼容) */
+  let codeGenRenderer = $state<"web" | "revideo">("web");
+  // ── 分页助手(2026-09-02 分页模板):封面/正文/结尾逐页引导式描述 ──
+  let multiPage = $state(false);
+  let pageCover = $state("");
+  let pageContent = $state("");
+  let pageEnding = $state("");
+  const PAGE_GUIDES = [
+    { key: "cover", label: "封面页", hint: "目标:3秒抓住眼球", examples: ["深蓝底,大标题居中弹入,顶部英文 kicker", "全屏冲击数字+辉光,2 秒内落定"] },
+    { key: "content", label: "正文页", hint: "目标:承载核心论证", examples: ["标题居左上,主视觉区留 60% 给素材窗口", "字幕区沉稳不抢戏,呼吸微动"] },
+    { key: "ending", label: "结尾页", hint: "目标:收束+引导互动", examples: ["金句放大居中,底部关注引导一行", "整体放慢收束,末帧定格完整信息"] },
+  ] as const;
   // ── 意图稿两步向导(2026-08-25) ──
   let briefId = $state("");
   let brief = $state<DesignBrief | null>(null);
@@ -84,6 +98,28 @@
     sceneLoading = false;
   }
 
+  // ── 镜头模板样片预览(2026-09-02):内建 sample 参数渲染 4s 样片,弹窗播放 ──
+  let scenePreviewing = $state<string | null>(null);
+  let sceneVideoUrl = $state("");
+  let sceneVideoName = $state("");
+  async function openScenePreview(st: CodeSceneTemplate, refresh = false) {
+    scenePreviewing = st.name;
+    try {
+      const r = await previewSceneTemplate(st.name, refresh);
+      if (r.success && r.url) {
+        sceneVideoUrl = `${r.url}?t=${Date.now()}`;
+        sceneVideoName = st.label;
+      } else {
+        alert(r.error ?? "样片渲染失败");
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "样片渲染失败");
+    } finally {
+      scenePreviewing = null;
+    }
+  }
+  function closeSceneVideo() { sceneVideoUrl = ""; }
+
   // ── 模板要素（2026-08-03 要素化生成）──
   let elLayout = $state<string>("");
   let elPalette = $state<string>("ai_choice");
@@ -125,6 +161,13 @@
     elDecorations = elDecorations.includes(key)
       ? elDecorations.filter((k) => k !== key)
       : [...elDecorations, key];
+  }
+  /** 分页结构(2026-09-02):勾选后 AI 生成模板按 封面/正文/结尾 三幕组织 */
+  let elMultiPage = $state(false);
+  function withMultiPageMarker(ref: string): string {
+    if (!elMultiPage) return ref;
+    const marker = "分页结构(硬性):封面幕(冲击)/正文幕(信息)/结尾幕(收束引导)三幕组织";
+    return ref.trim() ? `${ref.trim()}\n${marker}` : marker;
   }
   function currentElements() {
     return {
@@ -298,7 +341,7 @@
       const res = await fetch("/api/templates/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ count: genCount, contentForm: genContentForm, reference: genReference, elements: currentElements() }),
+        body: JSON.stringify({ count: genCount, contentForm: genContentForm, reference: withMultiPageMarker(genReference), elements: { ...currentElements(), freeText: withMultiPageMarker(genReference) || undefined } }),
       });
       const data = await res.json();
       if (!data.jobId) {
@@ -320,13 +363,23 @@
       alert("请先描述风格,如「赛博朋克霓虹、深色底、青色辉光」");
       return;
     }
+    // 分页模式:把三页描述拼进风格文本,LLM 产出 brief.pages(逐页设计稿)
+    let style = codeGenStyle.trim();
+    if (multiPage && codeGenTarget === "full") {
+      const sections: string[] = [];
+      if (pageCover.trim()) sections.push(`封面页:${pageCover.trim()}`);
+      if (pageContent.trim()) sections.push(`正文页:${pageContent.trim()}`);
+      if (pageEnding.trim()) sections.push(`结尾页:${pageEnding.trim()}`);
+      style += "\n分页结构要求(整片分 封面/正文/结尾 三页,逐页落实):\n" + (sections.length ? sections.join("\n") : "三页按页角色默认目标设计:封面抓眼球/正文承载论证/结尾收束引导");
+    }
     briefLoading = true;
     briefDiff = "";
     try {
       const res = await createBrief({
-        style: codeGenStyle,
+        style,
         orientation: codeGenOrientation,
         withDigitalHuman: codeGenWithDh,
+        multiPage: multiPage && codeGenTarget === "full",
         ...(briefImageData ? { referenceImage: { data: briefImageData.data, mediaType: briefImageData.mediaType } } : {}),
       });
       briefId = res.briefId;
@@ -358,16 +411,18 @@
   async function confirmBriefAndGenerate() {
     if (!briefId) return;
     generating = true;
-    genMessage = "按设计稿生成中(LLM 设计 + Revideo 渲染验证,约 2-4 分钟)... 可以切换页面";
+    genMessage = codeGenTarget === "scene"
+      ? "镜头模板生成中(LLM 按稿写 HTML 程序化动画 + 真实渲染验证,约 2-4 分钟)... 可以切换页面"
+      : "按设计稿生成中(LLM 设计 + Revideo 渲染验证,约 2-4 分钟)... 可以切换页面";
     try {
-      const res = await generateFromBrief(briefId);
+      const res = await generateFromBrief(briefId, codeGenTarget, codeGenRenderer);
       if (!res.jobId) {
         alert("生成失败");
         generating = false;
         return;
       }
       genJobId = res.jobId;
-      kindFilter = "code";
+      if (codeGenTarget !== "scene") kindFilter = "code";
       brief = null;
       briefId = "";
       briefImageData = null;
@@ -468,6 +523,7 @@
     lightboxIdx = (lightboxIdx + delta + lightboxUrls.length) % lightboxUrls.length;
   }
   function onLightboxKeydown(e: KeyboardEvent) {
+    if (e.key === "Escape" && sceneVideoUrl) { closeSceneVideo(); return; }
     if (lightboxUrls.length === 0) return;
     if (e.key === "Escape") closeLightbox();
     else if (e.key === "ArrowLeft") stepLightbox(-1);
@@ -595,6 +651,8 @@
           genMessage = `生成完成！新增 ${statusData.generated} 个模板`;
           await load();
           await autoGeneratePosters();
+          // 镜头模板生成渠道的产物在 scene 分组,一并刷新
+          await loadSceneTemplates();
           setTimeout(() => { genMessage = ""; }, 5000);
         } else if (statusData.status === "error") {
           if (genPollTimer) { clearInterval(genPollTimer); genPollTimer = null; }
@@ -640,6 +698,18 @@
           <button class="lightbox-nav next" onclick={() => stepLightbox(1)}>›</button>
         {/if}
       </div>
+    </div>
+  </div>
+{/if}
+{#if sceneVideoUrl}
+  <!-- 镜头模板样片弹窗(2026-09-02):真实渲染的 4s 样片 -->
+  <div class="lightbox-backdrop" role="button" tabindex="0" onclick={closeSceneVideo} onkeydown={(e) => e.key === "Enter" && closeSceneVideo()}>
+    <div class="lightbox-body" role="presentation" onclick={(e) => e.stopPropagation()}>
+      <div class="lightbox-header">
+        <span class="lightbox-title">{sceneVideoName} · 样片</span>
+        <button class="lightbox-close" onclick={closeSceneVideo}>✕</button>
+      </div>
+      <video src={sceneVideoUrl} controls autoplay loop muted class="scene-video"></video>
     </div>
   </div>
 {/if}
@@ -717,6 +787,9 @@
               onclick={() => toggleDecoration(d.key)}
             >{d.label}</button>
           {/each}
+          <label class="codegen-dh" title="模板按 封面幕/正文幕/结尾幕 三幕组织,预览可分幕逐页查看">
+            <input type="checkbox" bind:checked={elMultiPage} /> 分页结构(三幕)
+          </label>
         </div>
         <div class="gen-row">
           <input type="text" bind:value={genReference} placeholder="还有别的想法？用自然语言补充（可留空），如「要像 Apple 发布会那种极简感」" class="gen-input" />
@@ -728,9 +801,20 @@
             {researching ? "调研中..." : `🔍 调研学习${skillCount > 0 ? `（已存 ${skillCount} 技能）` : ""}`}
           </button>
         </div>
-        <!-- 代码渲染模板:两阶段意图稿向导(2026-08-25)——先确认设计稿再生成,精准落实意图 -->
+        <!-- 代码渲染模板:两阶段意图稿向导(2026-08-25)——先确认设计稿再生成,精准落实意图
+             2026-09-02:生成目标可选 整片代码模板(Revideo) / 镜头模板(web 支路 HTML) -->
         <div class="gen-row">
           <input type="text" bind:value={codeGenStyle} placeholder="代码渲染模板:描述风格,如「赛博朋克霓虹、深色底、青色辉光、圆角面板」" class="gen-input" />
+          <select bind:value={codeGenTarget} class="codegen-orient" title="生成目标:整片模板绑定作品用;镜头模板供 agent 素材阶段逐镜头调用">
+            <option value="full">整片代码模板</option>
+            <option value="scene">镜头模板(web 动画)</option>
+          </select>
+          {#if codeGenTarget === "full"}
+            <select bind:value={codeGenRenderer} class="codegen-orient" title="渲染支路:web(HTML/WAAPI/WebGL,材质上限高,推荐);Revideo 仅兼容存量">
+              <option value="web">web 渲染(推荐)</option>
+              <option value="revideo">Revideo(兼容)</option>
+            </select>
+          {/if}
           <select bind:value={codeGenOrientation} class="codegen-orient" title="画幅">
             <option value="portrait">竖屏 1080×1920</option>
             <option value="landscape">横屏 1920×1080</option>
@@ -749,6 +833,32 @@
             {briefLoading && !brief ? "生成设计稿中..." : "📝 生成设计稿"}
           </button>
         </div>
+        {#if codeGenTarget === "full"}
+          <!-- 分页助手(2026-09-02):分页整片 = 封面/正文/结尾逐页描述,示例 chips 一键填入 -->
+          <div class="gen-row multipage-row">
+            <label class="codegen-dh" title="整片分 封面/正文/结尾 三页,设计稿逐页呈现、逐页微调">
+              <input type="checkbox" bind:checked={multiPage} /> 分页模板(封面/正文/结尾)
+            </label>
+            {#if multiPage}
+              <div class="page-guides">
+                {#each PAGE_GUIDES as pg}
+                  <div class="page-guide">
+                    <div class="page-guide-head"><b>{pg.label}</b><span>{pg.hint}</span></div>
+                    <input type="text" class="gen-input"
+                      value={pg.key === "cover" ? pageCover : pg.key === "content" ? pageContent : pageEnding}
+                      oninput={(e) => { const v = (e.target as HTMLInputElement).value; if (pg.key === "cover") pageCover = v; else if (pg.key === "content") pageContent = v; else pageEnding = v; }}
+                      placeholder={`描述${pg.label}的设计要点(可留空按默认目标)`} />
+                    <div class="page-examples">
+                      {#each pg.examples as ex}
+                        <button class="deco-chip" title="点击填入示例" onclick={() => { if (pg.key === "cover") pageCover = ex; else if (pg.key === "content") pageContent = ex; else pageEnding = ex; }}>{ex}</button>
+                      {/each}
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        {/if}
         {#if brief}
           <div class="brief-card">
             <h4>设计意图稿 —— {brief.styleSummary}</h4>
@@ -771,6 +881,22 @@
               <span class="brief-label">动效</span>
               <span>入场:{brief.motion.entrance};循环:{brief.motion.loop}</span>
             </div>
+            {#if brief.pages?.length}
+              <!-- 分页设计稿(2026-09-02):封面/正文/结尾逐页展示,微调对话可针对单页(如「封面标题再大点」) -->
+              <div class="brief-pages">
+                {#each brief.pages as pg}
+                  <div class="brief-page">
+                    <div class="brief-page-head">
+                      <b>{{ cover: "封面页", content: "正文页", ending: "结尾页" }[pg.role]}</b>
+                      <span>{pg.goal}</span>
+                    </div>
+                    <ul>{#each pg.layout as l}<li><b>{l.region}</b>:{l.content}({l.position})</li>{/each}</ul>
+                    {#if pg.motionOverride}<div class="brief-page-motion">动效特例:{pg.motionOverride}</div>{/if}
+                    {#if pg.elementsExtra?.length}<div class="brief-page-motion">本页装饰:{pg.elementsExtra.join(" / ")}</div>{/if}
+                  </div>
+                {/each}
+              </div>
+            {/if}
             {#if briefDiff}<div class="brief-diff">已调整:{briefDiff}</div>{/if}
             <div class="brief-actions">
               <input type="text" bind:value={briefChatInput} placeholder="想调整什么?如「标题再大点」「去掉网格」「换成青色」"
@@ -804,12 +930,18 @@
       {#if researchMessage}
         <p class="gen-message research">{researchMessage}</p>
       {/if}
+      <!-- 分组锚点标签(2026-09-02):两类模板一眼分区、快速跳转 -->
+      <nav class="group-tabs">
+        <a href="#scene-section" class="group-tab scene">🎞️ 镜头模板 <b>{sceneTemplates.length}</b><span>单镜头程序化动画 · 素材阶段逐镜头调用</span></a>
+        <a href="#full-section" class="group-tab full">🎬 整片模板 <b>{templates.length}</b><span>绑定作品 · 约束整片视觉呈现</span></a>
+      </nav>
     </header>
 
-    <!-- 镜头模板分组(2026-09-01 批次12c-A):kind=web 程序化动画模板,agent 渲染镜头时经 API 选用,此处只读展示 -->
-    <section class="scene-section">
+    <!-- 镜头模板分组(2026-09-01 批次12c-A):kind=web 程序化动画模板,agent 渲染镜头时经 API 选用
+         2026-09-02:卡片视觉与整片模板差异化(深色代码风),支持真实样片预览 -->
+    <section class="scene-section" id="scene-section">
       <div class="scene-head">
-        <h2>镜头模板<span class="scene-count">{sceneTemplates.length} 款（竖屏 + 横屏 -wide）</span></h2>
+        <h2>🎞️ 镜头模板<span class="scene-count">{sceneTemplates.length} 款（竖屏 + 横屏 -wide）</span></h2>
         {#if sceneThemes.length}
           <span class="scene-themes">主题：{sceneThemes.join(" / ")}</span>
         {/if}
@@ -820,10 +952,10 @@
       {:else if sceneTemplates.length === 0}
         <p class="empty">暂无镜头模板</p>
       {:else}
-        <div class="template-grid">
+        <div class="template-grid scene-grid">
           {#each sceneTemplates as st}
             {@const colors = sceneColors(st)}
-            <article class="template-card">
+            <article class="template-card scene-card" style="border-top: 3px solid {colors.accent}">
               <div
                 class="preview scene-swatch"
                 class:scene-wide={isWideScene(st)}
@@ -831,6 +963,7 @@
               >
                 <span class="scene-icon">{sceneMeta(st).icon}</span>
                 <span class="scene-swatch-label" style="color:{colors.accent}">{st.label}</span>
+                <span class="scene-name">{st.name}</span>
               </div>
               <div class="meta">
                 <span class="kind-badge">镜头</span>
@@ -839,12 +972,23 @@
               <h3>{st.label}</h3>
               <p class="dims">{st.bestFor}</p>
               <p class="scene-params" title={st.params}>{st.params}</p>
+              <div class="actions">
+                <button class="btn-sm scene-preview-btn" disabled={scenePreviewing === st.name} onclick={() => openScenePreview(st)}>
+                  {scenePreviewing === st.name ? "渲染中…(约20-40s)" : "▶ 预览样片"}
+                </button>
+                <button class="btn-sm secondary scene-refresh-btn" title="强制重新渲染样片(模板更新后缓存不会自动失效)" disabled={scenePreviewing === st.name} onclick={() => openScenePreview(st, true)}>↻</button>
+              </div>
             </article>
           {/each}
         </div>
       {/if}
     </section>
 
+    <!-- 整片模板分组:数据库模板(视频/图文/代码渲染),绑定作品约束整片视觉 -->
+    <section id="full-section">
+      <div class="scene-head">
+        <h2>🎬 整片模板<span class="scene-count">{templates.length} 款</span></h2>
+      </div>
     {#if loading}
       <p class="empty">{t("loading")}</p>
     {:else if templates.length === 0}
@@ -870,6 +1014,8 @@
                 <span class="kind-badge">图文</span>
               {:else if tpl.kind === "code"}
                 <span class="kind-badge">代码渲染</span>
+              {:else if (tpl.usageCount ?? 0) === 0}
+                <span class="kind-badge" data-deprecated>整片·已停用</span>
               {/if}
               <span class="form">{tpl.contentForm ?? t("formGeneric")}</span>
             </div>
@@ -892,6 +1038,7 @@
         {/each}
       </div>
     {/if}
+    </section>
   </div>
 {/if}
 </div>
@@ -911,6 +1058,7 @@
   .meta { display: flex; gap: 0.5rem; align-items: center; }
   .status-badge { font-size: var(--size-xs); padding: 0.15rem 0.4rem; border-radius: 3px; background: var(--bg-inset); color: var(--text-muted); text-transform: capitalize; }
   .kind-badge { font-size: var(--size-xs); padding: 0.15rem 0.4rem; border-radius: 3px; background: var(--accent); color: var(--accent-text); }
+  .kind-badge[data-deprecated] { background: var(--bg-inset); color: var(--text-muted); border: 1px solid var(--border); }
   .form { font-size: var(--size-xs); color: var(--text-muted); }
   .template-card h3 { font-size: var(--size-base); margin: 0; }
   .dims { font-size: var(--size-xs); color: var(--text-dim); margin: 0; }
@@ -959,8 +1107,38 @@
   .brief-diff { font-size: var(--size-xs); color: var(--accent); }
   .brief-actions { display: flex; gap: 0.5rem; }
   .brief-upload { cursor: pointer; }
-  /* ── 镜头模板分组 ── */
-  .scene-section { margin-bottom: 2rem; }
+  /* ── 分页助手与分页设计稿(2026-09-02) ── */
+  .multipage-row { align-items: flex-start; }
+  .page-guides { display: flex; flex-direction: column; gap: 0.6rem; flex: 1; min-width: 280px; }
+  .page-guide { display: flex; flex-direction: column; gap: 0.3rem; padding: 0.55rem 0.7rem; border: 1px dashed var(--border); border-radius: 6px; }
+  .page-guide-head { display: flex; align-items: baseline; gap: 0.6rem; font-size: 0.8rem; }
+  .page-guide-head span { color: var(--text-dim); font-size: 0.72rem; }
+  .page-examples { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+  .page-examples .deco-chip { font-size: 0.7rem; padding: 0.2rem 0.55rem; }
+  .brief-pages { display: flex; flex-direction: column; gap: 0.5rem; }
+  .brief-page { border: 1px solid var(--card-border); border-radius: 6px; padding: 0.5rem 0.7rem; background: var(--bg-inset); }
+  .brief-page-head { display: flex; align-items: baseline; gap: 0.6rem; font-size: 0.8rem; }
+  .brief-page-head span { color: var(--text-muted); font-size: 0.72rem; }
+  .brief-page ul { margin: 0.3rem 0 0; padding-left: 1.2rem; font-size: var(--size-xs); color: var(--text-muted); }
+  .brief-page-motion { font-size: var(--size-xs); color: var(--text-dim); margin-top: 0.25rem; }
+  /* ── 镜头模板分组(2026-09-02 视觉差异化:深色代码风,与整片模板一眼区分) ── */
+  .scene-section { margin-bottom: 2rem; scroll-margin-top: 1rem; }
+  #full-section { scroll-margin-top: 1rem; }
+  .group-tabs { display: flex; gap: 0.75rem; margin-top: 1rem; flex-wrap: wrap; }
+  .group-tab { display: flex; align-items: baseline; gap: 0.5rem; padding: 0.55rem 0.9rem; border-radius: 8px; border: 1px solid var(--border); text-decoration: none; color: var(--text); font-size: 0.85rem; background: var(--card-bg); }
+  .group-tab b { color: var(--accent); }
+  .group-tab span { font-size: 0.72rem; color: var(--text-dim); }
+  .group-tab.scene { border-left: 3px solid #4d9fff; }
+  .group-tab.full { border-left: 3px solid var(--accent); }
+  .group-tab:hover { border-color: var(--accent); }
+  .scene-grid .scene-card { background: linear-gradient(160deg, #12161f 0%, #171d29 100%); border-color: #2a3342; color: #dbe3ee; }
+  .scene-grid .scene-card h3 { color: #eef3fa; }
+  .scene-grid .scene-card .dims, .scene-grid .scene-card .scene-params { color: #8b97a8; }
+  .scene-name { font-family: ui-monospace, Consolas, monospace; font-size: 0.68rem; opacity: 0.55; letter-spacing: 0.5px; }
+  .scene-preview-btn { background: #2b3648; color: #cfe0f5; border: 1px solid #3d4c63; }
+  .scene-preview-btn:hover:not(:disabled) { background: #364459; }
+  .scene-refresh-btn { flex: 0 0 2.2rem; background: #1d2532; color: #8b97a8; border-color: #3d4c63; }
+  .scene-video { max-width: 82vw; max-height: 80vh; border-radius: 4px; background: #000; }
   .scene-head { display: flex; align-items: baseline; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.25rem; }
   .scene-head h2 { font-family: var(--font-display); font-size: var(--size-lg); margin: 0; }
   .scene-count { font-size: var(--size-xs); color: var(--text-muted); margin-left: 0.5rem; }

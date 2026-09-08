@@ -16,6 +16,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, basename } from "node:path";
 import { probeMedia } from "../video/ffmpeg.js";
 import { listRenderJobs } from "../db/render-jobs-repo.js";
+import type { Config } from "../config.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -129,6 +130,26 @@ export async function runQualityGate(videoPath: string, opts?: { subtitlePath?: 
       add("audio", "响度", "warn", `I=${loud.i.toFixed(1)} LUFS 偏离甜点区[-16,-14]${!Number.isNaN(loud.tp) && loud.tp > -1.5 ? `,TP=${loud.tp.toFixed(1)} 超 -1.5` : ""}`);
     }
     else add("audio", "响度", "fail", `I=${loud.i.toFixed(1)} LUFS 严重偏离[-16,-14](响度战争或过轻)`);
+  }
+
+  // 3b. 采样率/声道硬检查（Q1：96kHz 事故机器拦截——criteria 已列为 Critical，实现层补齐）
+  // X14 验收修复(2026-09-07):ffprobe 解析不到采样率/声道时此前静默 pass("n/a")——
+  // fail-open 恰是 96kHz 事故漏网的路径。改为 fail-closed:探测失败即 fail,交人工复核。
+  if (info.hasAudio) {
+    if (info.sampleRate === undefined) {
+      add("audio_sample_rate", "采样率", "fail", "音频流采样率探测失败(ffprobe 未解析到)——无法判定 44.1k/48k 合规性,需人工复核");
+    } else if (![44100, 48000].includes(info.sampleRate)) {
+      add("audio_sample_rate", "采样率", "fail", `采样率 ${info.sampleRate}Hz 非 44.1k/48k（平台兼容性 Critical）`);
+    } else {
+      add("audio_sample_rate", "采样率", "pass", `${info.sampleRate}Hz`);
+    }
+    if (info.channels === undefined) {
+      add("audio_channels", "声道", "fail", "音频流声道数探测失败(ffprobe 未解析到)——无法判定立体声合规性,需人工复核");
+    } else if (info.channels < 2) {
+      add("audio_channels", "声道", "fail", `单声道(${info.channels}ch)——成片要求立体声`);
+    } else {
+      add("audio_channels", "声道", "pass", `${info.channels}ch`);
+    }
   }
 
   // 4. 黑帧
@@ -406,9 +427,11 @@ export function assertAssemblyDeliverables(workDir: string, opts?: { templateId?
     if (violations.length > 5) issues.push({ key: "subtitles", detail: `……另有 ${violations.length - 5} 条字幕违规` });
   }
 
-  // ── ⑤ 模板契约(批次11.4,2026-08-31 实测 a4d):绑定模板的作品,模板渲染段必须实际入片。
+  // ── ⑤ 模板契约(批次11.4):绑定模板的作品,模板渲染段必须实际入片。
   // a4d 渲染了 6s 模板片头却弃用——"渲染过" ≠ "用了"。以合成清单(assembly-plan.json
   // 或 norm/concat.txt)是否引用模板渲染产物文件名为准。
+  // M3:用户「选择不绑定」是合法状态——无 templateId 不做模板契约检查（不 fail）；
+  // 仅当绑定了模板（opts.templateId 非空）时，下方 template_skin 检查模板段必须入片。
   if (opts?.templateId && opts?.workId) {
     try {
       const tplJobs = listRenderJobs("completed", opts.workId)
@@ -417,16 +440,35 @@ export function assertAssemblyDeliverables(workDir: string, opts?: { templateId?
         issues.push({ key: "template_skin", detail: `作品绑定了模板(${opts.templateId})但从未渲染模板段——模板契约要求模板视觉呈现实际进入成片` });
       } else {
         const jobFiles = new Set(tplJobs.map((j) => basename(j.output_path!).toLowerCase()));
+        // 2026-09-08 修复(ef9 实测):清单路径假设写死导致永远 fail——agent 实际把
+        // assembly-plan.json/concat.txt 写在 output/(或作品根),门禁却仅读 assets/ 两个
+        // 不存在的位置,元本为空即误判"渲染了但弃用"。覆盖合成清单的全部真实位置。
         const manifestTexts: string[] = [];
-        for (const p of [join(workDir, "assets", "assembly-plan.json"), join(workDir, "assets", "norm", "concat.txt")]) {
+        for (const p of [
+          join(workDir, "assets", "assembly-plan.json"),
+          join(workDir, "assets", "norm", "concat.txt"),
+          join(workDir, "output", "assembly-plan.json"),
+          join(workDir, "output", "concat.txt"),
+          join(workDir, "assembly-plan.json"),
+          join(workDir, "concat.txt"),
+        ]) {
           if (existsSync(p)) manifestTexts.push(readFileSync(p, "utf-8").toLowerCase());
         }
-        const used = manifestTexts.length > 0 && [...jobFiles].some((f) => manifestTexts.some((t) => t.includes(f)));
-        if (!used) {
+        if (manifestTexts.length === 0) {
+          // 模板段已渲染但无任何合成清单文件——仍不可放行(无清单=无法证明入片),
+          // 但报错要点明"缺清单"而非误称"弃用"
           issues.push({
             key: "template_skin",
-            detail: `模板段已渲染(${tplJobs.length} 个)但未进入成片合成清单——禁止"渲染了但弃用"。请将模板段(片头/片尾/模版卡)接入 concat/assembly-plan,或说明模板为何不适用并解除绑定`,
+            detail: `模板段已渲染(${tplJobs.length} 个)但找不到合成清单(output/concat.txt 或 output/assembly-plan.json)——无法证明模板段入片,请产出合成清单后重试`,
           });
+        } else {
+          const used = [...jobFiles].some((f) => manifestTexts.some((t) => t.includes(f)));
+          if (!used) {
+            issues.push({
+              key: "template_skin",
+              detail: `模板段已渲染(${tplJobs.length} 个)但未进入成片合成清单——禁止"渲染了但弃用"。请将模板段(片头/片尾/模版卡)接入 concat/assembly-plan,或说明模板为何不适用并解除绑定`,
+            });
+          }
         }
       }
     } catch { /* 模板校验自身失败不阻断 */ }
@@ -487,6 +529,447 @@ export function assertImageTextDeliverables(workDir: string): DeliverableIssue[]
         issues.push({ key: "card_blank", detail: `卡片疑似空白/渲染残缺:${f}(${statSync(join(cardsDir, f)).size}B < 10KB)` });
       }
     } catch { /* 单文件失败跳过 */ }
+  }
+  return issues;
+}
+
+/** Q1 素材引用存在性检查：分镜表"素材"列引用的每个文件名，必须在
+ *  material-candidates.md 保留清单 / 共享库 scenes 清单 / 程序化模板清单 三者并集中存在。
+ *  缺失即 fail（修 eval-plan-1 critical：63s 镜头引用不存在素材）。 */
+export function assertPlanReferences(workDir: string, candidateSources: Array<{ dir: string; files: string[] }> = []): DeliverableIssue[] {
+  const issues: DeliverableIssue[] = [];
+  const planPath = [join(workDir, "plan.md"), join(workDir, "plan", "plan.md")].find(existsSync);
+  if (!planPath) return issues; // 无分镜不检查（由 plan 阶段前置校验兜底）
+
+  // 构建"素材文件名 → 来源"并集
+  const known = new Set<string>();
+  const candidatesPath = [join(workDir, "assets", "material-candidates.md"), join(workDir, "material-candidates.md")].find(existsSync);
+  if (candidatesPath) {
+    const text = readFileSync(candidatesPath, "utf-8");
+    for (const m of text.matchAll(/\[([^\]]+)]\(([^)]+\.(?:mp4|mov|png|jpg|jpeg|webp|wav|mp3))[^)]*\)/gi)) {
+      known.add(m[2].split(/[\\/]/).pop()!.toLowerCase());
+    }
+    for (const m of text.matchAll(/`?([^\s`]+\.(?:mp4|mov|png|jpg|jpeg|webp|wav|mp3))`?/gi)) {
+      known.add(m[1].split(/[\\/]/).pop()!.toLowerCase());
+    }
+  }
+  for (const src of candidateSources) {
+    for (const f of src.files) known.add(f.split(/[\\/]/).pop()!.toLowerCase());
+  }
+
+  const planText = readFileSync(planPath, "utf-8");
+  for (const m of planText.matchAll(/([^\s|,;：:()\]]+\.(?:mp4|mov|png|jpg|jpeg|webp|wav|mp3))/gi)) {
+    const fname = m[1].trim().split(/[\\/]/).pop()!.toLowerCase();
+    if (!known.has(fname) && !/customHtml|code-scene|scene-(\d+)-|chart|snapshot/i.test(fname)) {
+      issues.push({ key: "plan_ref_missing", detail: `分镜引用了不存在的素材「${fname}」——需在 material-candidates 保留清单/素材库/程序化模板中添加，或改引现有素材` });
+    }
+  }
+  return issues;
+}
+
+/** F3 待核禁进口播（方案定稿）：脚本/分镜中"政策文号/年份/百分比/机构名"等事实型断言，
+ *  若核验态为待核（verify_status=unverified）且出现在口播（TTS 文本）→ critical。
+ *  仅允许出现在"画面披露 + 以官方发布为准"场景。
+ *  匹配：文号〔XXXX〕第X号、年份 XXXX 年、百分比 X%；"已核验/据…发布"标记豁免。 */
+export function assertFactClaims(scriptText: string): DeliverableIssue[] {
+  const issues: DeliverableIssue[] = [];
+  const claims = scriptText.matchAll(/([〔【][0-9]{4}[〕】](?:第?\s*\d+\s*号)|[0-9]{4}\s*年|[０-９.]+%|[\d.]+%)/g);
+  for (const m of claims) {
+    const claim = m[0];
+    // X14 验收修复(2026-09-07):旧豁免 `new RegExp("已核验|据…").test(claim)` 是死代码——
+    // claim 正则只捕获文号/年份/百分比本身,永远不可能含"已核验"。改为核验
+    // 断言前后上下文窗口(前 80 字 + 后 120 字,覆盖"已核验"前缀与"来源/URL"后缀两种标注习惯);
+    // 并落实方案的豁免场景:画面披露+"以官方发布为准"降格不拦。
+    const ctx = scriptText.slice(Math.max(0, m.index! - 80), m.index! + claim.length + 120);
+    const verified = /已核验|据[^。\n]{0,20}(发布|通知|印发)|来源[:：]|https?:\/\//i.test(ctx);
+    const disclosedOnly = /以官方发布为准|画面披露/.test(ctx);
+    if (!verified && !disclosedOnly) {
+      issues.push({ key: "claim_unverified", detail: `事实断言「${claim}」未核验（verify_status=unverified）不得进口播——先 WebSearch 核验并附来源 URL，或改为画面披露+“以官方发布为准”` });
+    }
+  }
+  return issues;
+}
+
+/** Q1+F3 组合接线（2026-09 补修）：plan 阶段机器预检的扩展——
+ *  素材引用存在性（assertPlanReferences）+ 事实断言核验态（assertFactClaims）。
+ *  advance(plan) 预检链在 assertPlanDeliverables 之外追加调用本函数。 */
+export function assertPlanGateExtensions(workDir: string): DeliverableIssue[] {
+  const issues: DeliverableIssue[] = [];
+  issues.push(...assertPlanReferences(workDir));
+  const planPath = [join(workDir, "plan.md"), join(workDir, "plan", "plan.md")].find(existsSync);
+  if (planPath) {
+    issues.push(...assertFactClaims(readFileSync(planPath, "utf-8")));
+  }
+  return issues;
+}
+
+/** M1(方案定稿):advance 绑定一致性断言——works.template_id 与 plan.md 声称的模板 ID 必须一致。
+ *  消除"agent 自认模板 tpl_code_f752958d"污染评审（ae0 事故诱因）。 */
+export function assertTemplateBindingConsistency(workDir: string, workTemplateId?: string): DeliverableIssue[] {
+  const issues: DeliverableIssue[] = [];
+  if (!workTemplateId) return issues; // 未绑模板由 M3 兜底 fail，这里只查"绑了但声称不一致"
+  const planPath = [join(workDir, "plan.md"), join(workDir, "plan", "plan.md")].find(existsSync);
+  if (!planPath) return issues;
+  const text = readFileSync(planPath, "utf-8");
+  const claimed = text.match(/(?:模板|template)\s*(?:ID|id)?\s*[：:]\s*(tpl_[a-zA-Z0-9_-]+)/i);
+  if (claimed && claimed[1].toLowerCase() !== workTemplateId.toLowerCase()) {
+    issues.push({ key: "template_mismatch", detail: `plan.md 声称模板 ${claimed[1]} 与作品绑定模板 ${workTemplateId} 不一致——请统一模板口径，消除"agent 自认模板"污染评审` });
+  }
+  return issues;
+}
+
+/** P1(2026-09 大工程):plan-validator 结构校验——从 plan.md 分镜表解析可机器校验的结构维度。
+ *  ① 景别标注覆盖率 ≥80%（分镜语法要求每镜显式标注景别，相邻镜头有变化）；
+ *  ② 制作方式标注率 =100%（content-planning SKILL 要求每镜必标 chart/snapshot/diagram/... ）；
+ *  ③ 旁白字数×语速 vs 分镜总时长（语速 4.5 字/秒，只拦明显不符：>8 字/秒 或 <1.5 字/秒）。
+ *  保守原则：仅在分镜表表头明确含对应列时才校验，拿不准一律放行交 LLM 评审（宁漏勿错）。 */
+export function assertPlanStructure(workDir: string): DeliverableIssue[] {
+  const issues: DeliverableIssue[] = [];
+  const planPath = [join(workDir, "plan.md"), join(workDir, "plan", "plan.md")].find(existsSync);
+  if (!planPath) return issues;
+  const lines = readFileSync(planPath, "utf-8").split("\n");
+
+  let inShotTable = false;
+  let shotCount = 0;
+  let sizeCol = -1, sizeFilled = 0;
+  let routeCol = -1, routeFilled = 0;
+  let narrationCol = -1, durationCol = -1;
+  let totalDuration = 0, totalNarrationChars = 0;
+
+  for (const line of lines) {
+    if (!line.includes("|")) { inShotTable = false; continue; }
+    const cells = splitMdRow(line);
+    const isHeader = cells.some((c) => /镜号|^镜$|shot/i.test(c)) && cells.some((c) => /时长/.test(c));
+    if (isHeader) {
+      inShotTable = true;
+      sizeCol = cells.findIndex((c) => /景别|shot[ _-]?size|shotsize/i.test(c));
+      routeCol = cells.findIndex((c) => /制作方式|制作|route|produce/i.test(c));
+      narrationCol = cells.findIndex((c) => /旁白|口播|narration/i.test(c));
+      durationCol = cells.findIndex((c) => /时长/.test(c));
+      continue;
+    }
+    if (!inShotTable) continue;
+    if (/^[-:\s|]+$/.test(line)) continue;
+    shotCount++;
+    if (sizeCol >= 0 && cells[sizeCol] && !/^[-—无\s]*$/.test(cells[sizeCol].trim())) sizeFilled++;
+    if (routeCol >= 0 && cells[routeCol] && !/^[-—无\s]*$/.test(cells[routeCol].trim())) routeFilled++;
+    if (durationCol >= 0 && cells[durationCol]) {
+      const d = parseDurationCell(cells[durationCol]);
+      if (d !== null && d <= 60) totalDuration += d;
+    }
+    if (narrationCol >= 0 && cells[narrationCol]) totalNarrationChars += countNarrationChars(cells[narrationCol]);
+  }
+
+  // ① 景别覆盖率（≥80%，软性但有量化下限；解析到 ≥5 镜才出具结论）
+  if (shotCount >= 5 && sizeCol >= 0) {
+    const coverage = sizeFilled / shotCount;
+    if (coverage < 0.8) {
+      issues.push({ key: "shot_size_coverage", detail: `景别标注覆盖率 ${Math.round(coverage * 100)}%（${sizeFilled}/${shotCount} 镜）< 80%——分镜语法要求每镜显式标注景别（特写/中景/全景…）` });
+    }
+  }
+  // ② 制作方式标注（必填，硬性）
+  if (shotCount >= 5 && routeCol >= 0 && routeFilled < shotCount) {
+    issues.push({ key: "shot_route_missing", detail: `制作方式标注率 ${Math.round((routeFilled / shotCount) * 100)}%（${routeFilled}/${shotCount} 镜）——每个镜头必须标注制作方式（chart/snapshot/diagram/digital_human/ai_video/stock/upload/reuse）` });
+  }
+  // ③ 字数×语速 vs 时长（语速 4.5 字/秒，只拦明显不符）
+  if (shotCount >= 5 && totalDuration > 0 && totalNarrationChars > 0) {
+    const rate = totalNarrationChars / totalDuration;
+    if (rate > 8) {
+      issues.push({ key: "narration_too_dense", detail: `旁白密度 ${rate.toFixed(1)} 字/秒（${totalNarrationChars} 字 / ${Math.round(totalDuration)}s）超过 8 字/秒上限——口播塞不下，请精简或加长画面` });
+    } else if (rate < 1.5) {
+      issues.push({ key: "narration_too_sparse", detail: `旁白密度 ${rate.toFixed(1)} 字/秒（${totalNarrationChars} 字 / ${Math.round(totalDuration)}s）低于 1.5 字/秒——画面严重空转，请补充口播或缩短时长` });
+    }
+  }
+  return issues;
+}
+
+/** Q2(2026-09 大工程):shot-map 完整性检查——assets 阶段产出的逐镜抽帧台账。
+ *  方案定稿：缺台账即 fail（每镜必须有 asset_file + 至少 1 帧）。 */
+export function assertShotMapCompleteness(workDir: string): DeliverableIssue[] {
+  const issues: DeliverableIssue[] = [];
+  const shotMapPath = [join(workDir, "assets", "shot-map.json"), join(workDir, "shot-map.json")].find(existsSync);
+  if (!shotMapPath) {
+    return [{ key: "shot_map_missing", detail: "assets 阶段未产出 shot-map.json——逐镜抽帧台账缺失（方案定稿：缺台账即 fail，请先按分镜产出台账再推进）" }];
+  }
+
+  try {
+    const shotMap = JSON.parse(readFileSync(shotMapPath, "utf-8")) as { shots?: Array<{ asset_file?: string; frames?: string[] }> };
+    const shots = Array.isArray(shotMap?.shots) ? shotMap.shots : [];
+    if (shots.length === 0) {
+      issues.push({ key: "shot_map_empty", detail: "shot-map.json 的 shots 为空——应逐镜登记素材与抽帧" });
+      return issues;
+    }
+    for (let i = 0; i < shots.length; i++) {
+      const s = shots[i] ?? {};
+      if (!s.asset_file) issues.push({ key: "shot_map_missing_asset", detail: `shot-map 第 ${i + 1} 镜缺 asset_file（素材文件未登记）` });
+      if (!Array.isArray(s.frames) || s.frames.length === 0) issues.push({ key: "shot_map_missing_frame", detail: `shot-map 第 ${i + 1} 镜缺 frames（未抽首/中/尾帧）` });
+    }
+  } catch {
+    issues.push({ key: "shot_map_invalid", detail: "shot-map.json 解析失败（损坏）——请重新生成" });
+  }
+  return issues;
+}
+
+/**
+ * Q2/X15 验收修复(2026-09-07):shot-map 程序化生成兜底——此前台账靠 ws-bridge prompt
+ * 要求 agent 手写(不写则门禁 fail、写了质量无保证)。现改为机器先做一遍:
+ * advance(assets) 前若 shot-map.json 缺失,从 plan.md 的素材引用逐镜生成台账
+ * (定位素材文件 + ffmpeg 抽首/中/尾帧;图片素材以原图为帧)。
+ * 已存在的台账不覆盖(agent 写的更详细版本优先);生成失败不抛——缺失/不完整
+ * 仍由 assertShotMapCompleteness 拦截,只是从"靠 agent 自觉"变成"机器打底"。
+ */
+export async function ensureShotMap(workDir: string): Promise<boolean> {
+  const existing = [join(workDir, "assets", "shot-map.json"), join(workDir, "shot-map.json")].find(existsSync);
+  if (existing) return false;
+  const planPath = [join(workDir, "plan.md"), join(workDir, "plan", "plan.md")].find(existsSync);
+  if (!planPath) return false;
+  const planText = readFileSync(planPath, "utf-8");
+
+  // 素材目录全量索引(文件名小写 → 绝对路径),递归覆盖 clips/images 及子目录
+  const fileIndex = new Map<string, string>();
+  const walk = (dir: string): void => {
+    if (!existsSync(dir)) return;
+    for (const f of readdirSync(dir)) {
+      const full = join(dir, f);
+      try { if (statSync(full).isDirectory()) { walk(full); continue; } } catch { continue; }
+      if (/\.(mp4|mov|png|jpg|jpeg|webp)$/i.test(f)) fileIndex.set(f.toLowerCase(), full);
+    }
+  };
+  walk(join(workDir, "assets", "clips"));
+  walk(join(workDir, "assets", "images"));
+
+  const { getFFmpegPath } = await import("../video/ffmpeg.js");
+  const { writeFile, mkdir } = await import("node:fs/promises");
+  const ffmpeg = await getFFmpegPath();
+  const framesDir = join(workDir, "assets", "frames", "shotmap");
+
+  interface ShotRow { i: number; plan_spec: string; asset_file?: string; frames: string[]; narration: string; source: string }
+  const shots: ShotRow[] = [];
+  let idx = 0;
+  for (const line of planText.split("\n")) {
+    if (!line.trim().startsWith("|")) continue;
+    const m = line.match(/([^\s|,;：:()\]]+\.(?:mp4|mov|png|jpg|jpeg|webp))/i);
+    if (!m) continue;
+    idx++;
+    const fname = basename(m[1]).toLowerCase();
+    const assetPath = fileIndex.get(fname);
+    const frames: string[] = [];
+    if (assetPath) {
+      if (/\.(png|jpg|jpeg|webp)$/i.test(assetPath)) {
+        frames.push(assetPath); // 图片素材原图即帧
+      } else {
+        try {
+          const info = await probeMedia(assetPath);
+          const dur = info.duration && info.duration > 0.3 ? info.duration : 3;
+          await mkdir(framesDir, { recursive: true });
+          for (const [k, t] of [0.1, dur / 2, Math.max(0.1, dur - 0.1)].entries()) {
+            const fp = join(framesDir, `shot-${String(idx).padStart(2, "0")}-${k + 1}.jpg`);
+            await execFileAsync(ffmpeg, ["-ss", t.toFixed(2), "-i", assetPath, "-frames:v", "1", "-q:v", "3", "-y", fp], { windowsHide: true });
+            if (existsSync(fp)) frames.push(fp);
+          }
+        } catch { /* 单镜抽帧失败不阻断整体——该镜 frames 为空由完整性检查拦截 */ }
+      }
+    }
+    shots.push({ i: idx, plan_spec: line.trim().slice(0, 200), asset_file: assetPath, frames, narration: "", source: "auto-generated" });
+  }
+  if (!shots.length) return false;
+  await mkdir(join(workDir, "assets"), { recursive: true });
+  await writeFile(
+    join(workDir, "assets", "shot-map.json"),
+    JSON.stringify({ generated: "machine", createdAt: new Date().toISOString(), shots }, null, 2),
+    "utf-8",
+  );
+  return true;
+}
+
+/**
+ * P1/X15 验收修复(2026-09-07):阶段契约文件存在性门禁——facts.json/script.json
+ * (research)、registry.json(material-search)此前只有 prompt 要求,无机器检查,
+ * 契约链"据此校验"未闭环。缺文件即 fail,error 里写清期望路径。
+ */
+export function assertContractArtifacts(workDir: string, step: "research" | "material-search" | "content-research" | "plan-assets"): DeliverableIssue[] {
+  const issues: DeliverableIssue[] = [];
+  const find = (name: string, sub: string) =>
+    [join(workDir, name), join(workDir, sub, name), join(workDir, "assets", name)].find(existsSync);
+  if (step === "research") {
+    if (!find("facts.json", "research")) {
+      issues.push({ key: "contract_facts_missing", detail: "research 阶段未产出 facts.json(事实断言+核验态+来源 URL 的机器可读契约)——请按调研方法论落盘 facts.json 后再推进" });
+    }
+    if (!find("script.json", "research")) {
+      issues.push({ key: "contract_script_missing", detail: "research 阶段未产出 script.json(独立脚本+语速预算)——脚本嵌在 report.md 里无法机器校验语速,请落盘 script.json 后再推进" });
+    }
+  }
+  if (step === "material-search") {
+    if (!find("registry.json", "material-search")) {
+      issues.push({ key: "contract_registry_missing", detail: "material-search 阶段未产出 assets/registry.json(素材库机器索引)——plan 预检的引用存在性校验依赖它,请补齐后再推进" });
+    }
+  }
+  // 流水线 v2(2026-09-07 重构,批次2):新四步的契约文件
+  if (step === "content-research") {
+    if (!find("article.md", "research")) {
+      issues.push({ key: "contract_article_md_missing", detail: "内容研究阶段未产出 research/article.md(最终作品文章)——成文落盘后再推进" });
+    }
+    if (!find("article.json", "research")) {
+      issues.push({ key: "contract_article_json_missing", detail: "内容研究阶段未产出 research/article.json(文章机器可读契约:facts/feasibility/sections)——它是后续所有阶段的唯一事实源,落盘后再推进" });
+    }
+  }
+  if (step === "plan-assets") {
+    if (!find("script.json", "assets")) {
+      issues.push({ key: "contract_script_missing", detail: "分镜与素材探查阶段未产出 assets/script.json(逐句带 source_section 溯源 article 的脚本)——落盘后再推进" });
+    }
+    if (!find("registry.json", "plan-assets")) {
+      issues.push({ key: "contract_registry_missing", detail: "分镜与素材探查阶段未产出 assets/registry.json(逐镜素材需求台账)——探查登记是引用存在性校验的依据,补齐后再推进" });
+    }
+    if (!find("material-candidates.md", "assets")) {
+      issues.push({ key: "contract_candidates_missing", detail: "分镜与素材探查阶段未产出 assets/material-candidates.md(人读版台账,含查询组与缺口声明)——补齐后再推进" });
+    }
+  }
+  return issues;
+}
+
+/**
+ * 流水线 v2(批次2):内容研究阶段的文章契约机器校验——
+ * ①article.json 可解析且关键字段齐全;②facts 核验态覆盖率达 depth 档阈值;
+ * ③article.md 全文过 assertFactClaims(待核禁进口播);④字数与语速预算自洽。
+ */
+export function assertArticleContract(workDir: string, depth: "full" | "standard" | "quick" = "standard"): DeliverableIssue[] {
+  const issues: DeliverableIssue[] = [];
+  const articleJsonPath = [join(workDir, "research", "article.json"), join(workDir, "article.json")].find(existsSync);
+  const articleMdPath = [join(workDir, "research", "article.md"), join(workDir, "article.md")].find(existsSync);
+  if (!articleJsonPath || !articleMdPath) return issues; // 文件缺失由 assertContractArtifacts 拦截,此处不重复
+
+  interface ArticleFacts { text?: string; verify_status?: string; source_url?: string }
+  interface ArticleJson {
+    title?: string; wordCount?: number;
+    speechBudget?: { maxChars?: number };
+    facts?: ArticleFacts[];
+    feasibility?: { verdict?: string; materialRisks?: unknown[]; notes?: string };
+    sections?: unknown[];
+  }
+  let article: ArticleJson;
+  try {
+    article = JSON.parse(readFileSync(articleJsonPath, "utf-8")) as ArticleJson;
+  } catch {
+    return [{ key: "article_json_invalid", detail: "research/article.json 解析失败(损坏或非 JSON)——请修复后重新提交" }];
+  }
+
+  // ① 关键字段齐全
+  const missing: string[] = [];
+  if (!article.title?.trim()) missing.push("title");
+  if (!(article.wordCount! > 0)) missing.push("wordCount");
+  if (!article.speechBudget?.maxChars) missing.push("speechBudget.maxChars");
+  if (!Array.isArray(article.facts)) missing.push("facts[]");
+  if (!article.feasibility?.verdict) missing.push("feasibility.verdict");
+  if (!Array.isArray(article.sections) || article.sections.length === 0) missing.push("sections[]");
+  if (missing.length) {
+    issues.push({ key: "article_fields_missing", detail: `article.json 关键字段缺失: ${missing.join(", ")}——按内容研究指令的 schema 补全` });
+  }
+
+  // ② facts 核验态覆盖率达 depth 档阈值(full=100% / standard≥80% / quick≥60%)
+  const facts = article.facts ?? [];
+  if (facts.length > 0) {
+    const noUrl = facts.filter((f) => !f.source_url || !/^https?:\/\//.test(f.source_url));
+    if (noUrl.length) {
+      issues.push({ key: "article_facts_no_url", detail: `article.json 有 ${noUrl.length} 条 facts 缺有效 source_url——每条事实断言必须附可访问来源` });
+    }
+    const verified = facts.filter((f) => f.verify_status === "已核验").length;
+    const ratio = verified / facts.length;
+    const threshold = depth === "full" ? 1 : depth === "quick" ? 0.6 : 0.8;
+    if (ratio < threshold) {
+      issues.push({ key: "article_facts_unverified", detail: `事实核验覆盖率不足:已核验 ${verified}/${facts.length}(${(ratio * 100).toFixed(0)}%)< ${depth} 档要求 ${threshold * 100}%——逐项联网核查并附来源 URL` });
+    }
+  }
+
+  // ③ 文章全文过事实断言检查(待核禁进口播;画面披露+"以官方发布为准"豁免)
+  if (articleMdPath) {
+    issues.push(...assertFactClaims(readFileSync(articleMdPath, "utf-8")));
+  }
+
+  // ④ 字数与语速预算自洽
+  if (article.wordCount! > 0 && article.speechBudget?.maxChars) {
+    if (article.wordCount! > article.speechBudget.maxChars * 1.2) {
+      issues.push({ key: "article_budget_mismatch", detail: `文章字数 ${article.wordCount} 超出口播预算 ${article.speechBudget.maxChars} 字(×1.2 容差)——精简文章或调大目标时长` });
+    }
+  }
+  return issues;
+}
+
+/** D3(2026-09 大工程):图文卡片 vision 核验——抽封面卡走视觉模型判 版式/文字溢出/配色。
+ *  仅补 quality-gate 现有"数量≥2/非空白"检查的盲区。vision 不可用/超时降级跳过(不阻断)，
+ *  因 D3 是提质项——基础门禁(卡片数/封面/空白)仍由 assertImageTextDeliverables 保证。 */
+export async function assertImageTextVision(cardsDir: string, config: Config): Promise<DeliverableIssue[]> {
+  const issues: DeliverableIssue[] = [];
+  let cards: string[] = [];
+  try {
+    cards = readdirSync(cardsDir).filter((f) => /\.png$/i.test(f));
+  } catch { return issues; }
+  if (cards.length === 0) return issues;
+
+  const cover = cards.find((f) => /cover/i.test(f)) ?? cards[0];
+  const coverPath = join(cardsDir, cover);
+  try {
+    const { chatVisionJson } = await import("../llm/vision-json.js");
+    const r = await chatVisionJson<{ problems?: string[]; verdict?: string }>(
+      config,
+      [coverPath],
+      "你是图文卡片质检员。检查这张卡片：①文字是否溢出卡片边界或被裁切；②版式是否错乱（元素重叠/对齐失衡）；③配色是否协调（文字与背景对比度足够、无刺眼撞色）。输出 JSON {\"problems\":[\"问题1\",...]}，无问题则 problems 为空数组。",
+      { timeoutMs: 60_000 },
+    );
+    for (const p of r?.problems ?? []) {
+      if (typeof p === "string" && p.trim()) issues.push({ key: "card_vision", detail: `卡片 ${cover} 版式问题：${p.trim()}` });
+    }
+  } catch (err) {
+    // 方案定稿：vision 核验是硬性——不可用/超时即 fail（不静默降级）
+    issues.push({ key: "card_vision_unavailable", detail: `图文卡 vision 核验失败：${err instanceof Error ? err.message : String(err)}——请在设置页「大模型直连」配置视觉模型后重试` });
+  }
+  return issues;
+}
+
+/** M3(方案定稿):模板-成片视觉 diff——绑定模板的作品,终检比对成片与模板预览的整体视觉。
+ *  抽首/中/尾帧,缩放到 16x16 rawvideo,逐像素平均绝对差 >0.3 即 fail(配色/版式明显偏离模板身份)。
+ *  机器确定性检查(零 LLM 成本);ffmpeg 不可用时放行(模板契约仍由 template_skin 检查兜底)。 */
+export async function assertTemplateVisualDiff(videoPath: string, templatePreviewPath?: string): Promise<DeliverableIssue[]> {
+  const issues: DeliverableIssue[] = [];
+  if (!videoPath || !existsSync(videoPath)) return issues;
+  // 模板预览缺失 → 不阻断(视觉 diff 是可选机器检查,模板契约已由 template_skin 兜底)
+  if (!templatePreviewPath || !existsSync(templatePreviewPath)) return issues;
+  try {
+    const { execFile } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const execFileAsync = promisify(execFile);
+    const { probeMedia } = await import("../video/ffmpeg.js");
+    const info = await probeMedia(videoPath);
+    const dur = info.duration ?? 30;
+    const times = [0.5, dur / 2, Math.max(0.5, dur - 0.5)];
+    const frameSig = async (p: string, t: number): Promise<Buffer> => {
+      try {
+        // encoding:"buffer" 保证 rawvideo 二进制不被 utf8 解码损坏
+        const { stdout } = await execFileAsync("ffmpeg", ["-ss", String(t), "-i", p, "-frames:v", "1", "-vf", "scale=16:16", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], { timeout: 30_000, maxBuffer: 10 * 1024 * 1024, encoding: "buffer" });
+        return Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout);
+      } catch { return Buffer.alloc(0); }
+    };
+    const diff = (a: Buffer, b: Buffer): number => {
+      if (a.length !== b.length || a.length === 0) return 1;
+      let sum = 0;
+      for (let i = 0; i < a.length; i++) sum += Math.abs(a[i] - b[i]);
+      return (sum / a.length) / 255;
+    };
+    let total = 0, n = 0;
+    for (const t of times) {
+      const sa = await frameSig(videoPath, t);
+      const sb = await frameSig(templatePreviewPath, t);
+      if (sa.length && sb.length) { total += diff(sa, sb); n++; }
+    }
+    if (n === 0) {
+      issues.push({ key: "template_visual_unavailable", detail: "模板视觉 diff 无法抽帧(成片或预览不可读)" });
+      return issues;
+    }
+    const avg = total / n;
+    if (avg > 0.3) {
+      issues.push({ key: "template_visual_mismatch", detail: `成片与模板视觉差异 ${(avg * 100).toFixed(0)}% > 30% 阈值——模板视觉身份(配色/版式)未贯穿成片,请按模板约束调整` });
+    }
+  } catch (err) {
+    console.warn("[quality-gate] 模板视觉 diff 失败(不阻断):", err instanceof Error ? err.message : err);
   }
   return issues;
 }

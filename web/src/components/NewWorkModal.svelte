@@ -11,7 +11,7 @@
   }: {
     open: boolean;
     onClose: () => void;
-    onCreate: (data: { title: string; type: string; contentCategory: string; videoSource: string; videoSearchQuery: string; topicHint: string; evalMode: string; aspect: string }) => void;
+    onCreate: (data: { title: string; type: string; contentCategory: string; videoSource: string; videoSearchQuery: string; topicHint: string; evalMode: string; aspect: string; templateId?: string }) => void;
     prefillTitle?: string;
     prefillTopicHint?: string;
   } = $props();
@@ -30,6 +30,22 @@
   // 画幅（批次12c-A）：竖屏 9:16 缺省 / 横屏 16:9，仅短视频有意义
   let aspect = $state<"portrait" | "landscape">("portrait");
 
+  // X9(2026-09-07):模板选择器——此前手动/单件创建无模板入口,"不绑定合法"退化成"很难绑定"。
+  // 过滤规则与 Topics.svelte 一致(M2):图文→kind=image-text;视频→隐藏 kind=video 且 0 使用的废弃整片模板。
+  interface TemplateOption { id: string; name: string; kind?: string; usageCount?: number; score?: number }
+  let templates = $state<TemplateOption[]>([]);
+  let templateId = $state("");
+  let filteredTemplates = $derived(
+    templates.filter((tpl) => {
+      if (selectedType === "image-text") return tpl.kind === "image-text";
+      if (tpl.kind === "image-text") return false;
+      return !(tpl.kind === "video" && !(tpl.usageCount ?? 0));
+    }),
+  );
+  $effect(() => {
+    if (templateId && !filteredTemplates.some((tpl) => tpl.id === templateId)) templateId = "";
+  });
+
   // Apply prefill when modal opens
   $effect(() => {
     if (open && prefillTitle) title = prefillTitle;
@@ -38,6 +54,11 @@
 
   onMount(() => {
     const unsub = subscribe(() => { lang = getLanguage(); });
+    // X9:加载已启用模板供选择(失败静默——模板为可选项,不阻断创建)
+    fetch("/api/templates?status=approved")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { templates = d?.templates ?? []; })
+      .catch(() => {});
     return unsub;
   });
 
@@ -53,6 +74,7 @@
       topicHint,
       evalMode,
       aspect: selectedType === "short-video" ? aspect : "portrait",
+      templateId: templateId || undefined,
     });
     title = "";
     selectedType = "short-video";
@@ -63,6 +85,7 @@
     topicHint = "";
     evalMode = "standard";
     aspect = "portrait";
+    templateId = "";
   }
 
   function handleOverlayClick(e: MouseEvent) {
@@ -253,6 +276,20 @@
           placeholder={tt("topicHintPlaceholder")}
           rows="3"
         ></textarea>
+      </div>
+
+      <!-- X9:模板选择(可选;不绑定是合法状态,作品将无模板视觉约束) -->
+      <div class="form-section">
+        <span class="form-label">使用模板（可选）</span>
+        <select class="form-input" bind:value={templateId}>
+          <option value="">不使用模板（AI 自主设计视觉）</option>
+          {#each filteredTemplates as tpl}
+            <option value={tpl.id}>{(tpl.score ?? 0) >= 90 ? "★精品 " : ""}{tpl.name}{tpl.score != null ? `（${tpl.score}分）` : ""}</option>
+          {/each}
+        </select>
+        {#if filteredTemplates.length === 0}
+          <span class="source-hint">暂无已启用模板，可前往模板库生成并启用</span>
+        {/if}
       </div>
 
       <!-- Aspect Ratio: only meaningful for short-video（批次12c-A） -->

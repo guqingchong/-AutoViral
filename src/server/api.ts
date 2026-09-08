@@ -6,11 +6,13 @@ import { promisify } from "node:util";
 import { join, extname, basename, resolve, sep, isAbsolute } from "node:path";
 import { homedir } from "node:os";
 import yaml from "js-yaml";
-import { loadConfig, saveConfig, dataDir, getConfigDir, HEYGEM_TUNNEL_DEFAULTS, H3_TUNNEL_DEFAULTS, type AnalyticsSource, type HeygemTunnelConfig, type H3TunnelConfig, type LlmConfig, type LlmProviderConfig } from "../config.js";
+import { loadConfig, getConfig, saveConfig, dataDir, getConfigDir, HEYGEM_TUNNEL_DEFAULTS, H3_TUNNEL_DEFAULTS, type AnalyticsSource, type HeygemTunnelConfig, type H3TunnelConfig, type LlmConfig, type LlmProviderConfig } from "../config.js";
 import { PROVIDER_PRESETS } from "../llm/provider-keys.js";
+import { loadModelProfiles } from "../llm/model-profiles.js";
+import { modelSupportsImage } from "../llm/capability.js";
 import { runJsonPrompt } from "../services/llm-json.js";
-import { PURPOSE_PRESETS, CONTENT_FORMS, getPurpose, purposeEvalFocusBlock } from "../services/purpose-presets.js";
-import { buildAssetConstraintSection, buildStepContractSection, buildMaterialSearchInstruction, CRITERIA_DIR, SEARCH_PROTOCOL, readCriteriaPathForStep } from "./step-contract.js";
+import { PURPOSE_PRESETS, CONTENT_FORMS, getPurpose, purposeEvalFocusBlock, resolveResearchDepth } from "../services/purpose-presets.js";
+import { buildAssetConstraintSection, buildStepContractSection, buildMaterialSearchInstruction, buildContentResearchInstruction, buildPlanAssetsInstruction, CRITERIA_DIR, SEARCH_PROTOCOL, readCriteriaPathForStep } from "./step-contract.js";
 import { purposeSkillsBlock, countPurposeSkills, listPurposeSkills } from "../db/purpose-skills-repo.js";
 import { researchPurposeSkills } from "../services/purpose-skills.js";
 import { getDb } from "../db/connection.js";
@@ -115,11 +117,22 @@ import * as voicesRepo from "../db/voices-repo.js";
 import {
   cloneVoiceFromUpload, generateVoiceDemo, generateBuiltinDemo,
   favoriteBuiltinVoice, deleteVoiceWithFiles,
-  voicesDir, builtinDemoDir, isValidVoiceId, isSafeExternalVoiceId, builtinDemoFileName,
+  voicesDir, builtinDemoDir, isValidVoiceId, isSafeExternalVoiceId, builtinDemoFileName, assertVoiceKnown,
 } from "../services/voice-clone.js";
 import { listBuiltinVoices, BUILTIN_CATEGORIES } from "../services/builtin-voices.js";
 
 export const apiRoutes = new Hono();
+
+// S1 API 鉴权（127.0.0.1 回绑之外的纵深防御）：config.server.authToken 配置后，非 GET/HEAD 写方法需带 Bearer token。
+// 未配置 token 时放行（此时暴露面已由 index.ts 的 hostname 回绑收敛）。
+apiRoutes.use("/api/*", async (c, next) => {
+  if (c.req.method === "GET" || c.req.method === "HEAD") return next();
+  const token = getConfig().server?.authToken;
+  if (!token) return next();
+  const bearer = c.req.header("Authorization")?.replace(/^Bearer\s+/i, "") ?? "";
+  if (bearer !== token) return c.json({ error: "unauthorized" }, 401);
+  await next();
+});
 
 // Health check endpoint
 apiRoutes.get("/api/health", (c) => c.json({ ok: true, version: "0.2.0" }));
@@ -213,7 +226,8 @@ apiRoutes.get("/api/status", async (c) => {
   const config = await loadConfig();
   return c.json({
     state: "idle",
-    model: config.model,
+    // X19(2026-09-07,S5):死配置 config.model 已删,展示读真实路由(research 档)
+    model: config.llm?.models?.research ?? config.llm?.defaultProvider ?? "",
     port: config.port,
   });
 });
@@ -331,8 +345,14 @@ function mergeLlm(prev: LlmConfig | undefined, incoming: Partial<LlmConfig>): Ll
 // GET /api/config
 apiRoutes.get("/api/config", async (c) => {
   const config = await loadConfig();
+  // S1 验收修复(2026-09-07):...config 展开会把 server.authToken 原样吐给 GET 读端点,
+  // 而读端点按设计放行——等于把写令牌公开,写鉴权形同虚设。此处显式剥离子段。
+  const sanitizedServer = config.server
+    ? { ...config.server, authToken: undefined }
+    : undefined;
   return c.json({
     ...config,
+    server: sanitizedServer,
     jimengAccessKey: config.jimeng?.accessKey ?? "",
     jimengSecretKey: config.jimeng?.secretKey ?? "",
     openrouterKey: config.openrouter?.apiKey ?? "",
@@ -464,9 +484,8 @@ apiRoutes.put("/api/config", async (c) => {  const body = await c.req.json<Recor
     if (!config.research) config.research = { enabled: false, schedule: "0 9 * * *", platforms: ["douyin", "xiaohongshu"] };
     config.research.topN = Math.max(0, Number(body.researchTopN) || 0);
   }
-  if (body.model !== undefined) {
-    config.model = body.model as string;
-  }
+  // X19(2026-09-07,S5):body.model 写入已删——config.model 是 Claude-CLI 时代死配置,
+  // 真实路由在 llm.models(由 PUT 的 llm 段处理)
   if (body.memorySyncEnabled !== undefined) {
     if (!config.memory) config.memory = { apiKey: "", userId: "autoviral-user", syncEnabled: false };
     config.memory.syncEnabled = body.memorySyncEnabled as boolean;
@@ -1063,6 +1082,14 @@ apiRoutes.post("/api/generate/audio", async (c) => {
   }
   try {
     const result = await provider.generateAudio({ text, voice, speed, languageBoost, workId, filename });
+    // X8 验收修复(D2,2026-09-07):配音成功后回写 usage_count——此前 incrementVoiceUsage
+    // 只在克隆成功时调用,"我的音色"页使用统计恒为 0。仅 voices 表有登记时回写。
+    if ((result as { success?: boolean })?.success !== false && voice) {
+      try {
+        const v = voicesRepo.getVoiceByVoiceId(String(voice));
+        if (v) voicesRepo.incrementVoiceUsage(v.id);
+      } catch { /* 统计失败不影响配音结果 */ }
+    }
     return c.json(result);
   } catch (err: any) {
     return c.json({ success: false, error: err.message, code: "API_ERROR" }, 500);
@@ -1289,32 +1316,43 @@ apiRoutes.post("/api/assets/code-scene", async (c) => {
 });
 
 // GET /api/assets/code-scene/templates - 可用场景模板清单(agent 发现入口)
-apiRoutes.get("/api/assets/code-scene/templates", (c) => {
-  // 竖屏 9 款(2026-09-01 起全部为 kind=web HTML 渲染,Revideo 版已退役)
-  const portrait = [
-    { name: "structure-growth", label: "中心辐射结构图", params: "title, center, branches[2-4]{label,items[]}", bestFor: "中心-分支结构(资金闭环/三段论)" },
-    { name: "flow-steps", label: "流程步骤推进", params: "title, steps[2-5]{title,desc?}", bestFor: "流程/标准/步骤(退出三标准)" },
-    { name: "logic-chain", label: "逻辑链条递进", params: "title, chain[2-4]{text,label?}", bestFor: "因果/递进链条(政策→影响→应对)" },
-    { name: "big-number", label: "大数字冲击", params: "title, value(数字), format?(plain/percent/wan/yi), unit?, caption?, kicker?, source?", bestFor: "关键数据呈现(债务规模/增速/占比)" },
-    { name: "compare-split", label: "对比对照", params: "title, left{label,points[2-4]}, right{label,points[2-4]}, verdict?, kicker?, source?", bestFor: "政策前后/方案 PK/新旧对比" },
-    { name: "timeline", label: "时间轴", params: "title, events[2-5]{time,text}, kicker?, source?", bestFor: "政策沿革/事件脉络/发展历程" },
-    { name: "pyramid", label: "金字塔层级", params: "title, levels[2-5]{text,desc?}(自下而上,塔底在前), kicker?, source?", bestFor: "体系结构/层级关系/需求层次" },
-    { name: "quote-card", label: "金句卡", params: "quote(≤60字), title?, kicker?, source?", bestFor: "金句/原话引用/核心论断" },
-    { name: "checklist", label: "清单打勾", params: "title, items[2-6]{text,done?}, kicker?, source?", bestFor: "要点清单/避坑清单/条件罗列" },
-    { name: "bar-compare", label: "条形数据对比", params: "title, bars[2-5]{label,value}, unit?, source?", bestFor: "轻量数据排行/量级对比(复杂图表仍走 /api/assets/chart)" },
-  ];
-  // 横屏 11 款(1920×1080):9 款的 -wide 变体 + cover-title-wide 片头 + keynote-leather 整片
-  const wideExtras = [
-    { name: "cover-title-wide", label: "封面片头(横屏原生)", params: "title, accent?(渐变高亮词), kicker?, subtitle?, source?", bestFor: "横屏片头/章节页" },
-    { name: "keynote-leather", label: "横屏数字人口播(苹果风×深色皮革)", params: "title(≤18字), kicker?, subtitleCn?(≤40字), subtitleEn?(≤80字符), videoSrc?, videoRatio?", bestFor: "横屏整片口播" },
-  ];
-  const wide = portrait.map((t) => ({ ...t, name: t.name + "-wide", label: t.label + "(横屏)" }));
+apiRoutes.get("/api/assets/code-scene/templates", async (c) => {
+  // 目录唯一来源在 code-scene 服务层(2026-09-02 重构):竖屏 9 款 + 横屏衍生 +
+  // 横屏原生 + registry.json 生成款,模板库页分组与样片预览共用同一份数据
+  const { listSceneTemplates } = await import("../services/code-scene.js");
   return c.json({
-    templates: [...portrait, ...wide, ...wideExtras],
+    templates: listSceneTemplates(),
     themes: ["finance_dark", "warm_gold", "ink_green", "minimal_light", "magazine_light"],
     duration: "1-30s(keynote-leather 整片 1-600s,建议跟随数字人源片时长),镜头模板建议 4-8s;web 支路按目标时长精确出片(动画时序自适应,短镜头自动压缩)",
     note: "精确数据镜头仍走 /api/assets/chart|data-card;本端点服务结构/流程/逻辑镜头。竖屏模板 1080×1920,内容避让底部字幕带 y∈[1418,1562];横屏(-wide/keynote-leather)1920×1080,内容下缘不超过 y=880(字幕带 900-1000)。模板已内建避让,正常传参即可。",
   });
+});
+
+// POST /api/assets/code-scene/preview - 镜头模板样片预览(2026-09-02 模板库页 ▶ 预览)
+// 用目录内建 sample 参数渲染 4s 样片;产物落在伪作品 _scene_preview 下,默认复用缓存
+apiRoutes.post("/api/assets/code-scene/preview", async (c) => {
+  const body = await c.req.json<{ name?: string; refresh?: boolean }>().catch(() => null);
+  const name = body?.name;
+  if (typeof name !== "string" || !/^[a-z0-9-]+$/.test(name)) {
+    return c.json({ success: false, error: "name 必填(模板名,小写字母数字连字符)" }, 400);
+  }
+  const { findSceneTemplate, renderCodeScene } = await import("../services/code-scene.js");
+  const meta = findSceneTemplate(name);
+  if (!meta) return c.json({ success: false, error: `未知镜头模板: ${name}` }, 404);
+
+  const filename = `prev_${name}`;
+  const rel = `clips/code/${filename}.mp4`;
+  const absPath = join(dataDir, "works", "_scene_preview", "assets", "clips", "code", `${filename}.mp4`);
+  if (!body?.refresh && existsSync(absPath)) {
+    return c.json({ success: true, url: `/api/works/_scene_preview/assets/${rel}`, cached: true });
+  }
+  const result = await renderCodeScene({
+    workId: "_scene_preview",
+    filename,
+    template: { name, params: { ...meta.sample } },
+    duration: name === "keynote-leather" ? 6 : 4,
+  });
+  return c.json(result, result.success ? 200 : 500);
 });
 
 // GET /api/assets/library - 素材资产库检索(C5,2026-08-14):q 模糊匹配名称/标签,按使用频次优先
@@ -1357,7 +1395,22 @@ apiRoutes.get("/api/works/:id/quality", async (c) => {
     target = withMtime[0].f;
   }
   const { runQualityGate } = await import("../services/quality-gate.js");
-  const report = await runQualityGate(join(outDir, target));
+  // 2026-09-03 修复:此前不传 subtitlePath/画布尺寸,字幕覆盖率与模版分辨率两项
+  // 检查永远不执行(检查项写好了但参数断供)。自动探测作品内字幕文件与模版画布。
+  const workDir = join(dataDir, "works", workId);
+  const subCandidates = [join(workDir, "output", "final.ass"), join(workDir, "assets", "captions.ass"), join(workDir, "assets", "subtitles.ass")];
+  const subtitlePath = subCandidates.find((p) => existsSync(p));
+  let expectedWidth: number | undefined;
+  let expectedHeight: number | undefined;
+  try {
+    const w = await getWork(workId);
+    if (w?.templateId) {
+      const tpl = getTemplate(w.templateId);
+      expectedWidth = tpl?.canvas?.width;
+      expectedHeight = tpl?.canvas?.height;
+    }
+  } catch { /* 模版读取失败则跳过分辨率一致性检查 */ }
+  const report = await runQualityGate(join(outDir, target), { subtitlePath, expectedWidth, expectedHeight });
   await writeFile(reportPath, JSON.stringify(report, null, 2), "utf-8").catch(() => {});
   return c.json(report);
 });
@@ -2004,7 +2057,12 @@ export async function startWorkSession(id: string, extraInstruction?: string): P
     `当前步骤: "${stepName}"（key: ${currentStepKey}）。流水线阶段顺序: ${stepKeys.join(" → ")}。`,
     // 首阶段详细指令与验收标准(2026-08-19):自动流水线不经过 /step 端点,
     // 详细指令必须随会话启动下发,否则 agent 只有步骤名可猜(w_20260819_1634_cd5 教训)
-    currentStepKey === "material-search" ? buildMaterialSearchInstruction(work, isUnattended) : "",
+    // 流水线 v2(2026-09-07):content-research/plan-assets 注入新契约指令(含深度档)
+    currentStepKey === "material-search" ? buildMaterialSearchInstruction(work, isUnattended)
+      : currentStepKey === "content-research"
+        ? buildContentResearchInstruction(work, work.researchDepth ?? resolveResearchDepth(work.purpose, work.contentForm), isUnattended)
+        : currentStepKey === "plan-assets" ? buildPlanAssetsInstruction(work, isUnattended)
+        : "",
     buildStepContractSection(currentStepKey, work, { includeAssets: false }),
     isUnattended
       ? [
@@ -2020,7 +2078,7 @@ export async function startWorkSession(id: string, extraInstruction?: string): P
   ].filter(Boolean).join("\n");
 
   const config = await loadConfig();
-  await wsBridge.createSession(id, prompt, config.model);
+  await wsBridge.createSession(id, prompt);
   return { status: "started", step: stepName };
 }
 
@@ -2049,7 +2107,7 @@ apiRoutes.post("/api/works/:id/chat", async (c) => {
     let session = wsBridge.getSession(id);
     if (!session) {
       const config = await loadConfig();
-      session = await wsBridge.createSession(id, body.text, config.model);
+      session = await wsBridge.createSession(id, body.text);
       return c.json({ sent: true, sessionCreated: true, workId: id });
     }
 
@@ -2119,7 +2177,14 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
       ``,
     ];
 
-    if (step === "material-search" && work.videoSearchQuery) {
+    if (step === "content-research") {
+      // 流水线 v2(2026-09-07):内容研究指令(事实核查+可行性论证+深度研究+成文落盘)
+      const depth = work.researchDepth ?? ((work.explicitParams?.researchDepth as "full" | "standard" | "quick" | undefined) ?? resolveResearchDepth(work.purpose, work.contentForm));
+      promptParts.push(buildContentResearchInstruction(work, depth, isAutoMode));
+    } else if (step === "plan-assets") {
+      // 流水线 v2:分镜与素材探查指令(需求驱动探查 + script 逐句溯源 + regress 回退通道)
+      promptParts.push(buildPlanAssetsInstruction(work, isAutoMode));
+    } else if (step === "material-search" && work.videoSearchQuery) {
       // 2026-08-19:指令抽取为共享函数并与评审标准对齐(旧 yt-dlp 找片基+用户三选一已废)
       promptParts.push(buildMaterialSearchInstruction(work, isAutoMode));
     } else if (step === "research") {
@@ -2247,18 +2312,18 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
             ? [
               `## 第一步：围绕创作方向深入搜索`,
               ``,
-              `用 $web_search 工具搜索"${work.topicHint}"相关的最新动态、热门讨论、优质案例(搜索规程见文末)。`,
+              `用 WebSearch 工具搜索"${work.topicHint}"相关的最新动态、热门讨论、优质案例(搜索规程见文末)。`,
               `深入了解这个方向的内容生态、受众偏好、爆款模式。`,
               ``,
               `## 第二步：找热门标签（仅用于蹭流量）`,
               ``,
-              `用 $web_search 工具搜索"${work.topicHint} 热搜""抖音 热门标签"，找到与创作方向相关的热门标签。`,
+              `用 WebSearch 工具搜索"${work.topicHint} 热搜""抖音 热门标签"，找到与创作方向相关的热门标签。`,
               `标签只是发布时的流量工具，不影响内容主题。`,
             ].join("\n")
             : [
               `## 第一步：搜索当前热门标签`,
               ``,
-              `用 $web_search 工具搜索"今日热搜""微博热搜""抖音热点"，找到当前有热度的话题。`,
+              `用 WebSearch 工具搜索"今日热搜""微博热搜""抖音热点"，找到当前有热度的话题。`,
               `这些话题只用来选标签（蹭流量），不是用来写内容的。`,
             ].join("\n"),
           ``,
@@ -2303,7 +2368,7 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
           competitorClause,
           `## 调研方法`,
           ``,
-          `1. 用 $web_search 工具围绕用户的创作方向搜索相关热点、趋势、优质案例(搜索规程见文末)`,
+          `1. 用 WebSearch 工具围绕用户的创作方向搜索相关热点、趋势、优质案例(搜索规程见文末)`,
           `2. 分析目标平台上同类内容的表现（标题风格、封面设计、标签策略）`,
           `3. 找到可以蹭的热门标签`,
           ``,
@@ -2324,6 +2389,14 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
       }
       // 批次3.1:research 确定性子契约(搜索通道/查询词/失败改写/信源/降级),两分支共用
       promptParts.push(SEARCH_PROTOCOL);
+      // P1(契约化,2026-09):research 阶段机器可读产物——事实清单 facts.json + 独立脚本 script.json
+      promptParts.push(
+        ``,
+        `## 机器可读产出(P1 契约化)`,
+        `调研完成后,除 report.md 外,同时产出(供后续阶段机器校验):`,
+        `1. \`assets/facts.json\`: {"claims":[{"text":"...","type":"文号|年份|百分比|机构","verify_status":"已核验|待核","source_url":"..."}]}——事实断言逐条带核验态与来源 URL`,
+        `2. \`assets/script.json\`: {"text":"口播全文","duration":180}——脚本独立结构化(带语速预算)`,
+      );
     } else {
       promptParts.push(
         `Execute the "${pipelineStep.name}" step of the pipeline.`,
@@ -2381,7 +2454,7 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
             `3. 提交渲染(异步任务):`,
             `   \`curl -X POST http://localhost:3271/api/works/${id}/render -H "Content-Type: application/json" -d '{"templateId":"${boundTemplate.id}","variables":{...},"assets":{...}}'\``,
             `   返回 { jobId };模板若声明了 host_video/voice_audio 变量,必须额外传 digitalHumanVideo/voiceAudio 字段`,
-            `   (kind=code 代码渲染模板:整片由 Revideo 渲染,无需素材变量;digitalHumanVideo 即数字人源片,成片时长自动跟随源片;可用 variables 覆盖 title/kicker/subtitleCn/subtitleEn 文案)`,
+            `   (kind=code 代码渲染模板:整片由代码渲染引擎出片(web 支路 HTML 或 Revideo TSX,模板内部约定,渲染方无感),无需素材变量;digitalHumanVideo 即数字人源片,成片时长自动跟随源片;可用 variables 覆盖 title/kicker/subtitleCn/subtitleEn 文案)`,
             `4. 轮询 \`curl -s http://localhost:3271/api/render-jobs/{jobId}\` 直至 status=completed;failed 时读 error 修正变量后重试`,
             `5. 产物在 output/ 目录;不要对产物再做二次合成`,
             `6. 渲染完成后必须写 output/publish-text.md 发布文案(首个非空行=发布标题钩子;中段正文;最后一行 # 开头的话题标签 5-10 个,2-3 热门 + 2-3 垂类 + 1-2 品牌):首句 2 秒内抓人(好奇缺口/大胆断言/痛点),正文 2-3 句,结尾自然 CTA(关注/收藏/评论),语言匹配目标平台(抖音/小红书用中文)`,
@@ -2438,6 +2511,8 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
           ``,
           `## BGM 配乐与混音红线（强制）`,
           `- BGM 只能来自：公共素材库 music、/api/generate/music（MiniMax music-2.6，duration 参数自动补齐时长）、yt-dlp 免版权音乐。**禁止用 ffmpeg 合成正弦波/白噪声/棕噪声充当 BGM**——属于静默降质`,
+          `- **BGM prompt 情绪弧线（D1 补修，禁止单一句式）**：写 BGM prompt 必须给出情绪弧线（intro 铺垫→build 递进→drop 高潮→outro 收束）+ 配器清单（乐器/音色）+ 各段时长，禁止只写"无歌词电子 90-110BPM"这类单一句式`,
+          `- **yt-dlp 音乐下载默认禁用（D1 版权治理）**：yt-dlp 只能下"明确免版权/CC0"的音乐；抖音热榜/YouTube 热歌默认禁用（商用授权风险），确需使用须显式标注版权状态并由用户确认`,
           `- **混音必须用响度锚定，禁止拍脑袋 volume 比例**（实测 volume=0.15 也会盖过人声）：`,
           `  1. 旁白轨先归一化：\`loudnorm=I=-15:TP=-1.5:LRA=11\``,
           `  2. BGM 轨压到旁白以下约 19dB：\`loudnorm=I=-34:TP=-3:LRA=11\`，再 amix 混入`,
@@ -2662,7 +2737,7 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
     const config = await loadConfig();
     let session = wsBridge.getSession(id);
     if (!session) {
-      session = await wsBridge.createSession(id, prompt, config.model);
+      session = await wsBridge.createSession(id, prompt);
       return c.json({ triggered: true, sessionCreated: true, workId: id, step });
     }
 
@@ -2748,23 +2823,64 @@ async function markEvalBlocked(workId: string, completedStep: string, broadcastD
     if (minorOnly) {
       freshWork.pipeline[completedStep].note = `评审 ${broadcastData.attempt ?? ""} 轮后仅剩 minor 问题,转人工待决`;
     }
-    // 2026-08-19 P1:同步置 works.status=failed——此前只改 pipeline,卡片永远
-    // 显示"素材准备中/合成中"中间态,无人工处置入口(状态腐烂)
-    await storeUpdateWork(workId, { pipeline: freshWork.pipeline, status: "failed" });
+    // Q4(方案定稿):≥3 轮系统性重复 → 回退上游步骤修复(而非当前步重试),并阻断至人工确认
+    let nextStatus = "failed" as string;
+    if (broadcastData.reason === "repeated_issue_3_rounds") {
+      // 流水线重构(2026-09-07,批次2):ORDER 不再硬编码五步——v2 作品四步、v1 作品五步,
+      // 按作品实际 pipeline 键序回退上游,新旧管线同时正确
+      const ORDER = Object.keys(freshWork.pipeline);
+      const idx = ORDER.indexOf(completedStep);
+      if (idx > 0) {
+        const upstream = ORDER[idx - 1];
+        if (freshWork.pipeline[upstream]) {
+          freshWork.pipeline[upstream].status = "active" as any;
+          freshWork.pipeline[upstream].note = "评审 ≥3 轮同问题(系统性重复),已回退上游修复——请从上游重新解决根因";
+        }
+      }
+      nextStatus = deriveStatusFromPipeline(freshWork.pipeline, freshWork.status);
+    }
+    // 2026-08-19 P1:同步置 works.status;回退上游时按流水线派生(不硬判 failed),普通熔断仍 failed
+    await storeUpdateWork(workId, { pipeline: freshWork.pipeline, status: nextStatus as any });
     broadcastPipelineUpdate(workId, freshWork.pipeline);
   }
   // 批次10.3(M14):失败写事故卡——消灭"失败即换皮重跑、零教训传递"
   const resultForCard = broadcastData.result as EvalResult | undefined;
-  void import("../services/incidents.js").then((m) =>
-    m.recordIncident(
-      workId,
-      completedStep,
-      `评审熔断(${String(broadcastData.reason ?? `第 ${broadcastData.attempt ?? "?"} 轮后`)})。` +
-      (resultForCard?.issues?.length
-        ? `遗留问题:\n${resultForCard.issues.map((i) => `- [${i.severity}] ${i.description}`).join("\n")}`
-        : ""),
-    ),
-  ).catch(() => {});
+  const cardSummary =
+    `评审熔断(${String(broadcastData.reason ?? `第 ${broadcastData.attempt ?? "?"} 轮后`)})。` +
+    (resultForCard?.issues?.length
+      ? `遗留问题:\n${resultForCard.issues.map((i) => `- [${i.severity}] ${i.description}`).join("\n")}`
+      : "");
+  void import("../services/incidents.js").then(async (m) => {
+    await m.recordIncident(workId, completedStep, cardSummary);
+    // X6 验收修复(2026-09-07,P4 接线):事故卡此前只在"新会话启动"注入,熔断后的
+    // 同一会话读不到自己的教训(ae0 第二次熔断重蹈第一次覆辙的根因)。
+    // 写完立即把最近事故摘要回灌当前会话。
+    const digest = await m.recentIncidentDigestNow(3);
+    if (digest) {
+      wsBridge?.getSession(workId)?.loop?.injectNotification(
+        `【事故教训回灌】本作品刚发生评审熔断(${completedStep}),最近事故卡摘要如下,修复时务必吸收:\n${digest}`,
+      );
+    }
+  }).catch(() => {});
+  // X6 验收修复(2026-09-07,P4 接线):≥3 轮系统性重复时自动写 evolution_rules 提案
+  // (enabled=false 待人工审批转正)——此前 createEvolutionRule 建好后零调用。
+  if (broadcastData.reason === "repeated_issue_3_rounds") {
+    void import("../db/evolution-rules-repo.js").then((m) =>
+      m.createEvolutionRule({
+        rule_type: "eval",
+        target_key: completedStep,
+        condition_json: {
+          reason: "repeated_issue_3_rounds",
+          workId,
+          issues: resultForCard?.issues?.map((i) => i.description).slice(0, 5) ?? [],
+        },
+        action: `评审同问题 ≥3 轮:回退上游步骤修复根因而非当前步重试,并阻断至人工确认`,
+        confidence: 0.8,
+        source: `eval-3-fail:${workId}:${completedStep}`,
+        enabled: false,
+      }),
+    ).catch(() => {});
+  }
   // 队列闭环：评审 3 轮不过即卡死，显式出队标 failed 交人工处置 ——
   // 否则队列项停在 running，runner 健康检查会反复恢复（且 startWorkSession
   // 只认 pending/active 步骤，恢复后会跳过被卡的 eval_blocked 步骤）。
@@ -2819,12 +2935,36 @@ async function clearEvalTimeoutMarkers(workId: string, step: string): Promise<vo
 }
 
 /** 降级链"换模型"段:选一个与当前 eval 档不同的可用 provider 模型 */
-function pickFallbackEvalModel(config: Awaited<ReturnType<typeof loadConfig>>, currentProvider: string): string | undefined {
-  const candidates: [string, string][] = [
-    ["deepseek", "deepseek-v4-pro"],
+/** L1 降级链按实测画像选(2026-09-07 验收修复:此前 SQL 写错列名 AVG(latency)→必抛错
+ *  被吞、恒落硬编码顺序;且 model-profiles.ts 从未接线。现改为 loadModelProfiles 取
+ *  llm_usage 实测 avg latency_ms 排序 + modelSupportsImage 能力过滤——vision 评审
+ *  (assets/assembly)不再可能降级到无看图能力的 kimi-for-coding)。 */
+async function pickFallbackEvalModel(
+  config: Awaited<ReturnType<typeof loadConfig>>,
+  currentProvider: string,
+  opts: { vision?: boolean } = {},
+): Promise<string | undefined> {
+  let candidates: [string, string][] = [
     ["kimi", "kimi-for-coding"],
     ["glm", "glm-4.6"],
+    ["deepseek", "deepseek-v4-pro"],
+    // vision 评审补充候选(assets/assembly/material-search 需要看图)
+    ["deepseek", "deepseek-v4-flash-vision-exp"],
+    ["glm", "glm-5.3-flash"],
+    ["glm", "glm-5v-turbo"],
   ];
+  // 能力过滤(L1 验收修复):需要看图的评审排除无 vision 能力的候选
+  if (opts.vision) candidates = candidates.filter(([, m]) => modelSupportsImage(m));
+  // 实测画像(L1):llm_usage 按 provider:model 聚合 avg latency_ms,升序前置;无样本排最后
+  try {
+    const profiles = await loadModelProfiles();
+    const latMap = new Map(profiles.map((p) => [`${p.provider}:${p.model}`, p.latencyMs]));
+    const rank = (key: string) => {
+      const v = latMap.get(key);
+      return v !== undefined && Number.isFinite(v) ? v : Number.MAX_SAFE_INTEGER;
+    };
+    candidates.sort((a, b) => rank(`${a[0]}:${a[1]}`) - rank(`${b[0]}:${b[1]}`));
+  } catch { /* llm_usage 不可用时保持默认顺序 */ }
   for (const [key, model] of candidates) {
     if (key === currentProvider) continue;
     const p = config.llm?.providers?.[key];
@@ -2929,8 +3069,11 @@ export async function runEvaluation(workId: string, completedStep: string, nextS
     evalResult.attempt = attempt;
     evalResult.timestamp = new Date().toISOString();
 
-    // Save result
-    await saveEvalResult(workId, completedStep, attempt, evalResult);
+    // Save result（Q4 补修：附评审模型与超时降级标记，落 eval_results 表）
+    await saveEvalResult(workId, completedStep, attempt, evalResult, {
+      judgeModel: gateFallback ? "gate" : (effectiveModelSpec ?? evalCfg.llm?.models?.eval ?? "unknown"),
+      timeoutDegraded: !!gateFallback,
+    });
 
     // 2026-09-01 终审 I3 竞态防护:评审在途(最长 15min+)期间人工通道
     // (eval/force-pass、eval/retry)可能已把步骤置为 done/active——过期结论回写会
@@ -3005,6 +3148,8 @@ export async function runEvaluation(workId: string, completedStep: string, nextS
           reviewComment: "",
         } as any);
         broadcastPipelineUpdate(workId, freshWork.pipeline);
+        // 流水线 v2 派生钩子(批次4):内容研究通过派生研究成果子作品;assets 完成渲染卡片
+        hookV2Derivations(workId, completedStep, freshWork.pipelineVersion);
         if (derivedAfterEval === "reviewing") {
           notifyWorkSettled(workId, "reviewing");
           announceReviewReady(workId);
@@ -3069,6 +3214,12 @@ export async function runEvaluation(workId: string, completedStep: string, nextS
       // Inject feedback into creator agent via resume
       // 批次7.2:重复问题检测——同一 issue 跨轮出现即附换路警示(治"改描述式假修 ×4 轮")
       const repeatNotes = await findRepeatedIssues(workId, completedStep, evalResult);
+      // Q4 硬拦截：任一问题 ≥3 轮重复（【BLOCK】标记）→ 阻断至人工（不再注入反馈循环）
+      if (repeatNotes.some((n) => n.startsWith("【BLOCK】"))) {
+        await markEvalBlocked(workId, completedStep, { reason: "repeated_issue_3_rounds", notes: repeatNotes });
+        saveWorkChat(workId, { blocks: session.messageHistory }).catch(() => {});
+        return;
+      }
       const feedbackPrompt = buildFeedbackPrompt(evalResult, attempt, repeatNotes);
       await wsBridge.sendMessage(workId, feedbackPrompt);
 
@@ -3091,7 +3242,9 @@ export async function runEvaluation(workId: string, completedStep: string, nextS
       }
       if (timeoutCount === 2 && !evalModelSpec) {
         const currentProvider = config.llm?.models?.eval?.split(":")[0] ?? config.llm?.defaultProvider ?? "deepseek";
-        const fallback = pickFallbackEvalModel(config, currentProvider);
+        // L1 验收修复:vision 评审(assets/assembly 等)需传 vision 需求,防止降级到无看图能力模型
+        const needVision = ["assets", "assembly", "material-search", "image-text"].includes(completedStep);
+        const fallback = await pickFallbackEvalModel(config, currentProvider, { vision: needVision });
         if (fallback) {
           log("warn", "api", "eval_timeout_switch_model", workId, { step: completedStep, fallback });
           await new Promise((r) => setTimeout(r, 10_000));
@@ -3154,7 +3307,12 @@ async function findRepeatedIssues(workId: string, step: string, current: EvalRes
         }
       }
       if (maxRound > 0) {
-        notes.push(`「${issue.description.slice(0, 60)}」——该问题第 ${maxRound} 轮评审已指出,本轮仍出现`);
+        // Q4 升级：同 issue 已第 ≥3 轮出现（maxRound≥2 即"跨 ≥2 轮后仍现"）→ 标记硬拦截
+        if (maxRound >= 2) {
+          notes.push(`【BLOCK】「${issue.description.slice(0, 60)}」——该问题已第 ${maxRound} 轮评审仍现（≥3 轮），系统性重复：回退上游步骤修复，阻断至人工确认`);
+        } else {
+          notes.push(`「${issue.description.slice(0, 60)}」——该问题第 ${maxRound} 轮评审已指出,本轮仍出现`);
+        }
       }
     }
     return notes;
@@ -3207,6 +3365,10 @@ function buildEvalPrompt(work: Work, step: string, attempt: number, historyText:
 - 你是独立的评审者，不是创作者。你的职责是发现问题，而不是赞美。
 - AI 存在"自我评价偏差"——倾向于赞美自己的产出。你必须刻意克服这种倾向。
 - 使用硬性阈值，不要模糊通过。任何维度低于 6/10 分必须打回。
+- **冗长偏差防护**：忽略产出的篇幅长度——字数多不是质量信号，只评事实/一致性/正确性，禁止因"写得多"给高分。
+- **权威偏差防护**：不因语气自信/措辞肯定给高分；每个 fail 必须引用具体文件/路径/数据证据，禁止空泛批评。
+- **位置偏差防护（X14 验收修复,2026-09-07）**：不因内容出现的先后位置影响评分——开头/结尾的条目与中间的条目同等严格；对比/并列场景(如多版本钩子、多张卡片)逐个独立评分,不因排在前面的看着好就抬高整体。
+- **证据先于分数**：先找证据，再下结论；评分必须能被第三方按你引用的证据复现。
 
 ## 作品信息
 - 标题: ${work.title}
@@ -3231,9 +3393,10 @@ ${historyText.slice(0, 6000) || "(无文本产出记录)"}
 
 1. 使用 Read 工具从 ${workDir} 目录读取实际文件（必须重新读取，不要使用缓存）
 2. 对于图片文件：使用 Read 工具查看图片，评估视觉质量
-3. 对于视频文件：使用 ffprobe 检查技术参数（分辨率、时长、编码、音频轨）
-4. 根据评审标准逐项评分
-5. 输出结构化评审结果
+${["assembly", "assets"].includes(step) ? `3. **【Q2 全量核验,强制】** 按 \`assets/shot-map.json\` 逐镜全量核验:每镜至少看 1 帧(可拼图 3-5 张一次 Read),按 38 镜首/中/尾共 114 帧覆盖,禁止只随机抽 25 帧——空图/错图/货不对板是素材与成片评审最常见漏检` : ""}
+4. 对于视频文件：使用 ffprobe 检查技术参数（分辨率、时长、编码、音频轨）
+5. 根据评审标准逐项评分
+6. 输出结构化评审结果
 
 常用文件路径：
 - 调研报告: ${workDir}/research/report.md
@@ -3265,6 +3428,7 @@ ${prevResultsText ? `## 历史评审记录\n${prevResultsText}\n\n请特别关�
 规则：
 - 任何 critical 问题 → 必须 fail
 - 任何维度 < 6/10 → 必须 fail
+- **否定聚合（Q3 方案定稿）**：任一【硬性】维度不达标 → 必须 fail，**不计算加权平均**（不允许其他高分把单维最低分稀释放行）
 - 所有维度 ≥ 7/10 且无 critical 问题 → pass`;
 }
 
@@ -3297,6 +3461,168 @@ apiRoutes.post("/api/purposes/:key/research", async (c) => {
     .then((r) => log("info", "api", "purpose_research_done", key, { added: r.added, reused: r.reused, total: r.total }))
     .catch((err) => log("error", "api", "purpose_research_failed", key, { error: (err as Error).message }));
   return c.json({ ok: true, started: true, message: "技能包调研已启动(约 2-5 分钟),稍后刷新查看条数" });
+});
+
+// POST /api/works/:id/conform — P3(2026-09):合成服务化。
+// 接收合成 spec(分段+配音+BGM+字幕+调色+响度)，服务端一条确定性流水线跑完
+// (内部用 R1 QSV 编码 + R3 字幕样式)。agent 只做参数决策，不再手拼 8 类 ffmpeg。
+apiRoutes.post("/api/works/:id/conform", async (c) => {
+  const id = c.req.param("id");
+  const work = await getWork(id);
+  if (!work) return c.json({ error: "Work not found" }, 404);
+  type ConformBody = {
+    segments?: Array<{ path: string }>;
+    narration?: string;
+    bgm?: string;
+    subtitle?: string;
+    subtitleStyle?: string;
+    width?: number;
+    height?: number;
+    fps?: number;
+    loudness?: { narration?: number; bgm?: number };
+    color?: { contrast?: number; saturation?: number; brightness?: number };
+    output?: string;
+  };
+  const body = await c.req.json<ConformBody>().catch(() => ({} as ConformBody));
+  try {
+    const workDir = join(dataDir, "works", id);
+    // X3 验收修复(2026-09-07):所有路径强制收敛在作品目录内(assertPathInWorkDir),
+    // 杜绝任意绝对路径读写;合成下沉为 long-task 后台作业(完成事件注入 agent),不再挂住 HTTP 请求。
+    const { assertPathInWorkDir, submitConformTask } = await import("../services/long-tasks.js");
+    const safe = (p?: string) => (p ? assertPathInWorkDir(workDir, p) : undefined);
+    const output = body.output ? safe(body.output)! : join(workDir, "output", "final.mp4");
+    const task = await submitConformTask({
+      workId: id,
+      spec: {
+        segments: (body.segments ?? []).map((s) => ({ path: safe(s.path)! })),
+        narration: safe(body.narration),
+        bgm: safe(body.bgm),
+        subtitle: safe(body.subtitle),
+        subtitleStyle: body.subtitleStyle,
+        width: body.width,
+        height: body.height,
+        fps: body.fps,
+        loudness: body.loudness,
+        color: body.color,
+        output,
+      },
+    });
+    log("info", "api", "conform_submitted", id, { taskId: task.id, output });
+    return c.json({ taskId: task.id, output, status: "running" }, 202);
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+  }
+});
+
+// ── 流水线 v2 派生钩子(批次4,业主修订):内容研究通过 → 派生"研究成果"图文子作品 ──
+// 进图文待审区(文章立即可读);assets 完成 → 文章+素材渲染卡片填入子作品(一键发布
+// 走现有 approve→publish 链路)。仅 v2 作品触发;失败仅记日志不阻断主流程。
+function hookV2Derivations(workId: string, completedStep: string, pipelineVersion?: number): void {
+  if ((pipelineVersion ?? 1) !== 2) return;
+  if (completedStep === "content-research") {
+    void import("../services/dual-output.js").then((m) => m.ensureResearchArticleChild(workId))
+      .catch((err) => log("error", "api", "research_child_derive_failed", workId, { error: (err as Error).message }));
+  }
+  if (completedStep === "assets") {
+    void import("../services/dual-output.js").then((m) => m.renderResearchChildCards(workId))
+      .catch((err) => log("error", "api", "research_child_cards_failed", workId, { error: (err as Error).message }));
+  }
+}
+
+// POST /api/works/:id/pipeline/regress — 流水线 v2 回退通道(2026-09-07 重构,批次2)。
+// 白名单仅放行 plan-assets → content-research:素材探查发现整段场景缺素材时,
+// 契约化回退内容研究修订文章(而不是硬凑素材——ae0 教堂/币圈事故根因)。
+// 前置:assets/material-gaps.json 存在(结构化缺口声明);幂等:已在 content-research 则 409;
+// 同一作品 regress ≥3 次转 awaiting_human 交人工(防探查↔研究死循环)。
+apiRoutes.post("/api/works/:id/pipeline/regress", async (c) => {
+  const id = c.req.param("id");
+  const work = await getWork(id);
+  if (!work) return c.json({ error: "Work not found" }, 404);
+  const body = await c.req.json<{ fromStep?: string; toStep?: string; reason?: string; gapsRef?: string }>().catch(() => ({} as { fromStep?: string; toStep?: string; reason?: string; gapsRef?: string }));
+  if (body.fromStep !== "plan-assets" || body.toStep !== "content-research") {
+    return c.json({ error: "回退通道仅放行 plan-assets → content-research(整段缺素材修订文章)" }, 400);
+  }
+  if ((work.pipelineVersion ?? 1) !== 2) {
+    return c.json({ error: "回退通道仅适用于流水线 v2 作品" }, 400);
+  }
+  const workDir = join(dataDir, "works", id);
+  const gapsPath = join(workDir, "assets", "material-gaps.json");
+  if (!existsSync(gapsPath)) {
+    return c.json({ error: "缺少 assets/material-gaps.json(整段缺素材的结构化声明)——先按分镜与素材探查指令写 gaps 再回退" }, 400);
+  }
+  const crStep = work.pipeline["content-research"];
+  if (!crStep) return c.json({ error: "该作品无 content-research 步骤" }, 400);
+  if (crStep.status === "active") return c.json({ error: "content-research 已在进行中(幂等)", code: "ALREADY_REGRESSED" }, 409);
+
+  // 死循环防护:regress 次数记在 content-research note 里
+  const regressCount = (crStep.note?.match(/\[regress#(\d+)\]/)?.[1] ? Number(crStep.note.match(/\[regress#(\d+)\]/)![1]) : 0) + 1;
+  const gapsText = (() => { try { return readFileSync(gapsPath, "utf-8"); } catch { return ""; } })();
+
+  if (regressCount >= 3) {
+    work.pipeline["content-research"].status = "awaiting_human" as any;
+    work.pipeline["content-research"].note = `[regress#${regressCount}] 素材缺口回退已达 3 次,转人工裁决(素材探查↔内容研究疑似死循环)`;
+    await storeUpdateWork(id, { pipeline: work.pipeline, status: deriveStatusFromPipeline(work.pipeline, work.status) });
+    broadcastPipelineUpdate(id, work.pipeline);
+    return c.json({ status: "awaiting_human", message: "回退 3 次未收敛,已转人工裁决" }, 200);
+  }
+
+  work.pipeline["content-research"].status = "active" as any;
+  work.pipeline["content-research"].note = `[regress#${regressCount}] ${body.reason ?? "素材缺口回退"}(gaps: ${body.gapsRef ?? "assets/material-gaps.json"})`;
+  const paStep = work.pipeline["plan-assets"];
+  if (paStep) {
+    paStep.status = "pending" as any;
+    paStep.note = "待文章修订后重做";
+  }
+  await storeUpdateWork(id, { pipeline: work.pipeline, status: deriveStatusFromPipeline(work.pipeline, work.status) });
+  broadcastPipelineUpdate(id, work.pipeline);
+  log("info", "api", "pipeline_regress", id, { reason: body.reason, count: regressCount });
+
+  // 回退后续命会话:把 gaps 内容嵌进消息,agent 第一眼看到"哪段场景缺什么素材"
+  try {
+    const { buildContentResearchInstruction } = await import("./step-contract.js");
+    const depth = (work.researchDepth as "full" | "standard" | "quick") ?? "standard";
+    const resumeMsg = [
+      `【回退修订】素材探查发现整段场景缺素材,流水线已回退到内容研究。`,
+      ``,
+      `## 素材缺口声明(assets/material-gaps.json)`,
+      gapsText.slice(0, 2000),
+      ``,
+      `## 你的任务`,
+      `修订 research/article.md 与 research/article.json:改写/替换依赖缺口素材的段落(改用可得的叙事角度),`,
+      `保持事实核验纪律不变。修订后按正常流程 advance(content-research → plan-assets)重新推进。`,
+      ``,
+      buildContentResearchInstruction(work, depth, true),
+    ].join("\n");
+    const session = wsBridge?.getSession(id);
+    if (session?.loop) {
+      session.loop.injectNotification(resumeMsg);
+    } else {
+      await wsBridge?.sendMessage(id, resumeMsg);
+    }
+  } catch { /* 会话不在时作品保持 active,看门狗/runner 会拉起 */ }
+
+  return c.json({ status: "regressed", regressCount, message: "已回退到内容研究,修订文章后重新推进" });
+});
+
+// POST /api/works/:id/template — M1(方案定稿):绑定/换绑模板（创建后补绑或换绑，统一入口）
+apiRoutes.post("/api/works/:id/template", async (c) => {
+  const id = c.req.param("id");
+  const work = await getWork(id);
+  if (!work) return c.json({ error: "Work not found" }, 404);
+  const body = await c.req.json<{ templateId?: string }>().catch(() => ({} as { templateId?: string }));
+  if (!body.templateId) return c.json({ error: "templateId is required" }, 400);
+  const tpl = getTemplate(body.templateId);
+  if (!tpl) return c.json({ error: `模板 ${body.templateId} 不存在` }, 400);
+  // 类型匹配：图文作品只能绑图文模板；视频作品不能绑图文模板
+  if (work.type === "image-text" && tpl.kind !== "image-text") {
+    return c.json({ error: "图文作品只能绑定图文模板" }, 400);
+  }
+  if (work.type !== "image-text" && tpl.kind === "image-text") {
+    return c.json({ error: "视频作品不能绑定图文模板" }, 400);
+  }
+  await storeUpdateWork(id, { templateId: body.templateId } as never);
+  log("info", "api", "template_bound", id, { templateId: body.templateId });
+  return c.json({ ok: true, templateId: body.templateId });
 });
 
 // POST /api/works/:id/pipeline/advance — agent calls this to advance pipeline
@@ -3381,9 +3707,21 @@ apiRoutes.post("/api/works/:id/pipeline/advance", async (c) => {
 
     // ── A1/B2 机器门禁(P2-T3):assembly 推进前强制交付物校验,拦截在评审之前 ──
     if (completedStep === "assembly" && work.type !== "image-text") {
-      const { assertAssemblyDeliverables } = await import("../services/quality-gate.js");
+      const { assertAssemblyDeliverables, assertTemplateVisualDiff } = await import("../services/quality-gate.js");
       // 批次11.4:传入模板/作品信息,启用模板段入片校验
       const gateIssues = assertAssemblyDeliverables(join(dataDir, "works", id), { templateId: work.templateId, workId: id });
+      // M3(方案定稿):绑定模板的作品,成片 vs 模板预览视觉 diff(像素比对,>30% 即 fail)
+      if (!gateIssues.length && work.templateId) {
+        try {
+          const { readdirSync } = await import("node:fs");
+          const outputDir = join(dataDir, "works", id, "output");
+          const finalVideo = readdirSync(outputDir).find((f) => /^final[^/]*\.(mp4|mov|webm)$/i.test(f));
+          if (finalVideo) {
+            const tplPreview = join(dataDir, "templates", `${work.templateId}-preview.mp4`);
+            gateIssues.push(...await assertTemplateVisualDiff(join(outputDir, finalVideo), existsSync(tplPreview) ? tplPreview : undefined));
+          }
+        } catch { /* 视觉 diff 自身失败不阻断主门禁(template_skin 契约检查仍兜底) */ }
+      }
       if (gateIssues.length) {
         log("info", "api", "assembly_gate_blocked", id, { count: gateIssues.length });
         return c.json({
@@ -3400,14 +3738,60 @@ apiRoutes.post("/api/works/:id/pipeline/advance", async (c) => {
       } catch { /* 回写失败不阻断主流程,publish-text/ass 事实源仍在 */ }
     }
 
+    // ── 流水线 v2(2026-09-07 重构,批次2):新四步门禁块(旧五步块保持原样服务存量作品) ──
+    if (completedStep === "content-research") {
+      const { assertArticleContract, assertContractArtifacts } = await import("../services/quality-gate.js");
+      const wDir = join(dataDir, "works", id);
+      const gateIssues = assertContractArtifacts(wDir, "content-research");
+      gateIssues.push(...assertArticleContract(wDir, (work.researchDepth as "full" | "standard" | "quick") ?? "standard"));
+      if (gateIssues.length) {
+        log("info", "api", "content_research_gate_blocked", id, { count: gateIssues.length });
+        return c.json({
+          error: `内容研究契约校验未通过(${gateIssues.length} 项),请逐项修复后重新提交`,
+          issues: gateIssues.map((i) => i.detail),
+        }, 400);
+      }
+    }
+    if (completedStep === "plan-assets" && work.type !== "image-text") {
+      const { assertPlanDeliverables, assertPlanGateExtensions, assertPlanStructure, assertTemplateBindingConsistency, assertContractArtifacts } = await import("../services/quality-gate.js");
+      const wDir = join(dataDir, "works", id);
+      const explicitDur = Number(work.explicitParams?.duration) > 0 ? Number(work.explicitParams?.duration) : undefined;
+      const gateIssues = assertPlanDeliverables(wDir, explicitDur);
+      gateIssues.push(...assertPlanGateExtensions(wDir));
+      gateIssues.push(...assertPlanStructure(wDir));
+      gateIssues.push(...assertTemplateBindingConsistency(wDir, work.templateId));
+      gateIssues.push(...assertContractArtifacts(wDir, "plan-assets"));
+      if (gateIssues.length) {
+        log("info", "api", "plan_assets_gate_blocked", id, { count: gateIssues.length });
+        return c.json({
+          error: `分镜与素材探查机器预检未通过(${gateIssues.length} 项),请逐项修复后重新调用 advance`,
+          issues: gateIssues.map((i) => i.detail),
+        }, 400);
+      }
+    }
+    // 图文 v2 的 plan-assets:契约文件门禁(结构断言是视频向的,图文有独立 criteria)
+    if (completedStep === "plan-assets" && work.type === "image-text") {
+      const { assertContractArtifacts } = await import("../services/quality-gate.js");
+      const gateIssues = assertContractArtifacts(join(dataDir, "works", id), "plan-assets");
+      if (gateIssues.length) {
+        return c.json({ error: `内容规划与配图探查契约文件未齐备(${gateIssues.length} 项)`, issues: gateIssues.map((i) => i.detail) }, 400);
+      }
+    }
+
     // ── plan 机器预检(2026-08-26):机械可校验项(时长/旁白字数/剔除素材引用/极限词)
     // 拦截在评审之前——两项作品共 5 轮 plan 评审失败的失分点全部落在这四类,
     // 机器预检零成本,LLM 评审专注结构性判断。响应附 issues 清单,agent 可直接修复重提。
     if (completedStep === "plan" && work.type !== "image-text") {
-      const { assertPlanDeliverables } = await import("../services/quality-gate.js");
+      const { assertPlanDeliverables, assertPlanGateExtensions, assertPlanStructure, assertTemplateBindingConsistency } = await import("../services/quality-gate.js");
       // 批次5.8:用户显式时长豁免(最高优先级事实源)
       const explicitDur = Number(work.explicitParams?.duration) > 0 ? Number(work.explicitParams?.duration) : undefined;
       const gateIssues = assertPlanDeliverables(join(dataDir, "works", id), explicitDur);
+      // Q1+F3 补修(2026-09):素材引用存在性 + 事实断言核验态，接入 plan 预检链
+      gateIssues.push(...assertPlanGateExtensions(join(dataDir, "works", id)));
+      // P1(2026-09):plan-validator 结构校验（景别覆盖率/制作方式标注/字数×语速）
+      gateIssues.push(...assertPlanStructure(join(dataDir, "works", id)));
+      // M1(方案定稿):绑定一致性断言——works.template_id 与 plan.md 声称的模板 ID 必须一致
+      gateIssues.push(...assertTemplateBindingConsistency(join(dataDir, "works", id), work.templateId));
       if (gateIssues.length) {
         log("info", "api", "plan_gate_blocked", id, { count: gateIssues.length });
         return c.json({
@@ -3417,11 +3801,26 @@ apiRoutes.post("/api/works/:id/pipeline/advance", async (c) => {
       }
     }
 
+    // ── research 契约文件门禁(X15,2026-09-07):facts.json/script.json 缺失即拦 ──
+    if (completedStep === "research" && work.type !== "image-text") {
+      const { assertContractArtifacts } = await import("../services/quality-gate.js");
+      const gateIssues = assertContractArtifacts(join(dataDir, "works", id), "research");
+      if (gateIssues.length) {
+        log("info", "api", "research_gate_blocked", id, { count: gateIssues.length });
+        return c.json({
+          error: `调研阶段契约文件未齐备(${gateIssues.length} 项),请补齐后重新提交`,
+          issues: gateIssues.map((i) => i.detail),
+        }, 400);
+      }
+    }
+
     // ── material-search / assets 机器门禁(2026-08-28 批次5.7,v2-M2)——
     // 机械可校验项拦截在评审之前,与 plan/assembly 门禁同构
     if (completedStep === "material-search" && work.type !== "image-text") {
-      const { assertMaterialSearchDeliverables } = await import("../services/quality-gate.js");
+      const { assertMaterialSearchDeliverables, assertContractArtifacts } = await import("../services/quality-gate.js");
       const gateIssues = assertMaterialSearchDeliverables(join(dataDir, "works", id));
+      // X15(2026-09-07):契约文件存在性门禁——registry.json 缺失即拦(P1 契约化闭环)
+      gateIssues.push(...assertContractArtifacts(join(dataDir, "works", id), "material-search"));
       if (gateIssues.length) {
         log("info", "api", "material_search_gate_blocked", id, { count: gateIssues.length });
         return c.json({
@@ -3431,8 +3830,13 @@ apiRoutes.post("/api/works/:id/pipeline/advance", async (c) => {
       }
     }
     if (completedStep === "assets" && work.type !== "image-text") {
-      const { assertAssetsDeliverables } = await import("../services/quality-gate.js");
+      const { assertAssetsDeliverables, assertShotMapCompleteness, ensureShotMap } = await import("../services/quality-gate.js");
       const gateIssues = assertAssetsDeliverables(join(dataDir, "works", id));
+      // X15(2026-09-07,Q2):shot-map 缺失时机器程序化生成兜底(从 plan.md 引用逐镜抽帧),
+      // 不再纯靠 agent 自觉;生成后仍由完整性检查核验
+      try { await ensureShotMap(join(dataDir, "works", id)); } catch { /* 生成失败由完整性检查拦截 */ }
+      // Q2(2026-09):shot-map 逐镜抽帧台账完整性检查（缺 asset_file/抽帧即 fail）
+      gateIssues.push(...assertShotMapCompleteness(join(dataDir, "works", id)));
       if (gateIssues.length) {
         log("info", "api", "assets_gate_blocked", id, { count: gateIssues.length });
         return c.json({
@@ -3445,8 +3849,11 @@ apiRoutes.post("/api/works/:id/pipeline/advance", async (c) => {
     // ── 图文作品等价门禁(2026-08-28 批次6.2,v2-M2):图文 assembly 此前被整体跳过,
     // 空图文可过审。卡片数/封面/空白文件机器可检,与视频门禁同位拦截
     if (completedStep === "assembly" && work.type === "image-text") {
-      const { assertImageTextDeliverables } = await import("../services/quality-gate.js");
+      const { assertImageTextDeliverables, assertImageTextVision } = await import("../services/quality-gate.js");
       const gateIssues = assertImageTextDeliverables(join(dataDir, "works", id));
+      // D3(2026-09):卡片 vision 核验（版式/文字溢出/配色）——vision 不可用自动降级跳过
+      const evalCfg = await loadConfig();
+      gateIssues.push(...await assertImageTextVision(join(dataDir, "works", id, "output", "cards"), evalCfg));
       if (gateIssues.length) {
         log("info", "api", "image_text_gate_blocked", id, { count: gateIssues.length });
         return c.json({
@@ -3561,8 +3968,15 @@ apiRoutes.post("/api/works/:id/pipeline/advance", async (c) => {
               id,
               [
                 `Pipeline 已推进到「${stepNameForPrompt}」阶段。请继续执行该阶段的工作，完成后再次调用 pipeline/advance 推进到下一阶段。`,
-                effectiveNextStep === "material-search" ? buildMaterialSearchInstruction(work, !!work.autoMode) : "",
+                effectiveNextStep === "material-search" ? buildMaterialSearchInstruction(work, !!work.autoMode)
+                  : effectiveNextStep === "content-research"
+                    ? buildContentResearchInstruction(work, work.researchDepth ?? resolveResearchDepth(work.purpose, work.contentForm), !!work.autoMode)
+                    : effectiveNextStep === "plan-assets" ? buildPlanAssetsInstruction(work, !!work.autoMode)
+                    : "",
                 buildStepContractSection(effectiveNextStep, work),
+                // 2026-09-03 实测:续命消息此前不带模版契约,阶段越推约束越稀释
+                // (素材/合成阶段忘记绑定模版的版式/色板/槽位,评审反复打回)
+                work.templateId ? buildTemplateSection(work.templateId) : "",
               ].filter(Boolean).join("\n\n"),
             );
           }
@@ -3578,6 +3992,9 @@ apiRoutes.post("/api/works/:id/pipeline/advance", async (c) => {
     const clearReview = derivedStatus === "reviewing" && work.reviewComment ? { reviewComment: "" } : {};
     // 批次12c:推进成功即清最近失败原因(作品已恢复流转)
     await storeUpdateWork(id, { pipeline: work.pipeline, status: derivedStatus, lastError: "", ...clearReview });
+
+    // 流水线 v2 派生钩子(批次4):内容研究通过派生研究成果子作品;assets 完成渲染卡片
+    if (completedStep) hookV2Derivations(id, completedStep, work.pipelineVersion);
 
     // 队列闭环：作品到达终态时通知 runner 出队并启动下一个排队作品。
     // notifyWorkSettled 仅在该作品处于队列 running 状态时生效，未入队作品调用无副作用。
@@ -3685,9 +4102,17 @@ apiRoutes.post("/api/works/:id/eval/retry", async (c) => {
   if (wsBridge && guidance) {
     await wsBridge.sendMessage(id, `## 用户指导\n\n${guidance}\n\n请根据以上指导修改当前阶段的产出，完成后重新提交。`);
   }
-  // 复活回队列:死会话作品靠 runner 拉起(存活会话则 startWork 返回 already_running,无副作用)
+  // 复活回队列:死会话作品靠 runner 拉起。
+  // 2026-09-03 实测缺陷:会话仍存活时也入队,runner 看到空槽会拉起另一作品,
+  // 与本作品的存活会话形成双跑(本次实测 ae0/fd3 双会话并行即此路径)。
+  // 存活会话由 sendMessage 直接驱动,无需入队;仅死会话才需要 runner 复活。
   clearEvalTimeoutMarkers(id, step).catch(() => {}); // M1
-  enqueueWork(id, { afterRunning: true });
+  const sessionAlive = wsBridge?.isWorkActive?.(id) ?? false;
+  if (!sessionAlive) {
+    enqueueWork(id, { afterRunning: true });
+  } else {
+    log("info", "api", "eval_retry_skip_enqueue", id, { reason: "session_alive" });
+  }
   return c.json({ ok: true });
 });
 
@@ -4064,7 +4489,7 @@ apiRoutes.post("/api/topics/:id/convert", async (c) => {
   const topic = getTopic(id);
   if (!topic) return c.json({ error: "Topic not found" }, 404);
 
-  const body = await c.req.json<{ platforms?: string[]; type?: "short-video" | "image-text"; accountId?: string }>().catch(() => ({} as any));
+  const body = await c.req.json<{ platforms?: string[]; type?: "short-video" | "image-text"; accountId?: string; templateId?: string }>().catch(() => ({} as any));
   const platforms = body.platforms ?? ["douyin", "xiaohongshu"];
   const type = body.type ?? "short-video";
   const accountId = (body as any).accountId as string | undefined;
@@ -4086,6 +4511,7 @@ apiRoutes.post("/api/topics/:id/convert", async (c) => {
     contentCategory: topic.emotion_type as any,
     platforms,
     accountId: accountId,
+    templateId: body.templateId,
     topicHint: [topic.title, topic.description, `情绪：${topic.emotion_type}/${topic.emotion_subtype}`, `标签：${topic.tags.join(",")}`].filter(Boolean).join("\n"),
   });
 
@@ -4153,6 +4579,8 @@ interface BatchConvertOptions {
   type?: "short-video" | "video+image-text" | "image-text";
   /** 视频时长（秒），默认 180 */
   duration?: number;
+  /** 流水线 v2(批次5):研究深度覆盖(空=按用途×内容形式自动) */
+  researchDepth?: "full" | "standard" | "quick";
   /** 视频风格：hot_comment | knowledge | industry | insight */
   contentForm?: string;
   /** 素材样式：search | ai-generate */
@@ -4186,7 +4614,7 @@ const CONTENT_FORM_LABELS: Record<string, string> = Object.fromEntries(
 
 /** 素材三维合法值（非法值静默丢弃，不阻断批量任务） */
 const ASSET_FORMS = new Set(["video-mix", "image-carousel", "slides", "auto"]);
-const ASSET_SOURCES = new Set(["stock", "ai", "user", "auto", "smart"]);
+const ASSET_SOURCES = new Set(["stock", "ai", "user", "auto", "smart", "programmatic"]); // D4 新增 programmatic 全程序化档
 const ASSET_BUDGETS = new Set(["eco", "premium"]);
 
 
@@ -4243,6 +4671,7 @@ export function buildTemplateSection(templateId?: string): string {
     lines.push(`  1. 模板覆盖"文字信息卡"类镜头(标题卡/章节卡/要点卡/总结卡)：这些镜头的版式/配色/动效严格按模板,禁止自由发挥`);
     lines.push(`  2. 模板管不了也不该管的镜头,按素材路由走专门管线并独立渲染：数据→/api/assets/chart|data-card；结构/流程/逻辑→/api/assets/code-scene(程序化动画,优先于静态卡)；原文证据→snapshot-card；实拍/氛围→Pexels或AI生成。这些分段与模板分段按分镜顺序 ffmpeg concat 混排——混排是标准做法,不算"自由合成"。含中文的 POST body 一律写 JSON 文件 + --data-binary @file,禁止 curl -d 内联(Windows 必乱码)`);
     lines.push(`  3. 若 GET /api/assets/code-scene/templates 清单里没有合适的模板,可以传 customHtml 自写程序性动画(2026-09-01 开放):单个自包含 HTML 文件(≤200KB),动画全部用 WAAPI(element.animate,fill:'both'),动态文本挂 window.__seek(t秒),主题用 var(--accent) 等变量(fallback 到 finance_dark),内容避开底部字幕带(竖屏 y∈[1418,1562]/横屏 y∈[900,1000])。参照 packages/code-scene/templates-web/ 下既有模板的写法。渲染产物与 html 源码都会留在 assets/clips/code/,优质自定义场景经人工确认后沉淀进模板库。`);
+    lines.push(`     材质升级(2026-09-02 L4/L5):优先用 SVG 滤镜(feTurbulence 颗粒/feGaussianBlur 辉光/feColorMatrix 调色)、mix-blend-mode 混合、CSS mask 合成提升质感,拒绝平面色块堆砌;粒子/流体/3D 场景可用内联 WebGL(单 canvas + webgl2 + preserveDrawingBuffer,一切绘制在 __seek(t) 内置 u_time,禁 rAF/禁库),文字仍用 DOM 排版`);
     lines.push(`  3. 模板分段必须调用模板渲染引擎 POST /api/works/{workId}/render 产出,把素材映射进变量槽位；混排成片的视觉统一靠全片统一调色(见合成阶段调色规范),而不是全片只用模板`);
     lines.push(`  4. 完整模板 JSON: curl -s http://localhost:3271/api/templates/${t.id}`);
     // 2026-08-19 "假窗口"事故:tpl_5e5d1f71 的窗口色块+提示文字被当成视频窗口,
@@ -4343,13 +4772,107 @@ async function runBatchConvert(
           autoMode: true,
           purpose: purposePreset?.key,
           // 批次5.8:用户在批量弹窗显式给的时长 = 最高优先级事实源(评审与门禁豁免依据)
-          explicitParams: body.duration && body.duration > 0 ? { duration: body.duration } : undefined,
+          // 流水线 v2(批次5):研究深度覆盖同为显式参数(空=按用途×内容形式自动)
+          explicitParams: (() => {
+            const p: Record<string, unknown> = {};
+            if (body.duration && body.duration > 0) p.duration = body.duration;
+            if (body.researchDepth && ["full", "standard", "quick"].includes(body.researchDepth)) p.researchDepth = body.researchDepth;
+            return Object.keys(p).length ? p : undefined;
+          })(),
           evalMode: body.evalMode === "express" ? "express" : undefined,
           aspect: body.aspect === "landscape" ? "landscape" : "portrait",
         });
         item.workId = work.id;
       }
       const workId = item.workId!;
+
+      // 批次5.6 轻量真实性抽查(流水线重构批次5 抽出复用:v1 生成段与 v2 草稿段共用)——
+      // 抽查信源/事实锚点/题文一致性,不过则 item 标 error 不推进。返回 null=通过,否则问题文本。
+      const researchSpotcheck = async (articleTitle: string, articleContent: string): Promise<string | null> => {
+        try {
+          const spotcheckPrompt = [
+            `你是数据真实性审查员。检查以下批量自动生成的调研产物是否可信:`,
+            `选题标题: ${topic.title}`,
+            `选题描述: ${(topic.description ?? "").slice(0, 400)}`,
+            `文案标题: ${articleTitle}`,
+            `文案开头: ${articleContent.slice(0, 600)}`,
+            ``,
+            `判定规则(任一不满足即 ok=false):`,
+            `①选题应当像源自真实热搜/趋势,而非凭空虚构的"听起来像热点"的伪趋势;`,
+            `②文案中的事实性断言(具体数字/政策名/事件/人名)不得有明显虚构迹象;`,
+            `③文案主题与选题必须一致。`,
+            `只输出 JSON: {"ok": true|false, "problems": ["问题1","问题2"]}`,
+          ].join("\n");
+          // 批次11.1:eval 档未配置时回退 script 档(2026-08-31 实测:抽查因 eval 档
+          // 缺失整天静默空转,等于没有闸)。回退也失败才走 catch 留痕。
+          let check: { ok: boolean; problems?: string[] };
+          try {
+            check = await runJsonPrompt<{ ok: boolean; problems?: string[] }>(spotcheckPrompt, { stage: "eval", timeoutMs: 60_000, maxAttempts: 2 });
+          } catch (err) {
+            if (!/未配置模型/.test((err as Error).message)) throw err;
+            log("warn", "api", "batch_research_spotcheck_fallback", workId, { from: "eval", to: "script" });
+            check = await runJsonPrompt<{ ok: boolean; problems?: string[] }>(spotcheckPrompt, { stage: "script", timeoutMs: 60_000, maxAttempts: 2 });
+          }
+          if (!check.ok) {
+            log("warn", "api", "batch_research_spotcheck_failed", workId, { topicId: topic.id, problems: check.problems });
+            return (check.problems ?? []).join("; ") || "未说明";
+          }
+          return null;
+        } catch (err) {
+          // 抽查通道本身故障(模型不可用)不阻塞生产,但留痕可审计
+          log("warn", "api", "batch_research_spotcheck_error", workId, { error: (err as Error).message });
+          return null;
+        }
+      };
+
+      // 流水线 v2(批次5,业主拍板):v2 作品 batch 只产"调研草稿"(research/draft-from-topic.md)
+      // 作为内容研究的输入——不产正式 article/script、不标任何 step done;
+      // 事实核查+深度研究由 agent 在 content-research 阶段完成(quick 档允许草稿轻核查直转)。
+      const workObjForVersion = await getWork(workId);
+      if ((workObjForVersion?.pipelineVersion ?? 1) === 2) {
+        item.stage = "generating";
+        const platform = platforms[0] ?? "douyin";
+        const articleDraft = await generateArticleFromTopic(topic, platform);
+        const scErr = await researchSpotcheck(articleDraft.title, articleDraft.content);
+        if (scErr) {
+          item.stage = "error";
+          item.error = `调研真实性抽查未通过: ${scErr.slice(0, 150)}`;
+          return;
+        }
+        try {
+          const { mkdir: mkR, writeFile: wR } = await import("node:fs/promises");
+          const researchDir = join(dataDir, "works", workId, "research");
+          await mkR(researchDir, { recursive: true });
+          const topicAny = topic as unknown as Record<string, unknown>;
+          const draft = [
+            `# 调研草稿(内容研究的输入,非成品):${topic.title}`,
+            ``,
+            `> 本文件由批量转换流程自动生成。其中的事实断言必须在内容研究阶段重新核查后才可引用。`,
+            ``,
+            `## 选题数据`,
+            `- 情绪: ${(topicAny.emotion_type as string) ?? "-"}`,
+            `- 标签: ${((topicAny.tags as string[]) ?? []).join(", ") || "-"}`,
+            topicAny.summary ? `- 摘要: ${topicAny.summary}` : "",
+            Array.isArray(topicAny.content_angles) && topicAny.content_angles.length ? `- 内容角度: ${(topicAny.content_angles as string[]).join(";")}` : "",
+            ``,
+            `## 文案草稿(供参考,未经事实核查)`,
+            `### ${articleDraft.title}`,
+            articleDraft.content,
+          ].filter((l) => l !== "").join("\n");
+          await wR(join(researchDir, "draft-from-topic.md"), draft, "utf-8");
+          updateTopic(topic.id, { status: "converted", work_id: workId });
+        } catch (err) {
+          throw new Error(`草稿落盘失败(topic ${item.topicId}): ${(err as Error).message}`);
+        }
+        // v2:defaultPipeline 已把 content-research 置 active,直接入队
+        if (job.autoPipeline) {
+          enqueueWork(item.workId!);
+          item.stage = "queued";
+        } else {
+          item.stage = "done";
+        }
+        return;
+      }
 
       // 产物不齐(文案/脚本未落库)才重新生成;已齐则跳过生成段
       const hasArtifacts = listArticlesByWork(workId).length > 0 && listScriptsByWork(workId).length > 0;
@@ -4403,42 +4926,14 @@ async function runBatchConvert(
           console.warn(`[batch-convert] research report write failed for ${workId}:`, err);
         }
 
-        // 批次5.6 轻量真实性抽查:batch 路径 research 此前直接标 done 永不评审,
-        // 幻觉选题直进生产烧全链路成本(v2 病根 0)。抽查信源/事实锚点/题文一致性,
-        // 不过则 item 标 error 不推进(不走评审的会话依赖,用 eval 档一次性 JSON 判定)
-        try {
-          const spotcheckPrompt = [
-            `你是数据真实性审查员。检查以下批量自动生成的调研产物是否可信:`,
-            `选题标题: ${topic.title}`,
-            `选题描述: ${(topic.description ?? "").slice(0, 400)}`,
-            `文案标题: ${article.title}`,
-            `文案开头: ${article.content.slice(0, 600)}`,
-            ``,
-            `判定规则(任一不满足即 ok=false):`,
-            `①选题应当像源自真实热搜/趋势,而非凭空虚构的"听起来像热点"的伪趋势;`,
-            `②文案中的事实性断言(具体数字/政策名/事件/人名)不得有明显虚构迹象;`,
-            `③文案主题与选题必须一致。`,
-            `只输出 JSON: {"ok": true|false, "problems": ["问题1","问题2"]}`,
-          ].join("\n");
-          // 批次11.1:eval 档未配置时回退 script 档(2026-08-31 实测:抽查因 eval 档
-          // 缺失整天静默空转,等于没有闸)。回退也失败才走 catch 留痕。
-          let check: { ok: boolean; problems?: string[] };
-          try {
-            check = await runJsonPrompt<{ ok: boolean; problems?: string[] }>(spotcheckPrompt, { stage: "eval", timeoutMs: 60_000, maxAttempts: 2 });
-          } catch (err) {
-            if (!/未配置模型/.test((err as Error).message)) throw err;
-            log("warn", "api", "batch_research_spotcheck_fallback", workId, { from: "eval", to: "script" });
-            check = await runJsonPrompt<{ ok: boolean; problems?: string[] }>(spotcheckPrompt, { stage: "script", timeoutMs: 60_000, maxAttempts: 2 });
-          }
-          if (!check.ok) {
+        // 批次5.6 轻量真实性抽查(流水线重构批次5 起为共用函数 researchSpotcheck)
+        {
+          const scErr = await researchSpotcheck(article.title, article.content);
+          if (scErr) {
             item.stage = "error";
-            item.error = `调研真实性抽查未通过: ${((check.problems ?? []).join("; ") || "未说明").slice(0, 150)}`;
-            log("warn", "api", "batch_research_spotcheck_failed", workId, { topicId: topic.id, problems: check.problems });
+            item.error = `调研真实性抽查未通过: ${scErr.slice(0, 150)}`;
             return;
           }
-        } catch (err) {
-          // 抽查通道本身故障(模型不可用)不阻塞生产,但留痕可审计
-          log("warn", "api", "batch_research_spotcheck_error", workId, { error: (err as Error).message });
         }
       }
 
@@ -4526,11 +5021,20 @@ apiRoutes.post("/api/topics/batch-convert", async (c) => {
     assetBudget?: string;
     /** 批次12c-A:画幅 portrait(缺省)|landscape */
     aspect?: "portrait" | "landscape";
+    /** 流水线 v2(批次5):研究深度覆盖(空=按用途×内容形式自动绑定) */
+    researchDepth?: "full" | "standard" | "quick";
   }>().catch(() => ({ topicIds: [] } as any));
 
   if (!body.topicIds?.length) return c.json({ error: "topicIds is required" }, 400);
-  if (body.voiceStyle && !isSafeExternalVoiceId(body.voiceStyle)) {
-    return c.json({ error: "voiceStyle 非法：不允许路径字符" }, 400);
+  if (body.voiceStyle) {
+    if (!isSafeExternalVoiceId(body.voiceStyle)) {
+      return c.json({ error: "voiceStyle 非法：不允许路径字符" }, 400);
+    }
+    // X8 验收修复(D2,2026-09-07):voice_id 必须在 voices 表或 MiniMax 音色清单中——
+    // 此前只校验字符合法性,"界面选的音色≠落库音色≠成片音色"三段脱节(#86)。
+    if (!(await assertVoiceKnown(body.voiceStyle))) {
+      return c.json({ error: `voiceStyle "${body.voiceStyle}" 不在 voices 表/MiniMax 音色清单中` }, 400);
+    }
   }
 
   const jobId = "batch_" + Date.now();
@@ -5145,8 +5649,9 @@ apiRoutes.post("/api/templates/brief", async (c) => {
     style?: string;
     orientation?: "portrait" | "landscape";
     withDigitalHuman?: boolean;
+    multiPage?: boolean;
     referenceImage?: { data: string; mediaType: string };
-  }>().catch(() => ({} as { style?: string; orientation?: "portrait" | "landscape"; withDigitalHuman?: boolean; referenceImage?: { data: string; mediaType: string } }));
+  }>().catch(() => ({} as { style?: string; orientation?: "portrait" | "landscape"; withDigitalHuman?: boolean; multiPage?: boolean; referenceImage?: { data: string; mediaType: string } }));
   if (!body.style?.trim()) return c.json({ error: "style 必填(风格描述,如:赛博朋克霓虹、深色底、青色辉光)" }, 400);
 
   // 参考图落盘(chatVisionJson 只收文件路径):≤5MB,png/jpeg/webp
@@ -5165,7 +5670,7 @@ apiRoutes.post("/api/templates/brief", async (c) => {
   try {
     const { generateBrief } = await import("../services/design-brief.js");
     const { sessionId, brief } = await generateBrief(
-      { style: body.style!, orientation: body.orientation ?? "portrait", withDigitalHuman: body.withDigitalHuman },
+      { style: body.style!, orientation: body.orientation ?? "portrait", withDigitalHuman: body.withDigitalHuman, multiPage: body.multiPage },
       referenceImagePath,
     );
     return c.json({ briefId: sessionId, brief });
@@ -5192,9 +5697,37 @@ apiRoutes.post("/api/templates/brief/:id/chat", async (c) => {
 apiRoutes.post("/api/templates/brief/:id/generate", async (c) => {
   const id = c.req.param("id");
   if (!/^brief_[a-zA-Z0-9_-]+$/.test(id)) return c.json({ error: "Invalid brief id" }, 400);
+  const body = await c.req.json<{ target?: "full" | "scene"; renderer?: "revideo" | "web" }>().catch(() => ({} as { target?: "full" | "scene"; renderer?: "revideo" | "web" }));
   const { loadBriefSession } = await import("../services/design-brief.js");
   const session = await loadBriefSession(id);
   if (!session) return c.json({ error: "brief 会话不存在或已过期" }, 404);
+
+  // 2026-09-02 镜头模板生成渠道:同一份 DesignBrief,出口改为 templates-web HTML + registry.json
+  if (body.target === "scene") {
+    const jobId = "tplscene_" + Date.now();
+    try {
+      const db = getDb();
+      db.prepare("INSERT INTO template_gen_jobs (id, status, count, generated, kind) VALUES (?, 'running', 1, 0, 'generate-scene')").run(jobId);
+    } catch { /* 表不存在时退化为仅内存态 */ }
+
+    const { generateSceneTemplate } = await import("../services/scene-template-generator.js");
+    generateSceneTemplate({ style: session.brief.styleSummary || session.brief.sourceText, orientation: session.input.orientation, brief: session.brief })
+      .then((entry) => {
+        try {
+          const db = getDb();
+          db.prepare("UPDATE template_gen_jobs SET status = 'done', generated = 1, updated_at = datetime('now') WHERE id = ?").run(jobId);
+          console.log(`[brief-gen] 镜头模板「${entry.label}」(${entry.name}) 按稿生成完成`);
+        } catch {}
+      })
+      .catch((err) => {
+        try {
+          const db = getDb();
+          db.prepare("UPDATE template_gen_jobs SET status = 'error', error = ?, updated_at = datetime('now') WHERE id = ?").run(err instanceof Error ? err.message : String(err), jobId);
+        } catch {}
+      });
+
+    return c.json({ jobId, status: "running", message: "镜头模板生成中(LLM 按稿写 HTML 程序化动画 + 渲染验证,约 2-4 分钟),可切换页面" });
+  }
 
   const jobId = "tplcode_" + Date.now();
   try {
@@ -5203,7 +5736,7 @@ apiRoutes.post("/api/templates/brief/:id/generate", async (c) => {
   } catch { /* 表不存在时退化为仅内存态 */ }
 
   const { generateCodeTemplate } = await import("../services/code-template-generator.js");
-  generateCodeTemplate({ ...session.input, brief: session.brief })
+  generateCodeTemplate({ ...session.input, brief: session.brief, renderer: body.renderer ?? "web" })
     .then((tpl) => {
       try {
         const db = getDb();
@@ -5218,7 +5751,7 @@ apiRoutes.post("/api/templates/brief/:id/generate", async (c) => {
       } catch {}
     });
 
-  return c.json({ jobId, status: "running", message: "按设计稿生成中(LLM 设计 + Revideo 渲染验证,约 2-4 分钟),可切换页面" });
+  return c.json({ jobId, status: "running", message: `按设计稿生成中(LLM 设计 + ${body.renderer === "revideo" ? "Revideo" : "web"} 渲染验证,约 2-4 分钟),可切换页面` });
 });
 
 // POST /api/templates/generate-code - LLM 生成代码渲染模板(Revideo TSX,2026-08-24)
@@ -5248,7 +5781,7 @@ apiRoutes.post("/api/templates/generate-code", async (c) => {
       } catch {}
     });
 
-  return c.json({ jobId, status: "running", message: "代码模板生成中(LLM 设计 + Revideo 渲染验证,约 2-4 分钟),可切换页面" });
+  return c.json({ jobId, status: "running", message: "代码模板生成中(LLM 设计 + 渲染验证,约 2-4 分钟),可切换页面" });
 });
 
 // GET /api/templates/generate/status/:jobId - poll async template generation status (DB-backed)
@@ -5933,21 +6466,24 @@ apiRoutes.post("/api/templates/:id/preview", async (c) => {
     // 预览黑屏根因)。走 revideo 代码渲染,产物回写 preview-file 源并同步刷新 poster,
     // 编辑器 <video poster> 与卡片都指向最新中帧。
     if (template.kind === "code") {
-      const customLayer = (template.layers as Array<{ scene?: string; customCode?: string }> | undefined)?.find(
-        (l) => l && l.scene === "custom" && typeof l.customCode === "string" && l.customCode.trim(),
+      const customLayer = (template.layers as Array<{ scene?: string; customCode?: string; customHtml?: string }> | undefined)?.find(
+        (l) => l && (typeof l.customHtml === "string" && l.customHtml.trim() || l.scene === "custom" && typeof l.customCode === "string" && l.customCode.trim()),
       );
-      if (!customLayer?.customCode) return c.json({ error: "代码模板缺少 customCode 场景" }, 400);
+      if (!customLayer) return c.json({ error: "代码模板缺少 customCode/customHtml 场景" }, 400);
       const { renderCodeScene } = await import("../services/code-scene.js");
+      const previewParams = {
+        title: variableValues.title ?? "预览标题示例",
+        kicker: variableValues.kicker ?? "PREVIEW",
+        subtitleCn: variableValues.subtitleCn ?? "中文字幕预览效果",
+        subtitleEn: variableValues.subtitleEn ?? "English subtitle preview",
+      };
+      // 2026-09-02:customHtml(web 支路)优先于 customCode(Revideo),与 video-factory 渲染同序
       const result = await renderCodeScene({
         workId: "tpl_preview",
         filename: `preview_${randomUUID().slice(0, 8)}`,
-        customScene: customLayer.customCode,
-        params: {
-          title: variableValues.title ?? "预览标题示例",
-          kicker: variableValues.kicker ?? "PREVIEW",
-          subtitleCn: variableValues.subtitleCn ?? "中文字幕预览效果",
-          subtitleEn: variableValues.subtitleEn ?? "English subtitle preview",
-        },
+        ...(customLayer.customHtml?.trim()
+          ? { customHtml: customLayer.customHtml, params: previewParams }
+          : { customScene: customLayer.customCode!, params: previewParams }),
         duration: 5,
         size: { w: (template.canvas as { width?: number })?.width ?? 1080, h: (template.canvas as { height?: number })?.height ?? 1920 },
       });

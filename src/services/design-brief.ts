@@ -12,6 +12,19 @@ import { randomUUID } from "node:crypto";
 import { dataDir, loadConfig } from "../config.js";
 import { runJsonPrompt } from "./llm-json.js";
 
+/** 分页设计稿(2026-09-02 分页模板):封面/正文/结尾逐页设计要点 */
+export interface BriefPage {
+  role: "cover" | "content" | "ending";
+  /** 本页目标,如 "3秒抓住眼球" / "承载核心论证" / "引导关注评论" */
+  goal: string;
+  /** 覆盖全局 layout 的本页分区设计 */
+  layout: Array<{ region: string; content: string; position: string }>;
+  /** 本页动效特例(如封面冲击入场/结尾放慢收束) */
+  motionOverride?: string;
+  /** 本页装饰增量(仍受全局 elements 白名单约束的语义,仅页面级补充) */
+  elementsExtra?: string[];
+}
+
 export interface DesignBrief {
   styleSummary: string;
   palette: Array<{ hex: string; role: string; note?: string }>;
@@ -19,6 +32,8 @@ export interface DesignBrief {
   /** 装饰元素白名单:代码生成只允许出现这些,不得自行添加 */
   elements: string[];
   motion: { entrance: string; loop: string };
+  /** 分页结构:存在时整片按 封面→正文→结尾 分时组织;缺省=单页(向后兼容) */
+  pages?: BriefPage[];
   referenceNotes?: string;
   sourceText: string;
 }
@@ -27,6 +42,8 @@ export interface BriefInput {
   style: string;
   orientation: "portrait" | "landscape";
   withDigitalHuman?: boolean;
+  /** 分页模式(2026-09-02):用户分别描述了封面/正文/结尾时置 true,brief 产出 pages */
+  multiPage?: boolean;
 }
 
 export interface BriefSession {
@@ -45,6 +62,13 @@ const BRIEF_JSON_SHAPE = `{
   "motion": {"entrance": "入场顺序与错峰秒数", "loop": "循环动效描述"}
 }`;
 
+/** 分页模式的 JSON 增补形状(2026-09-02) */
+const BRIEF_PAGES_SHAPE = `"pages": [
+  {"role": "cover", "goal": "封面页目标", "layout": [同全局 layout 形状], "motionOverride": "本页动效特例(可选)", "elementsExtra": ["本页装饰增量(可选)"]},
+  {"role": "content", "goal": "正文页目标", "layout": [...]},
+  {"role": "ending", "goal": "结尾页目标", "layout": [...]}
+]`;
+
 /** brief 生成 prompt(导出供单测断言纪律不丢失) */
 export function buildBriefPrompt(input: BriefInput, referenceNotes?: string): string {
   const W = input.orientation === "landscape" ? 1920 : 1080;
@@ -56,7 +80,9 @@ export function buildBriefPrompt(input: BriefInput, referenceNotes?: string): st
     referenceNotes ? `参考图风格拆解(必须吸收其要点):\n${referenceNotes}` : "",
     "",
     "## 输出 JSON(严格按此形状)",
-    BRIEF_JSON_SHAPE,
+    input.multiPage
+      ? BRIEF_JSON_SHAPE.replace(/\}$/, `,\n  ${BRIEF_PAGES_SHAPE}\n}`)
+      : BRIEF_JSON_SHAPE,
     "",
     "## 纪律",
     "1. elements 装饰元素必须逐条来自用户描述或参考图拆解,禁止自行添加用户没要的装饰",
@@ -64,6 +90,14 @@ export function buildBriefPrompt(input: BriefInput, referenceNotes?: string): st
     "3. layout 自上而下覆盖:顶部小标(kicker)/标题区(title)/主视觉区/底部字幕区(subtitleCn/subtitleEn)",
     "4. motion.entrance 必须给出错峰秒数且 2s 内全部落定;loop 描述呼吸/微动循环",
     "5. 苹果式少即是多:大面积留白 + 单一视觉重心",
+    ...(input.multiPage
+      ? [
+          "6. 分页纪律:pages 恰好三页(cover/content/ending);每页 goal 一句话、layout 独立成稿;",
+          "   三页共享全局 palette/字体气质(风格统一),但视觉重心逐页变化——cover 冲击力优先、",
+          "   content 信息承载优先(主视觉区留白给素材)、ending 收束引导优先;",
+          "   用户若分别描述了三页,逐页落实其要点;未描述的页按页角色默认目标补齐",
+        ]
+      : []),
   ].join("\n");
 }
 
@@ -146,12 +180,31 @@ export function normalizeBrief(raw: unknown): DesignBrief {
   const elements = asArr(obj.elements).map((e) => asStr(e));
   const motionRaw = obj.motion && typeof obj.motion === "object" ? (obj.motion as Record<string, unknown>) : {};
   const motion = { entrance: asStr(motionRaw.entrance), loop: asStr(motionRaw.loop) };
+  // 分页(2026-09-02):防御性收敛——role 非法的页丢弃,layout 逐条规范化
+  const pages = asArr(obj.pages)
+    .map((p) => {
+      const item = (p ?? {}) as Record<string, unknown>;
+      const role = asStr(item.role);
+      if (!["cover", "content", "ending"].includes(role)) return null;
+      return {
+        role: role as BriefPage["role"],
+        goal: asStr(item.goal),
+        layout: asArr(item.layout).map((l) => {
+          const li = (l ?? {}) as Record<string, unknown>;
+          return { region: asStr(li.region), content: asStr(li.content), position: asStr(li.position) };
+        }),
+        ...(typeof item.motionOverride === "string" && item.motionOverride ? { motionOverride: item.motionOverride } : {}),
+        ...(Array.isArray(item.elementsExtra) ? { elementsExtra: item.elementsExtra.filter((e): e is string => typeof e === "string") } : {}),
+      };
+    })
+    .filter((p): p is BriefPage => !!p);
   return {
     styleSummary: asStr(obj.styleSummary),
     palette,
     layout,
     elements,
     motion,
+    ...(pages.length ? { pages } : {}),
     ...(typeof obj.referenceNotes === "string" ? { referenceNotes: obj.referenceNotes } : {}),
     sourceText: asStr(obj.sourceText),
   };

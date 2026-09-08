@@ -23,6 +23,20 @@ import type {
 import type { ToolExecutorMap } from "./tools/index.js";
 import { maybeCompact } from "./compact.js";
 import { QuotaExhaustedError, isQuotaErrorText, reportQuotaExhausted } from "../services/quota-guard.js";
+import { hasRunningLongTask } from "../services/long-tasks.js";
+
+/** C1 预算熔断标记（运行中作品收尾信号，模块级避免与 ws-bridge 循环依赖）。
+ *  quota/llm-usage 侧调用 budgetBreach(workId) 标记；loop 回合内检查礼貌终止。 */
+const budgetBreachedWorkIds = new Set<string>();
+export function budgetBreach(workId?: string): void {
+  if (workId) budgetBreachedWorkIds.add(workId);
+}
+export function clearBudgetBreach(workId?: string): void {
+  if (workId) budgetBreachedWorkIds.delete(workId);
+}
+function isBudgetBreached(workId?: string): boolean {
+  return !!workId && budgetBreachedWorkIds.has(workId);
+}
 
 export type LoopState = "idle" | "running" | "aborted";
 
@@ -120,12 +134,20 @@ export class AgentLoop {
   private abort?: AbortController;
   /** AskUserQuestion 配对回填：记录待答 tool_use id */
   pendingAskToolUseId: string | null = null;
+  /** P2 后台任务完成通知：外部注入、下回合首条注入的 user 消息文本 */
+  pendingNotificationText: string | null = null;
 
   constructor(
     private deps: AgentLoopDeps,
     restored?: AgentMessage[],
   ) {
     this.messages = restored ?? [];
+  }
+
+  /** P2 外部注入后台通知（渲染/烧录/下载完成等）：下个回合作为首条 user 消息注入，
+   *  agent 直接收到"任务已完成"事实，无需 sleep 轮询。 */
+  injectNotification(text: string): void {
+    this.pendingNotificationText = text;
   }
 
   /** usage 事件落账(P3-T2) + 日预算熔断。异步执行,不阻塞主循环;失败仅告警 */
@@ -152,6 +174,9 @@ export class AgentLoop {
             // 且与用户手动暂停/配额暂停区分,互不误恢复
             if (item.status === "running" || item.status === "queued") { setStatus(item.workId, "paused", { pausedReason: "budget" }); n++; }
           }
+          // C1 扩展:运行中作品也标记熔断——loop 回合内感知后礼貌收尾(而非硬杀),
+          // 在下一轮 runTurn 前由上层决定暂停/恢复
+          budgetBreach(ctx.workId);
           return n;
         });
       } catch (err) {
@@ -170,6 +195,7 @@ export class AgentLoop {
     if (this.state === "running") throw new Error("loop 正在运行中，不允许并发 runTurn");
     this.state = "running";
     this.abort = new AbortController();
+    const ctxWorkId = this.deps.usageContext?.workId;
     const maxSteps = this.deps.guard?.maxStepsPerTurn ?? 200;
     const deadline = Date.now() + (this.deps.guard?.maxTurnMinutes ?? 30) * 60_000;
     // 2026-08-28 批次3.4 杀改拦:同参重复不再 3 连杀整回合(被杀回合进展作废、
@@ -193,7 +219,17 @@ export class AgentLoop {
         content: [{ type: "tool_result", tool_use_id: askId, content: userText }],
       });
     } else {
-      this.messages.push({ role: "user", content: [{ type: "text", text: userText }] });
+      // P2 后台任务完成通知注入：长任务（渲染/烧录/下载）完成时 ws-bridge 经
+      // injectNotification 写入的消息，作为本回合首条 user 消息注入（等效 tool_result 注入效果，
+      // 消灭 agent sleep 轮询——它已收到"任务完成"事实而非反复查询）
+      if (this.pendingNotificationText) {
+        const note = this.pendingNotificationText;
+        this.pendingNotificationText = null;
+        this.messages.push({ role: "user", content: [{ type: "text", text: note }] });
+        this.messages.push({ role: "user", content: [{ type: "text", text: userText }] });
+      } else {
+        this.messages.push({ role: "user", content: [{ type: "text", text: userText }] });
+      }
     }
 
     this.deps.onLoopEvent({ type: "turn_start" });
@@ -211,7 +247,14 @@ export class AgentLoop {
     try {
       for (let step = 0; ; step++) {
         if (step > maxSteps) throw new LoopGuardError(`回合工具步数超过 ${maxSteps}，判定死循环`);
-        if (Date.now() > deadline) throw new LoopGuardError("回合超时（maxTurnMinutes）");
+        // C1 礼貌终止：预算已熔断 → 回合收尾（非 throw，Agent 有机会落盘）
+        if (isBudgetBreached(ctxWorkId)) {
+          this.state = "idle";
+          return { resultText: "", stopReason: "budget_breach" };
+        }
+        // P5 长任务豁免：后台 job（烧录/渲染/下载）运行中时不因回合超时硬杀 jod，只断 LLM 轮次
+        const hasLongJob = ctxWorkId ? await hasRunningLongTask(ctxWorkId) : false;
+        if (Date.now() > deadline && !hasLongJob) throw new LoopGuardError("回合超时（maxTurnMinutes）");
         if ((this.state as LoopState) === "aborted") {
           return { resultText: "", stopReason: "aborted" };
         }

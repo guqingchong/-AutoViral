@@ -78,3 +78,37 @@ describe("buildCodeTemplatePrompt(brief 注入)", () => {
     expect(p).not.toContain("严格实现以下已确认设计稿");
   });
 });
+
+describe("整片 web 出口(2026-09-02)", () => {
+  it("buildCodeTemplateHtmlPrompt 携带 web 硬性契约", async () => {
+    const { buildCodeTemplateHtmlPrompt } = await import("../../src/services/code-template-generator.js");
+    const p = buildCodeTemplateHtmlPrompt({ style: "赛博朋克", orientation: "portrait" });
+    for (const kw of ["__THEME_CSS__", "__seek", "fill:'both'", "1418", "videoSrc", "feTurbulence", "mix-blend-mode", "preserveDrawingBuffer", '"html"']) {
+      expect(p).toContain(kw);
+    }
+    const pw = buildCodeTemplateHtmlPrompt({ style: "赛博朋克", orientation: "landscape" });
+    expect(pw).toContain("1920×1080");
+    expect(pw).toContain("880");
+  });
+
+  it("分页设计稿注入分页纪律(TSX 与 HTML 两支路)", async () => {
+    const { buildCodeTemplatePrompt, buildCodeTemplateHtmlPrompt } = await import("../../src/services/code-template-generator.js");
+    const brief = {
+      styleSummary: "x", palette: [], layout: [], elements: [], motion: { entrance: "", loop: "" }, sourceText: "x",
+      pages: [
+        { role: "cover" as const, goal: "抓眼球", layout: [{ region: "标题", content: "title", position: "居中" }] },
+        { role: "content" as const, goal: "承载", layout: [] },
+        { role: "ending" as const, goal: "收束", layout: [], motionOverride: "放慢" },
+      ],
+    };
+    const input = { style: "x", brief };
+    const tsx = buildCodeTemplatePrompt(input);
+    expect(tsx).toContain("分页结构");
+    expect(tsx).toContain("抓眼球");
+    const html = buildCodeTemplateHtmlPrompt(input);
+    expect(html).toContain("分页结构");
+    expect(html).toContain("放慢");
+    const noPages = buildCodeTemplateHtmlPrompt({ style: "x" });
+    expect(noPages).not.toContain("分页结构(本模板为分页整片");
+  });
+});

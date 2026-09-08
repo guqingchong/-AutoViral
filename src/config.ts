@@ -1,4 +1,5 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import yaml from "js-yaml";
@@ -81,7 +82,8 @@ export const H3_TUNNEL_DEFAULTS: H3TunnelConfig = {
 
 export interface Config {
   port: number;
-  model: string;
+  /** S1 API 鉴权（127.0.0.1 回绑之外的纵深防御）：配置 authToken 后写端点需 Bearer token */
+  server?: { authToken?: string };
   /** LLM 直连（API agent loop）。未配置时维持 CLI 现状——零迁移成本 */
   llm?: LlmConfig;
   jimeng: { accessKey: string; secretKey: string };
@@ -131,7 +133,23 @@ export interface Config {
     dailyLimitYuan: number;
     warningThresholdPercent: number;
   };
+  /** S3 备份策略(X19 验收修复:retainCount 此前靠 as unknown as 强转读取,无类型保障) */
+  backup?: {
+    /** 滚动保留份数(默认 7) */
+    retainCount?: number;
+    /** 每日快照时间(小时,本地时间;默认 3 即 03:00) */
+    dailySnapshotHour?: number;
+  };
 }
+
+/** config.yaml 顶层合法键(X19 schema 校验的数据源):未知键仅告警不拒绝(向前兼容)。 */
+const KNOWN_CONFIG_KEYS = new Set([
+  "port", "server", "llm", "jimeng", "openrouter", "minimax", "zhihuData",
+  "heygem", "h3", "pexels", "pixabay", "unsplash", "digitalHuman", "research",
+  "interests", "memory", "analytics", "evolution", "budget", "backup",
+]);
+/** 已删除的遗产键:出现即明确告警(而非静默忽略),引导用户从 yaml 中删除。 */
+const LEGACY_CONFIG_KEYS = new Set(["model", "scriptModel", "chanjing", "bailian", "autodl"]);
 
 export type { AnalyticsSource };
 
@@ -147,7 +165,6 @@ export const dataDir = CONFIG_DIR;
 export function getDefaultConfig(): Config {
   return {
     port: 3271,
-    model: "opus",
     jimeng: { accessKey: "", secretKey: "" },
     research: { enabled: true, schedule: "0 9,21 * * *", platforms: ["douyin", "xiaohongshu", "bilibili", "zhihu", "kuaishou", "channels", "wechat_mp"], topN: 10 },
     interests: [],
@@ -191,6 +208,16 @@ export async function loadConfig(): Promise<Config> {
       const rec = parsed as Record<string, unknown>;
       delete rec.chanjing;
       delete rec.bailian;
+      // X19 schema 校验(2026-09-07):未知键告警(防拼写错误静默失效);
+      // 遗产键(model/scriptModel)明确提示删除——它们曾是 Claude-CLI 时代死配置,
+      // 仍被展示层误读(诊断 T10),现已从 Config 移除。
+      for (const key of Object.keys(rec)) {
+        if (LEGACY_CONFIG_KEYS.has(key)) {
+          console.warn(`[config] config.yaml 含已废弃键 "${key}"——已失效,请从配置中删除(真实路由在 llm.models)`);
+        } else if (!KNOWN_CONFIG_KEYS.has(key)) {
+          console.warn(`[config] config.yaml 含未知键 "${key}"——若为拼写错误将静默不生效`);
+        }
+      }
       // 旧配置迁移：autodl.* → heygem.*（AutoDL API 控制已废弃，改手动控制实例）
       const legacy = rec.autodl as Record<string, unknown> | undefined;
       if (legacy && typeof legacy === "object") {
@@ -295,11 +322,25 @@ export async function loadConfig(): Promise<Config> {
       }
     }
 
+    // S1 补修：authToken 首次缺省自动生成并写回（写端点鉴权的纵深防御）。
+    // 此前 config.yaml 无 server.authToken 时鉴权中间件直接放行,形同虚设。
+    // X21 验收修复(2026-09-07):测试环境(vitest)不生成——否则所有不带 token 的
+    // POST 测试恒 401(S1 改造打破 7 个既有测试文件的根因)。
+    const isTestEnv = !!process.env.VITEST || process.env.NODE_ENV === "test";
+    if (!config.server?.authToken && !isTestEnv) {
+      config.server = { ...(config.server ?? {}), authToken: randomBytes(32).toString("hex") };
+      await saveConfig(config);
+    }
+
     cachedConfig = config;
     return config;
   } catch {
     const config = getDefaultConfig();
-    await saveConfig(config);
+    // S1 补修：首次启动（无 config.yaml）同样生成 authToken 并落盘（测试环境除外,同上）
+    if (!process.env.VITEST && process.env.NODE_ENV !== "test") {
+      config.server = { authToken: randomBytes(32).toString("hex") };
+      await saveConfig(config);
+    }
     return config;
   }
 }

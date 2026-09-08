@@ -52,8 +52,14 @@ export interface DbWork {
   explicit_params?: string;
   /** 评审分级(迁移 v33,批次10.2):'standard'(默认/NULL)|'express'(机器门禁+assembly 单轮终审) */
   eval_mode?: string;
+  /** 质量模式(Q4,迁移 v37):'express' 表示该作品跳过深度评审(机器门禁+单轮终审)，GUI 据此提示 */
+  quality_mode?: string;
   /** 作品画幅(迁移 v35,批次12c-A):'portrait'(竖屏 9:16,默认)|'landscape'(横屏 16:9) */
   aspect?: string;
+  /** 流水线版本(迁移 v40,2026-09-07 重构):NULL/1=旧五步, 2=新四步(content-research→plan-assets→assets→assembly) */
+  pipeline_version?: number;
+  /** 研究深度档(迁移 v40):full|standard|quick,由用途×内容形式映射(purpose-presets.resolveResearchDepth) */
+  research_depth?: string;
   created_at: string;
   updated_at: string;
 }
@@ -337,7 +343,7 @@ export interface DbComment {
   created_at: string;
 }
 
-export type DbRuleType = "topic" | "template" | "prompt" | "publish_time" | "platform";
+export type DbRuleType = "topic" | "template" | "prompt" | "publish_time" | "platform" | "eval";
 
 export interface DbEvolutionRule {
   id: number;

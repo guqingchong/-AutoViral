@@ -48,7 +48,10 @@ const edgeCandidates = [
   "C:/Program Files/Microsoft/Edge/Application/msedge.exe",
 ];
 const executablePath = edgeCandidates.find(existsSync);
-const browser = await chromium.launch(executablePath ? { executablePath } : { channel: "msedge" });
+// --enable-unsafe-swiftshader:L5 WebGL 模板兜底——无 GPU/被禁用时回落软件渲染,
+// 截帧仍确定(u_time 驱动,与 GPU 无光栅差异敏感性);对纯 DOM 模板无副作用
+const launchArgs = ["--enable-unsafe-swiftshader"];
+const browser = await chromium.launch(executablePath ? { executablePath, args: launchArgs } : { channel: "msedge", args: launchArgs });
 try {
   const page = await browser.newPage({ viewport: { width: W, height: H } });
   // 网络隔离(2026-09-01 终审 C1):customHtml 是 LLM 自写代码,渲染页若可出网,
@@ -91,23 +94,52 @@ try {
         setTimeout(() => { v.removeEventListener("seeked", onSeeked); res(null); }, 1500);
       })));
     }, tMs);
-    await page.screenshot({ path: join(framesDir, `f${String(f).padStart(5, "0")}.png`), type: "png" });
+    // 2026-09-03 性能实测:PNG 截帧 2.5s/帧(1080×1920 SwiftShader),300 帧超 180s
+    // 超时线。JPEG q92 截帧快 ~40%(中间帧随即走 libx264,质量损失不可见)
+    await page.screenshot({ path: join(framesDir, `f${String(f).padStart(5, "0")}.jpg`), type: "jpeg", quality: 92 });
   }
 } finally {
   await browser.close();
 }
 
-// 图片序列 → mp4(与主仓渲染参数一致:libx264 crf18 yuv420p)
+// 图片序列 → mp4
+// X12 验收修复(2026-09-07,R1 全链路):此前硬编码 libx264——code-scene 逐帧合成是
+// 渲染量最大的路径,QSV 在此空转。内联同款最小探测(独立进程无法 import src/encoder.ts):
+// AUTOVIRAL_ENCODER=qsv|cpu 强制覆盖;auto 时列表+1 秒黑场试编码双段验证。
+// 失败回退:QSV 编码失败(核显被占/驱动异常)自动重试 libx264,绝不让硬件加速变成失败源。
 const ff = spec.ffmpegPath ?? "ffmpeg";
 const out = join(spec.outDir, spec.outFile);
-const enc = spawnSync(ff, [
-  "-framerate", String(FPS), "-i", join(framesDir, "f%05d.png"),
-  "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
-  "-y", out,
-], { encoding: "utf-8" });
+
+const QSV_ARGS = ["-c:v", "h264_qsv", "-global_quality", "22", "-look_ahead", "1", "-qsv_brc", "ICQ",
+  "-preset", "medium", "-g", "60", "-flags", "+cgop", "-pix_fmt", "yuv420p"];
+const CPU_ARGS = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p"];
+
+function detectQsvInline() {
+  const mode = (process.env.AUTOVIRAL_ENCODER ?? "auto").trim().toLowerCase();
+  if (mode === "cpu") return false;
+  if (mode === "qsv") return true;
+  const list = spawnSync(ff, ["-hide_banner", "-encoders"], { encoding: "utf-8" });
+  if (list.status !== 0 || !/\bh264_qsv\b/.test(list.stdout ?? "")) return false;
+  const trial = spawnSync(ff, ["-hide_banner", "-loglevel", "error",
+    "-f", "lavfi", "-i", "color=black:s=256x256:d=1", "-c:v", "h264_qsv", "-f", "null", "-"], { encoding: "utf-8" });
+  return trial.status === 0;
+}
+
+const framesPattern = join(framesDir, "f%05d.jpg");
+const encodersToTry = detectQsvInline() ? [QSV_ARGS, CPU_ARGS] : [CPU_ARGS];
+let encOk = false;
+let lastErr = "";
+for (const encArgs of encodersToTry) {
+  const enc = spawnSync(ff, [
+    "-framerate", String(FPS), "-i", framesPattern,
+    ...encArgs, "-y", out,
+  ], { encoding: "utf-8" });
+  if (enc.status === 0 && existsSync(out)) { encOk = true; break; }
+  lastErr = enc.stderr?.slice(-400) ?? "";
+}
 await rm(framesDir, { recursive: true, force: true });
-if (enc.status !== 0 || !existsSync(out)) {
-  console.error(JSON.stringify({ ok: false, error: `ffmpeg 失败: ${enc.stderr?.slice(-400)}` }));
+if (!encOk) {
+  console.error(JSON.stringify({ ok: false, error: `ffmpeg 失败: ${lastErr}` }));
   process.exit(1);
 }
 console.log(JSON.stringify({ ok: true, out, duration }));

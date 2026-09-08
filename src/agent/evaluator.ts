@@ -21,11 +21,11 @@ import { createLoopEventSink } from "./ws-compat.js";
 import type { WsBridge, WsSession } from "../ws-bridge.js";
 
 /** 从评审输出文本提取 EvalResult(```json 块 > 全文 JSON > 兜底 pass)——与 CLI 路径语义逐字一致 */
-export function parseEvalResultText(resultText: string, fallbackStep: string): EvalResult {
+export function parseEvalResultText(resultText: string, fallbackStep: string, criteria?: { hardDims?: string[]; minAi?: Record<string, number> }): EvalResult {
   try {
     const jsonMatch = resultText.match(/```json\s*([\s\S]*?)\s*```/);
     const parsed = jsonMatch ? JSON.parse(jsonMatch[1]) : JSON.parse(resultText);
-    return machineCheckVerdict(parsed, fallbackStep);
+    return machineCheckVerdict(parsed, fallbackStep, criteria);
   } catch {
     // 2026-08-19 堵假 pass 洞:解析失败兜底 pass 曾让质量门随机放水(w_20260819_1634_cd5
     // material-search 第 3 轮空 scores "pass")。打 __parseFailed 标记,由调用方先重试。
@@ -41,19 +41,49 @@ export function parseEvalResultText(resultText: string, fallbackStep: string): E
     } as EvalResult & { __parseFailed?: boolean };
   }
 }
+
+/** Q3(方案定稿):从 criteria 文件编译"硬性维度 + min_ai 量化下限"——否定聚合的数据源。
+ *  解析格式:`### N. 中文名 (英文key) 【硬性·...】 min_ai: 8`(min_ai 缺省 6)。
+ *  hardDims 用英文 key(评审要求按 criteria 的英文 key 输出 scores,双匹配兜底中文名)。 */
+export function compileCriteriaMinAi(criteriaText: string): { hardDims: string[]; minAi: Record<string, number> } {
+  const hardDims: string[] = [];
+  const minAi: Record<string, number> = {};
+  const re = /###\s*\d+(?:\.\d+)?\.\s*[^（(]*?\(([a-z0-9_]+)\)\s*【硬性[^】]*】(?:\s*min_ai\s*[:：]\s*(\d+))?/g;
+  for (const m of criteriaText.matchAll(re)) {
+    const key = m[1];
+    hardDims.push(key);
+    minAi[key] = m[2] ? Number(m[2]) : 6;
+  }
+  return { hardDims, minAi };
+}
 /** 2026-09-01 终审 M2:verdict 机器复核——LLM 写的 verdict 不再原样采信。
  *  归一化(trim/lowercase);"scores 有 <6 分或含 critical 问题但 verdict 写 pass"
  *  的不一致直接改判 fail(幻觉 pass 的结构性防线);反之 scores 全过但 verdict
- *  误写 fail 不翻案(误拒安全方向,走重试)。 */
-export function machineCheckVerdict(parsed: any, fallbackStep: string): EvalResult {
+ *  误写 fail 不翻案(误拒安全方向,走重试)。
+ *  Q3(2026-09 施工)扩展:major 未清 / HARD 维度低于 min_ai(否定聚合,不计算加权平均)
+ *  一律改判 fail——criteria 参数可选(由调用方 buildEvalPrompt 处传入),缺省不启用。 */
+export function machineCheckVerdict(parsed: any, fallbackStep: string, criteria?: { hardDims?: string[]; minAi?: Record<string, number> }): EvalResult {
   const result = parsed as EvalResult;
   const rawVerdict = String(result.verdict ?? "").trim().toLowerCase();
   result.verdict = rawVerdict === "pass" ? "pass" : "fail";
   const scoreVals = Object.values(result.scores ?? {}).map(Number).filter(Number.isFinite);
   const hasLowScore = scoreVals.length > 0 && scoreVals.some((s) => s < 6);
   const hasCritical = (result.issues ?? []).some((i: any) => i?.severity === "critical");
-  if (result.verdict === "pass" && (hasLowScore || hasCritical)) {
-    console.warn(`[eval] verdict 复核改判 fail(${fallbackStep}):scores 含 <6 分或 critical 问题`);
+  const hasMajor = (result.issues ?? []).some((i: any) => i?.severity === "major");
+  const hardBelow = !!criteria?.hardDims?.length && !!criteria?.minAi &&
+    criteria.hardDims.some((d) => {
+      const raw = result.scores?.[d];
+      // 缺失的维度不算违规(LLM 输出可能未覆盖,交它自行判断);只对"明确输出且低于下限"触发
+      if (raw === undefined || raw === null) return false;
+      const v = Number(raw);
+      return Number.isFinite(v) && v < (criteria.minAi?.[d] ?? 0);
+    });
+  if (result.verdict === "pass" && (hasLowScore || hasCritical || hasMajor || hardBelow)) {
+    const reasons = [
+      hasLowScore ? "scores<6" : "", hasCritical ? "critical" : "",
+      hasMajor ? "major 未清" : "", hardBelow ? "HARD<min_ai" : "",
+    ].filter(Boolean).join("+");
+    console.warn(`[eval] verdict 复核改判 fail(${fallbackStep}):${reasons}`);
     result.verdict = "fail";
   }
   return result;
@@ -119,6 +149,25 @@ export interface ApiEvaluatorOpts {
 export async function runApiEvaluator(opts: ApiEvaluatorOpts): Promise<EvalResult> {
   const { config, step } = opts;
   const { provider, model } = resolveEvalTarget(config, opts.modelSpec);
+  // L2 补修(2026-09):评审与创作跨家族告警——self-preference 偏差。
+  // 强制改模型是配置层决策（设置页改 llm.models.eval），代码层只做可观测告警。
+  try {
+    const createProvider = resolveModelFor(config, "plan").provider.name;
+    if (provider.name === createProvider) {
+      console.warn(`[evaluator] 评审 provider(${provider.name})与创作同家族,存在 self-preference 偏差——建议在设置页将 llm.models.eval 改为跨家族模型(kimi/glm)`);
+    }
+  } catch { /* 创作 provider 解析失败不阻断评审 */ }
+  // Q3(方案定稿):编译 criteria 的硬性维度 min_ai(否定聚合数据源)——读评审标准文件
+  let criteria: { hardDims?: string[]; minAi?: Record<string, number> } | undefined;
+  try {
+    const { readCriteriaPathForStep } = await import("../server/step-contract.js");
+    const { existsSync, readFileSync } = await import("node:fs");
+    const w = await import("../work-store.js").then((m) => m.getWork(opts.workId)).catch(() => undefined);
+    const criteriaPath = readCriteriaPathForStep(step, w?.type);
+    if (existsSync(criteriaPath)) {
+      criteria = compileCriteriaMinAi(readFileSync(criteriaPath, "utf-8"));
+    }
+  } catch { /* criteria 编译失败不阻断评审 */ }
   const vision = resolveVision(config, provider.name);
   if (VISION_REQUIRED_STEPS.has(step) && !vision) {
     throw new Error(
@@ -168,7 +217,7 @@ export async function runApiEvaluator(opts: ApiEvaluatorOpts): Promise<EvalResul
   try {
     const { resultText } = await loop.runTurn(opts.evalPrompt);
     if (timedOut) throw new EvalTimeoutError(step, evalTimeoutMs);
-    let result = parseEvalResultText(resultText, step) as EvalResult & { __parseFailed?: boolean };
+    let result = parseEvalResultText(resultText, step, criteria) as EvalResult & { __parseFailed?: boolean };
     if (result.__parseFailed) {
       // 解析失败不再是静默 pass:先让评审重出一轮(大概率是话痨没按格式输出)
       console.warn(`[evaluator] ${opts.workId}/${step}: 评审输出无法解析为 JSON,要求重出一轮`);
@@ -178,7 +227,7 @@ export async function runApiEvaluator(opts: ApiEvaluatorOpts): Promise<EvalResul
         "不要输出任何其他文字。",
       );
       if (timedOut) throw new EvalTimeoutError(step, evalTimeoutMs);
-      result = parseEvalResultText(retry.resultText, step) as EvalResult & { __parseFailed?: boolean };
+      result = parseEvalResultText(retry.resultText, step, criteria) as EvalResult & { __parseFailed?: boolean };
       if (result.__parseFailed) {
         // 2026-08-28 批次1.5:重出仍失败 → 显式错误进 eval_error 链,堵死兜底 pass 放水通道
         // 2026-08-31 实测(dde/assembly):两轮解析失败无任何现场可复盘——落盘原文供诊断

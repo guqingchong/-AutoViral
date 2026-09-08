@@ -25,6 +25,8 @@ export interface PurposePreset {
     assetForm: string;
     assetSource: string;
     assetBudget: string;
+    /** 研究深度默认档(流水线 v2,2026-09-07 业主拍板:与用途绑定并在选题控制卡明示) */
+    researchDepth?: "full" | "standard" | "quick";
   };
   /** 注入 agent 策划/制作 prompt 的用途约束段 */
   promptBlock: string;
@@ -34,11 +36,13 @@ export interface PurposePreset {
   requiredTools?: string[];
 }
 
-/** 内容形式全集（13 种，04 方案）。desc 供 UI 展示 */
-export const CONTENT_FORMS: Record<string, { label: string; desc: string }> = {
-  knowledge: { label: "知识科普", desc: "动画讲解·边讲边画" },
-  industry: { label: "行业洞察", desc: "数据图表·动态流动" },
-  policy: { label: "政策解读", desc: "文件原文+动画拆解" },
+/** 内容形式全集（13 种，04 方案）。desc 供 UI 展示
+ *  depthFloor(2026-09-07 流水线 v2):该内容形式要求的最低研究深度档——
+ *  政策/行业/科普类即使选了轻量用途也抬到 standard(内容严肃性不允许精简研究)。 */
+export const CONTENT_FORMS: Record<string, { label: string; desc: string; depthFloor?: "full" | "standard" | "quick" }> = {
+  knowledge: { label: "知识科普", desc: "动画讲解·边讲边画", depthFloor: "standard" },
+  industry: { label: "行业洞察", desc: "数据图表·动态流动", depthFloor: "standard" },
+  policy: { label: "政策解读", desc: "文件原文+动画拆解", depthFloor: "standard" },
   insight: { label: "观点输出", desc: "大字金句·视觉冲击" },
   hot_comment: { label: "热点评述", desc: "快讯演播室·严肃时效" },
   review: { label: "测评对比", desc: "实测演示·逐项 PK" },
@@ -51,6 +55,18 @@ export const CONTENT_FORMS: Record<string, { label: string; desc: string }> = {
   short_drama: { label: "短剧分集", desc: "竖屏连续剧·钩子留扣" },
 };
 
+/**
+ * 用途×内容形式 → 研究深度档(流水线 v2,2026-09-07 业主拍板)。
+ * 规则:取 purpose 默认档与 contentForm 深度下限中**更深者**;
+ * 用户显式 explicitParams.researchDepth 由调用方优先覆盖(本函数不管)。
+ */
+export function resolveResearchDepth(purpose?: string, contentForm?: string): "full" | "standard" | "quick" {
+  const rank = { quick: 0, standard: 1, full: 2 } as const;
+  const byPurpose = getPurpose(purpose)?.defaults.researchDepth ?? "standard";
+  const floor = CONTENT_FORMS[contentForm ?? ""]?.depthFloor ?? "quick";
+  return rank[byPurpose] >= rank[floor] ? byPurpose : floor;
+}
+
 export const PURPOSE_PRESETS: PurposePreset[] = [
   {
     key: "grow_fans",
@@ -59,7 +75,7 @@ export const PURPOSE_PRESETS: PurposePreset[] = [
     goal: "关注转化",
     strategy: "系列化+强人设+信息增量，让观众觉得'关注他能持续学到东西'",
     forms: ["knowledge", "industry", "policy", "insight"],
-    defaults: { duration: 180, assetForm: "video-mix", assetSource: "smart", assetBudget: "eco" },
+    defaults: { duration: 180, assetForm: "video-mix", assetSource: "smart", assetBudget: "eco", researchDepth: "standard",},
     promptBlock: [
       "用途约束（涨粉·打造 IP）：",
       "- 信息增量密度优先：每 15 秒至少一个新知/新视角，杜绝注水",
@@ -76,7 +92,7 @@ export const PURPOSE_PRESETS: PurposePreset[] = [
     goal: "点击/购买",
     strategy: "信任构建+效果演示+利益点，千川三段式：吸引→信任→引导点击",
     forms: ["review", "tutorial", "goodlist"],
-    defaults: { duration: 120, assetForm: "video-mix", assetSource: "smart", assetBudget: "premium" },
+    defaults: { duration: 120, assetForm: "video-mix", assetSource: "smart", assetBudget: "premium", researchDepth: "standard",},
     promptBlock: [
       "用途约束（带货·促转化）：",
       "- 前 3 秒痛点或价格钩子（'还在花冤枉钱 X？'式），禁止慢热开场",
@@ -93,7 +109,7 @@ export const PURPOSE_PRESETS: PurposePreset[] = [
     goal: "私信/主页点击",
     strategy: "强钩子+信息差+资料包诱导，关键信息留一半",
     forms: ["mystery", "checklist", "knowledge"],
-    defaults: { duration: 90, assetForm: "image-carousel", assetSource: "smart", assetBudget: "eco" },
+    defaults: { duration: 90, assetForm: "image-carousel", assetSource: "smart", assetBudget: "eco", researchDepth: "quick",},
     promptBlock: [
       "用途约束（引流·导私域）：",
       "- 钩子前置：第一帧即抛悬念/利益点（'整理了 3 天的 X 资料'式）",
@@ -110,7 +126,7 @@ export const PURPOSE_PRESETS: PurposePreset[] = [
     goal: "播放/转发",
     strategy: "情绪共鸣+热点借势，传播性优先于信息量",
     forms: ["hot_comment", "emotion", "story"],
-    defaults: { duration: 120, assetForm: "video-mix", assetSource: "smart", assetBudget: "eco" },
+    defaults: { duration: 120, assetForm: "video-mix", assetSource: "smart", assetBudget: "eco", researchDepth: "quick",},
     promptBlock: [
       "用途约束（品宣·扩曝光）：",
       "- 情绪曲线优先：共鸣点/爽点/泪点明确，传播靠情绪不靠干货",
@@ -129,7 +145,7 @@ export const PURPOSE_PRESETS: PurposePreset[] = [
     forms: ["policy", "industry", "knowledge"],
     // 2026-08-26:300→180——plan 评审标准将"总时长超过3分钟"列为 Critical(短视频
     // 平台限制),300s 默认导致每个 authority 作品的 plan 评审首轮必挂(实测两连中)
-    defaults: { duration: 180, assetForm: "video-mix", assetSource: "smart", assetBudget: "eco" },
+    defaults: { duration: 180, assetForm: "video-mix", assetSource: "smart", assetBudget: "eco", researchDepth: "full",},
     promptBlock: [
       "用途约束（专业影响力）：",
       "- 来源引用规范：关键数据/政策条文必须标注可查来源（文件名/发布时间/条款号），"
@@ -148,7 +164,7 @@ export const PURPOSE_PRESETS: PurposePreset[] = [
     goal: "追剧/付费",
     strategy: "钩子×反转×卡点，每集结尾留扣子逼看下一集",
     forms: ["short_drama", "story"],
-    defaults: { duration: 90, assetForm: "video-mix", assetSource: "ai", assetBudget: "premium" },
+    defaults: { duration: 90, assetForm: "video-mix", assetSource: "ai", assetBudget: "premium", researchDepth: "quick",},
     promptBlock: [
       "用途约束（短剧制作）：",
       "- 黄金结构：前 3 秒冲突锚定（强刺激开场）→ 30 秒内第一次情绪爆破 → 结尾留扣子",

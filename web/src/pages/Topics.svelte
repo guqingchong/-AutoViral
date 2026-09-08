@@ -32,7 +32,7 @@
   // 默认 smart 精品混合:按镜头内容自动路由(数据→程序化素材、氛围→AI、真实画面→素材库)
   let batchAssetSource = $state<string>("smart");
   let batchAssetBudget = $state<string>("eco");
-  let batchVoiceStyle = $state<string>("male-qn-qingse");
+  let batchVoiceStyle = $state<string>("");
   let myVoices = $state<VoiceItem[]>([]);
   let favVoices = $state<VoiceItem[]>([]);
   let batchVoiceMode = $state<"cloned" | "ai">("ai");
@@ -49,6 +49,8 @@
   let batchPurpose = $state<string>("");
   let skillResearching = $state(false);
   let showAdvanced = $state(false);
+  /** 流水线 v2:研究深度覆盖(空=按用途×内容形式自动,业主拍板绑定表见 purpose-presets) */
+  let batchResearchDepth = $state("");
 
   async function loadPurposes() {
     try {
@@ -73,13 +75,23 @@
     if (p.forms.length) batchContentForm = p.forms[0];
   }
 
+  /** 流水线 v2:深度档中文标签 */
+  function depthLabel(d?: string): string {
+    const map: Record<string, string> = { full: "完整深研", standard: "标准", quick: "精简" };
+    return map[d ?? "standard"] ?? "标准";
+  }
+
   /** 用途过滤后的内容形式选项(未选用途时展示全部) */
   function visibleContentForms(): { value: string; label: string; desc: string }[] {
     const entries = Object.entries(contentFormMap);
     const filtered = batchPurpose
       ? entries.filter(([k]) => purposeOptions.find((x) => x.key === batchPurpose)?.forms.includes(k))
       : entries;
-    return filtered.map(([value, v]) => ({ value, label: v.label, desc: v.desc }));
+    return filtered.map(([value, v]) => ({
+      value, label: v.label,
+      // 流水线 v2:内容形式深度下限明示(政策/行业/科普类即使轻量用途也抬到标准档)
+      desc: v.desc + (v.depthFloor && v.depthFloor !== "quick" ? ` · 深度下限:${depthLabel(v.depthFloor)}` : ""),
+    }));
   }
 
   async function updateSkillPack() {
@@ -113,17 +125,21 @@
   });
 
   // 内容类型变化时过滤模板（模板无 kind 字段视为 video），按质量评分降序，并清掉不适用的选择
+  // M2(2026-09):视频类选择器隐藏"整片模板(kind=video)且 0 使用"的废弃模板——
+  // 整片模板消费链(video-factory→timeline-adapt)已废弃只服务预览，选了也无人消费(ae0 事故根源之一)
   let filteredTemplates = $derived(
     templates
-      .filter((tpl) =>
-        batchType === "image-text" ? tpl.kind === "image-text" : (tpl.kind ?? "video") !== "image-text"
-      )
+      .filter((tpl) => {
+        if (batchType === "image-text") return tpl.kind === "image-text";
+        if ((tpl.kind ?? "video") === "video" && (tpl.usageCount ?? 0) === 0) return false;
+        return (tpl.kind ?? "video") !== "image-text";
+      })
       .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
   );
   $effect(() => {
-    // 已选模板在新类型下不适用时,重选该类型下评分最高者(用户手动选"不使用模板"则保持空)
+    // M1(2026-09):已选模板在新类型下不适用时清空(不再默认重选第一个)——由用户显式重选
     if (batchTemplateId && !filteredTemplates.some((tpl) => tpl.id === batchTemplateId)) {
-      batchTemplateId = filteredTemplates[0]?.id ?? "";
+      batchTemplateId = "";
     }
     if (batchType === "image-text") batchDigitalHumanId = "";
   });
@@ -365,9 +381,10 @@
       if (tplRes.ok) {
         const data = await tplRes.json();
         templates = data.templates ?? [];
-        // 默认选中类型匹配的最高分模板(精品优先);用户仍可改选或清空为"不使用模板"
-        if (!batchTemplateId || !templates.some((tpl: any) => tpl.id === batchTemplateId)) {
-          batchTemplateId = filteredTemplates[0]?.id ?? "";
+        // M1(2026-09):不再默认绑定第一个模板——改为"未选则不绑"，由用户显式选择模板或留空走 AI 自主设计。
+        // 仅当"之前选过但已失效"时清空，避免悄悄替用户做视觉决策。
+        if (batchTemplateId && !templates.some((tpl: any) => tpl.id === batchTemplateId)) {
+          batchTemplateId = "";
         }
       }
     } catch {}
@@ -416,6 +433,7 @@
           evaluationMode: batchEvaluation,
           evalMode: batchEvalMode === "express" ? "express" : undefined,
           aspect: isVideo ? batchAspect : undefined,
+          researchDepth: batchResearchDepth || undefined,
         }),
       });
       const data = await res.json();
@@ -847,6 +865,8 @@
                     <span class="purpose-skills" class:empty={p.skillCount === 0}>
                       {p.skillCount > 0 ? `技能包 ${p.skillCount} 条` : "技能包空"}
                     </span>
+                    <!-- 流水线 v2(2026-09-07 业主拍板):研究深度与用途绑定并明示 -->
+                    <span class="purpose-depth">研究深度:{depthLabel(p.defaults?.researchDepth)}</span>
                   </button>
                 {/each}
               </div>
@@ -964,6 +984,17 @@
                       {#each ASSET_BUDGET_OPTIONS as o}
                         <option value={o.value}>{o.label}</option>
                       {/each}
+                    </select>
+                  </div>
+                </div>
+                <div class="batch-field-row">
+                  <div class="batch-field">
+                    <label>研究深度(流水线 v2)</label>
+                    <select bind:value={batchResearchDepth}>
+                      <option value="">自动（按用途×内容形式绑定）</option>
+                      <option value="full">完整深研（多维信源+原文核验+论证链）</option>
+                      <option value="standard">标准（核心事实核查+原文抽查）</option>
+                      <option value="quick">精简（时效优先,少量核查）</option>
                     </select>
                   </div>
                 </div>
@@ -1708,6 +1739,7 @@
     transition: border-color 0.15s, background 0.15s;
   }
   .purpose-card:hover { border-color: var(--spark-red, #FE2C55); }
+  .purpose-depth { font-size: 0.68rem; color: var(--info, #60a5fa); }
   .purpose-card.selected {
     border-color: var(--spark-red, #FE2C55);
     background: rgba(254, 44, 85, 0.06);

@@ -17,7 +17,7 @@
  */
 
 import { mkdir, writeFile, cp, readdir, rm } from "node:fs/promises";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { join, extname } from "node:path";
 import { dataDir } from "../config.js";
 import { broadcastProgress } from "./progress-events.js";
@@ -28,6 +28,7 @@ import { getTemplate, listTemplates, type DbTemplate, type TemplateCanvas, type 
 import { brandingAssetPath } from "../video/branding.js";
 import { normalizeLayoutSpec, type LayoutSpec } from "./image-text-template-generator.js";
 import { runJsonPrompt } from "./llm-json.js";
+import { failVisible } from "./fail-visible.js";
 import type { DbWork } from "../db/types.js";
 
 // ── 卡片文案数据结构 ─────────────────────────────────────────────────────────
@@ -653,7 +654,7 @@ async function ensureImageTextChild(
     createWork(
       {
         id: childId,
-        title: article.title || `${parent.title}（图文）`,
+        title: `${parent.title}（图文版）`,
         type: "image-text",
         status: "reviewing",
         platforms: [],
@@ -779,6 +780,97 @@ async function ensureImageTextChild(
   return { childId, cardFiles, cardsDir: childCardsDir };
 }
 
+// ── 流水线 v2 批次4(业主修订 2026-09-07):研究文章 → 图文待审区 → 一键发布 ──────
+// 内容研究(content-research)通过后,文章派生 image-text 子作品进图文待审区;
+// assets 完成后把"文章+素材"渲染成卡片填入子作品,待审区可直接预览并一键发布。
+
+/** 读父作品内容研究产出的文章(research/article.md + article.json 的 title) */
+async function readResearchArticle(parentWorkId: string): Promise<{ title: string; content: string; status: string } | null> {
+  const parentDir = join(dataDir, "works", parentWorkId);
+  const mdPath = [join(parentDir, "research", "article.md"), join(parentDir, "article.md")].find(existsSync);
+  if (!mdPath) return null;
+  const content = readFileSync(mdPath, "utf-8");
+  let title = "";
+  try {
+    const jPath = [join(parentDir, "research", "article.json"), join(parentDir, "article.json")].find(existsSync);
+    if (jPath) title = (JSON.parse(readFileSync(jPath, "utf-8")) as { title?: string }).title ?? "";
+  } catch { /* 标题缺失时用文章首行 */ }
+  if (!title) title = content.split("\n").find((l) => l.trim())?.replace(/^#+\s*/, "").slice(0, 40) || "研究文章";
+  return { title, content, status: "draft" };
+}
+
+/**
+ * 内容研究通过后派生"研究成果"子作品(仅文章落库,不渲染卡片——素材还不齐,
+ * 卡片由 renderResearchChildCards 在 assets 完成后填充)。幂等:已存在则刷新文章;
+ * 已过审/已发布不动。
+ */
+export async function ensureResearchArticleChild(parentWorkId: string): Promise<{ childId: string } | null> {
+  const parent = getWork(parentWorkId);
+  if (!parent) return null;
+  const article = await readResearchArticle(parentWorkId);
+  if (!article) {
+    log("warn", "server", "research_child_no_article", parentWorkId, {});
+    return null;
+  }
+
+  const existing = getChildWorkByParent(parentWorkId);
+  if (existing && existing.status !== "reviewing") return { childId: existing.id };
+
+  const now = new Date().toISOString();
+  const childId = existing?.id ?? generateChildId(); // 与双产物子作品同 ID 格式
+  if (!existing) {
+    createWork(
+      {
+        id: childId,
+        title: `${parent.title}（研究成果）`,
+        type: "image-text",
+        status: "reviewing",
+        platforms: [],
+        evaluation_mode: false,
+        tags: parent.tags,
+        topic_id: parent.topic_id,
+        template_id: parent.template_id,
+        dual_output: false,
+        parent_work_id: parent.id,
+        created_at: now,
+        updated_at: now,
+      } as DbWork,
+      [],
+    );
+    log("info", "server", "research_child_created", parentWorkId, { childId });
+  }
+
+  const childArticle = listArticlesByWork(childId)[0];
+  if (childArticle) {
+    updateArticle(childArticle.id, { title: article.title, content: article.content });
+  } else {
+    createArticle({
+      work_id: childId,
+      topic_id: parent.topic_id,
+      title: article.title,
+      content: article.content,
+      status: article.status as import("../db/types.js").DbArticle["status"],
+    });
+  }
+  return { childId };
+}
+
+/**
+ * assets 完成后:把研究文章 + 素材图渲染成卡片,填入"研究成果"子作品
+ * (复用 ensureImageTextChild 的 素材复制/卡片渲染/配文/封面 全段)。
+ * 子作品不存在(内容研究未派生过)时静默跳过;无文章/渲染失败仅记日志。
+ */
+export async function renderResearchChildCards(parentWorkId: string): Promise<void> {
+  const child = getChildWorkByParent(parentWorkId);
+  if (!child) return;
+  const parent = getWork(parentWorkId);
+  if (!parent) return;
+  const article = await readResearchArticle(parentWorkId);
+  if (!article) return;
+  await ensureImageTextChild(parent, { ...article, topic_id: parent.topic_id }, {});
+  log("info", "server", "research_child_cards_rendered", parentWorkId, { childId: child.id });
+}
+
 /**
  * 封面卡 PNG → output/cover.jpg（公众号草稿封面 thumb_media 只收 JPEG）。
  * 无 sharp/canvas 基建,用 Playwright 页内 canvas 转换。
@@ -885,6 +977,7 @@ export async function deriveDualOutputs(
         error: err instanceof Error ? err.message : String(err),
       });
       await markDualOutputFailed(workId, `图文子作品派生失败: ${(err as Error).message}`);
+      failVisible({ stage: "dual-output" }, "图文产物生成失败：" + (err as Error).message);
     }
 
     // 批次6.2:空图文不得静默过审——派生成功但卡片不足同样显式标记

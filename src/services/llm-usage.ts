@@ -68,6 +68,25 @@ export function recordUsage(config: Config, r: UsageRecord): void {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(r.workId ?? null, r.stage ?? null, r.provider, r.model, r.inputTokens, r.outputTokens, r.cacheReadTokens ?? 0, cost, r.latencyMs ?? null, r.thinkingTokens ?? null);
+  // C2 补修(2026-09):LLM 成本同步入 work_costs 分项账（回写 works.actual_cost）
+  if (r.workId && cost > 0) {
+    recordWorkCost(r.workId, "llm", r.provider, cost, r.stage ?? undefined);
+  }
+}
+
+/**
+ * C2 补修(2026-09):作品级成本分项记账——写 work_costs 表 + 回写 works.actual_cost。
+ * 此前只有 llm_usage 记 LLM token 成本，TTS/BGM/GPU 全未入账，works.actual_cost 恒 0。
+ * 幂等安全：金额 ≤0 或 workId 缺失直接跳过；同步写、单事务内两表一致。
+ */
+export function recordWorkCost(workId: string, category: "llm" | "tts" | "bgm" | "gpu", provider: string | null, amount: number, detail?: string): void {
+  if (!workId || !Number.isFinite(amount) || amount <= 0) return;
+  const db = getDb();
+  db.prepare(
+    `INSERT INTO work_costs (work_id, category, provider, amount, detail, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(workId, category, provider, amount, detail ?? null, new Date().toISOString());
+  db.prepare(`UPDATE works SET actual_cost = COALESCE(actual_cost, 0) + ? WHERE id = ?`).run(amount, workId);
 }
 
 /** 今日累计成本（元）。按本地日期切（llm_usage.ts 存 UTC datetime('now')，+8h 换算） */
@@ -98,6 +117,10 @@ export function recordUsageAsync(r: UsageRecord): void {
   })();
 }
 
+/** 软预警/熔断告警的日内去重(换日自动复位) */
+let lastSoftWarnDate = "";
+let lastBreachAlertDate = "";
+
 /** 超预算判定 + 熔断执行。返回 true 表示已熔断（本函数幂等，可每次记账后调用） */
 export function enforceDailyBudget(
   config: Config,
@@ -106,8 +129,30 @@ export function enforceDailyBudget(
   const limit = config.budget?.dailyLimitYuan;
   if (!limit || limit <= 0) return false;
   const spent = getDailyCostYuan();
+  const today = new Date().toLocaleDateString("sv-SE"); // 本地日期 YYYY-MM-DD
+  const warnPct = config.budget?.warningThresholdPercent ?? 80;
+
+  // X10 验收修复(C1,2026-09-07):80% 软预警此前只有月度看板有,日维度没有——
+  // 9/3 击穿 400→423 全程无任何预警。每日最多播报一次。
+  if (spent >= (limit * warnPct) / 100 && spent < limit && lastSoftWarnDate !== today) {
+    lastSoftWarnDate = today;
+    const text = `日预算预警:今日已花 ¥${spent.toFixed(2)},达上限 ¥${limit} 的 ${Math.round((spent / limit) * 100)}%`;
+    console.warn(`[llm-usage] ${text}`);
+    void import("./fail-visible.js").then((m) =>
+      m.failVisible({ stage: "budget" }, text),
+    ).catch(() => {});
+  }
+
   if (spent < limit) return false;
   const paused = pauseAll();
   console.error(`[llm-usage] 日预算熔断:今日已花 ¥${spent.toFixed(2)} ≥ 上限 ¥${limit},暂停 ${paused} 个队列项`);
+  // X10 验收修复(C1,2026-09-07):熔断此前仅 console.error,无 failVisible 语音告警——
+  // 预算打穿时用户零感知。每日最多语音播报一次(voice-notify 自身另有 3min 防抖)。
+  if (lastBreachAlertDate !== today) {
+    lastBreachAlertDate = today;
+    void import("./fail-visible.js").then((m) =>
+      m.failVisible({ stage: "budget" }, `日预算熔断:今日已花 ¥${spent.toFixed(2)},超上限 ¥${limit},已暂停队列`, { fatal: false }),
+    ).catch(() => {});
+  }
   return true;
 }

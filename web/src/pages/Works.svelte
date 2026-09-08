@@ -231,6 +231,13 @@
         return { text: `待人工拍板 · ${activeStep.name}`, stalled: true, queued: false };
       }
       if (stalled) {
+        // 2026-09-07 修复误报:批量转换"创建→入队"有数分钟空窗(文案生成等串行准备),
+        // 期间步骤已 active 但无队列项无活动,被误报"停滞·需人工查看"(fe5 实测)。
+        // 新生作品(创建 <15 分钟)且不在队列 → 如实显示"初始化中",不报停滞。
+        const createdMs = w.updatedAt ? new Date(w.updatedAt).getTime() : 0; // 未启动作品 updatedAt 即创建时间
+        if (!qp && createdMs && Date.now() - createdMs < 15 * 60 * 1000) {
+          return { text: "初始化中", stalled: false, queued: false };
+        }
         // 批次4.5 诚实状态:仅当队列项在 running(看门狗确实会接管,批次4.2 活性判定已修)
         // 才显示"自动恢复中";无 running 队列项的停滞无任何恢复机制,如实提示人工查看
         const recovering = qp?.status === "running";

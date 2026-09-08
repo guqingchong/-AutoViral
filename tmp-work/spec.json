@@ -1,0 +1,11 @@
+{
+  "jobId": "hatchverify",
+  "templatePath": "D:/Autoviral/tmp-work/tpl_deepspace_v2.html",
+  "outDir": "D:/Autoviral/tmp-work/out",
+  "outFile": "preview.mp4",
+  "duration": 5,
+  "width": 1080,
+  "height": 1920,
+  "theme": "finance_dark",
+  "params": { "title": "DEEP SPACE", "kicker": "FUTURE SPACECRAFT", "subtitleCn": "深邃太空 未来航行", "subtitleEn": "DEEP SPACE VOYAGE", "duration": 5 }
+}

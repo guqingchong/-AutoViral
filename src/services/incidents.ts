@@ -39,3 +39,14 @@ export async function recentIncidentDigest(n = 3): Promise<string> {
     return "";
   }
 }
+
+/**
+ * 最近 N 张事故卡的摘要,"熔断后立即调用"用。
+ *
+ * 与 recentIncidentDigest 语义一致(原函数即按文件名排序取最近 n 张,
+ * 无 24h 时间窗过滤),仅在命名上区分注入时机——供当前会话被熔断/事故
+ * 打断时立即回灌教训,而非仅新会话启动。空目录返回空串。
+ */
+export async function recentIncidentDigestNow(n = 3): Promise<string> {
+  return recentIncidentDigest(n);
+}

@@ -1,9 +1,13 @@
-﻿/**
+/**
  * Self-evolving data source tracking (PRD §4.1.1).
  *
  * When an external data source is referenced by WebSearch 5+ times, it is
  * automatically promoted to a "fixed" search data source that gets reused in
  * subsequent research, instead of being re-discovered each time.
+ *
+ * 数据模型(F2/F5,2026-09-16):data_sources 表新增信源等级列 tier。
+ * 迁移语句(已在 migrate 中执行,此处仅记录,勿重复执行):
+ *   ALTER TABLE data_sources ADD COLUMN tier TEXT;
  */
 
 import { getDb } from "./connection.js";
@@ -13,6 +17,8 @@ export interface DbDataSource {
   url: string;
   platform?: string;
   title?: string;
+  /** 信源等级(官方/机构/媒体/厂商/未核验),见 web-search-service.sourceTier。 */
+  tier?: string;
   reference_count: number;
   fixed: boolean;
   first_seen_at: string;
@@ -28,6 +34,7 @@ function rowToDataSource(row: Record<string, unknown>): DbDataSource {
     url: row.url as string,
     platform: (row.platform as string) || undefined,
     title: (row.title as string) || undefined,
+    tier: (row.tier as string) || undefined,
     reference_count: (row.reference_count as number) ?? 0,
     fixed: Boolean(row.fixed),
     first_seen_at: row.first_seen_at as string,
@@ -40,6 +47,7 @@ export interface RecordReferenceInput {
   url: string;
   platform?: string;
   title?: string;
+  tier?: string;
 }
 
 /**
@@ -58,19 +66,20 @@ export function recordDataSourceReference(input: RecordReferenceInput): DbDataSo
     if (existing) {
       const newCount = (existing.reference_count as number) + 1;
       db.prepare(
-        "UPDATE data_sources SET reference_count = ?, last_referenced_at = ?, fixed = ?, platform = COALESCE(?, platform), title = COALESCE(?, title) WHERE url = ?"
+        "UPDATE data_sources SET reference_count = ?, last_referenced_at = ?, fixed = ?, platform = COALESCE(?, platform), title = COALESCE(?, title), tier = COALESCE(?, tier) WHERE url = ?"
       ).run(
         newCount,
         now,
         newCount >= PROMOTION_THRESHOLD ? 1 : (existing.fixed as number),
         input.platform ?? null,
         input.title ?? null,
+        input.tier ?? null,
         input.url
       );
     } else {
       db.prepare(
-        "INSERT INTO data_sources (url, platform, title, reference_count, fixed, first_seen_at, last_referenced_at, created_at) VALUES (?, ?, ?, 1, 0, ?, ?, ?)"
-      ).run(input.url, input.platform ?? null, input.title ?? null, now, now, now);
+        "INSERT INTO data_sources (url, platform, title, tier, reference_count, fixed, first_seen_at, last_referenced_at, created_at) VALUES (?, ?, ?, COALESCE(?, 'unverified'), 1, 0, ?, ?, ?)"
+      ).run(input.url, input.platform ?? null, input.title ?? null, input.tier ?? null, now, now, now);
     }
 
     const row = db

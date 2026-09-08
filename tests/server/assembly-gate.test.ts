@@ -135,7 +135,20 @@ describe("advance assembly 机器门禁", () => {
 
   async function makeWorkAtAssembly(): Promise<string> {
     const { createWork, updateWork } = await import("../../src/work-store.js");
-    const w = await createWork({ title: "门禁测试", type: "short-video", platforms: ["douyin"] } as never);
+    const { createTemplate } = await import("../../src/db/templates-repo.js");
+    // M1:视频作品必须绑模板——先 seed 一个 code 模板
+    createTemplate({
+      id: "tpl_test_gate",
+      name: "门禁测试模板",
+      kind: "code",
+      status: "approved",
+      canvas: { width: 1080, height: 1920, fps: 30 },
+      variables: [],
+      layers: [],
+      audio: [],
+      transitions: [],
+    });
+    const w = await createWork({ title: "门禁测试", type: "short-video", platforms: ["douyin"], templateId: "tpl_test_gate" } as never);
     const pipeline = { ...w.pipeline };
     for (const k of Object.keys(pipeline)) {
       pipeline[k] = { ...pipeline[k], status: k === "assembly" ? "active" : "done", startedAt: new Date().toISOString() };
@@ -167,6 +180,18 @@ describe("advance assembly 机器门禁", () => {
     const old = new Date(Date.now() - 60_000);
     await utimes(join(out, "final.mp4"), old, old);
     await writeFile(join(out, "quality-report.json"), JSON.stringify({ videoPath: join(out, "final.mp4") }));
+    // M3:绑定模板的作品须渲染模板段并进入合成清单——seed 模板渲染记录 + assembly-plan.json 引用
+    const { createRenderJob } = await import("../../src/db/render-jobs-repo.js");
+    createRenderJob({
+      id: "job_tpl_gate",
+      work_id: id,
+      template_id: "tpl_test_gate",
+      output_path: join(dir, "works", id, "assets", "clips", "tpl-seg.mp4"),
+      status: "completed",
+      progress: 100,
+    });
+    await mkdir(join(dir, "works", id, "assets"), { recursive: true });
+    await writeFile(join(dir, "works", id, "assets", "assembly-plan.json"), JSON.stringify({ segments: ["tpl-seg.mp4", "final.mp4"] }));
     const res = await apiRoutes.request(`/api/works/${id}/pipeline/advance`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ completedStep: "assembly" }),

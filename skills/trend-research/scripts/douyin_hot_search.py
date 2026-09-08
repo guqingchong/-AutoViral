@@ -17,6 +17,13 @@
 import argparse
 import json
 import sys
+# 2026-09-07 修复:Windows 守护进程下 stdout 管道默认 GBK 编码,热搜标题含 emoji/生僻字时
+# print_json 触发 UnicodeEncodeError 崩溃(daemon.log 实测:zhihu/channels/wechat_mp 连环失败)。
+# 强制 stdout/stderr UTF-8,对调用方(Node execFile 按 utf-8 解码)也始终一致。
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 import time
 from typing import Optional
 

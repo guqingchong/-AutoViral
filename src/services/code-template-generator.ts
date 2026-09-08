@@ -28,6 +28,9 @@ export interface GenerateCodeTemplateInput {
   withDigitalHuman?: boolean;
   /** 已确认的设计意图稿(2026-08-25):存在时代码生成从自由创作变为按稿施工 */
   brief?: DesignBrief;
+  /** 渲染支路(2026-09-02 整片 web 出口):web=自包含 HTML(WAAPI/WebGL,推荐);
+   *  revideo=TSX(兼容存量)。默认 web——CSS/SVG/WebGL 表达力上限远高于 Revideo Canvas */
+  renderer?: "revideo" | "web";
 }
 
 interface LlmCodeTemplateResponse {
@@ -87,6 +90,71 @@ export default function makeScene(params: any) {
 }
 `;
 
+/** 分页设计稿 → 生成纪律段落(2026-09-02 分页模板,TSX/HTML 两支路共用) */
+function pagesSection(brief?: DesignBrief): string {
+  if (!brief?.pages?.length) return "";
+    return [
+    "## 分页结构(本模板为分页整片:封面/正文/结尾,硬性)",
+    "单场景内按时间分幕组织,按 params.duration 比例划分:封面幕占前 ~12%(≤3s,冲击入场),",
+    "正文幕占中段 ~73%(信息承载主段),结尾幕占末 ~15%(收束+关注引导);幕间统一转场(淡入/滑入)。",
+    "逐页落实设计稿 pages[] 中对应 role 的 goal/layout/motionOverride/elementsExtra:",
+    ...brief.pages.map((p) => `- ${p.role}(${p.goal}): ${p.layout.map((l) => `${l.region}=${l.content}@${l.position}`).join("; ")}${p.motionOverride ? `;动效特例:${p.motionOverride}` : ""}`),
+    "",
+  ].join("\n");
+}
+
+/** 整片 web 出口生成 prompt(2026-09-02):自包含 HTML + WAAPI/WebGL,契约与 templates-web 同源 */
+export function buildCodeTemplateHtmlPrompt(input: GenerateCodeTemplateInput): string {
+  const W = input.orientation === "landscape" ? 1920 : 1080;
+  const H = input.orientation === "landscape" ? 1080 : 1920;
+  const wide = input.orientation === "landscape";
+  return [
+    "你是顶级动态视觉设计师 + 前端动画工程师,为短视频设计「web 渲染整片模板」(自包含 HTML 程序化动画)。",
+    input.brief
+      ? [
+          "你必须严格实现以下已确认设计稿(DesignBrief)——palette 逐色落实 hex 与用途、",
+          "layout 逐区落实内容与位置、motion 逐条落实入场错峰与循环;",
+          "elements 是装饰白名单:只允许出现清单内的装饰,禁止添加稿外元素。",
+          `设计稿 JSON:\n${JSON.stringify(input.brief, null, 2)}`,
+        ].join("\n")
+      : `设计需求:${input.style}`,
+    "",
+    `## 画布:${W}×${H}(html/body 固定像素,overflow hidden)`,
+    "",
+    "## 输出 JSON(代码放在 html 字符串字段)",
+    '{"name": "模板中文名(≤10字,体现风格)", "html": "完整 HTML 源码"}',
+    "⚠️ 代码必须紧凑:不写注释、不留多余空行、不重复相似的装饰元素(循环生成),html ≤60KB;",
+    "⚠️ 控制思考长度:快速定稿后直接输出,不要在草稿里反复推演——总输出超上限会被截断拒收(2026-09-07 实测)",
+    "",
+    pagesSection(input.brief),
+    "## 参数契约:window.__PARAMS__(渲染时注入)",
+    "{ title, kicker?, subtitleCn?, subtitleEn?, videoSrc?(数字人源片 file:// URL), videoRatio?, duration(秒), bgImage?(底板背景图 file:// URL) }",
+    "- videoSrc 缺省时必须渲染占位形态(毛玻璃+播放符),禁止写死任何路径/URL",
+    "- bgImage 存在时:作为页面底板铺满(object-fit:cover 等效),置于最底层,其上叠加纹理/光效层——",
+    "  写实场景底板(舱门/操作台/厂房等照片级画面)走 AI 生图嵌槽,不要硬手写低效 SVG 照片级几何",
+    "- 所有循环动效按 __PARAMS__.duration 计算时间轴,尾帧必须是完整信息态",
+    "",
+    "## 硬性契约(违反任何一条渲染必挂或截帧错乱,将被拒收)",
+    "1. 完全自包含单文件 ≤200KB:禁止任何外链——无 <script src>、无 <link>、无图片/字体 URL、",
+    "   无 fetch/XHR/sendBeacon/window.open/location 跳转;装饰全部 CSS + 内联 SVG",
+    "2. <style id=\"theme-vars\"></style> 放页首,脚本第一行注入 window.__THEME_CSS__;",
+    "   配色一律 var(--bg/--text/--text-sub/--accent/--accent-2, 带 fallback 实色)",
+    "3. 动画全部 WAAPI element.animate(keyframes,{...,fill:'both'});禁 CSS 无限动画/定时器/rAF/Math.random",
+    "4. 动态文本挂 window.__seek=function(t秒){...},定义后立即 __seek(0)",
+    wide
+      ? "5. 字幕带避让(横屏):内容下缘不超过 y=880(字幕带 900-1000)"
+      : "5. 字幕带避让(竖屏):任何内容禁入 y∈[1418,1562];主体集中在 y 300-1400",
+    "6. 材质纪律(L4/L5):背景纹理用 SVG feTurbulence,辉光用 feGaussianBlur 叠层,调色用 feColorMatrix;",
+    "   光效层用 mix-blend-mode(screen/overlay),聚光/渐隐用 CSS mask 合成;拒绝平面色块堆砌;",
+    "   粒子/流体/3D 可用单 canvas + 原生 WebGL2(preserveDrawingBuffer:true,一切绘制在 __seek 内置 u_time,",
+    "   禁库禁 rAF),文字仍在 canvas 之上用 DOM 排版",
+    "7. 数字人窗口(若要求):<video src=P.videoSrc muted playsinline> 圆角+辉光描边;勿调用 play()",
+    "   (渲染器按帧 seek 同步),勿监听 timeupdate 驱动逻辑",
+    "8. 字号阶梯:主标题 56-72px(横屏)/48-64px(竖屏),辅助 ≥24px;苹果式少即是多",
+  ].filter(Boolean).join("\n");
+}
+
+
 /** 批次8.4 template_fidelity:抽帧 + 视觉模型比对设计意图(v2 病根 7"生成与设计意图
  *  无视觉验证闭环"的修复)。返回 null=通过;返回文本=问题描述(进定点修复循环)。
  *  视觉通道不可用时放行并 warn(不让 fidelity 成为生产单点故障) */
@@ -107,20 +175,23 @@ async function checkTemplateFidelity(previewPath: string, input: GenerateCodeTem
     const intent = input.brief
       ? JSON.stringify({ palette: input.brief.palette, layout: input.brief.layout, motion: input.brief.motion, elements: input.brief.elements })
       : input.style;
-    const r = await chatVisionJson<{ score?: number; problems?: string[] }>(
+    const r = await chatVisionJson<{ score?: number; problems?: string[]; scene?: string }>(
       await loadConfig(),
       frames,
       [
         "你是视觉验收员。以下是模版渲染预览的抽帧,设计意图如下:",
         intent,
-        "判断渲染结果与设计意图的还原度。只输出 JSON:",
-        '{"score": 1-10 整数, "problems": ["不还原之处"]}',
+        "先做客观描述,再做评分。只输出 JSON:",
+        '{"scene": "2-3 句话客观描述画面实际有什么(构图/元素/材质),不评价好坏", "score": 1-10 整数, "problems": ["不还原之处"]}',
         "评分锚点:9-10=版式/配色/元素全面还原;6-8=主体还原局部偏差;1-5=明显货不对板(风格/配色/结构错位)",
       ].join("\n"),
       { timeoutMs: 120_000 },
     );
     if ((r.score ?? 10) < 6) {
-      return `设计意图还原度不足(${r.score}/10): ${(r.problems ?? []).join("; ").slice(0, 200) || "未说明"}`;
+      // 2026-09-07 视觉回译:把"画面实际有什么"一并带回定点修复循环——
+      // 代码模型看不见自己的渲染产物,回译文本是它的眼睛
+      const desc = r.scene ? `\n上一版实际渲染画面:${r.scene}` : "";
+      return `设计意图还原度不足(${r.score}/10): ${(r.problems ?? []).join("; ").slice(0, 200) || "未说明"}${desc}`;
     }
     return null;
   } catch (err) {
@@ -183,6 +254,7 @@ export function buildCodeTemplatePrompt(input: GenerateCodeTemplateInput): strin
     "9. 字号阶梯:主标题 56-72px(横屏)/48-64px(竖屏),辅助 ≥24px;字重对比制造层级",
     "10. 布局含:标题区 + 主视觉区" + (input.withDigitalHuman ? "(数字人窗口,圆角+辉光描边+macOS 三灯)" : "(可以是图形/数据/装饰主体)") + " + 底部中英字幕区(subtitleCn/subtitleEn)",
     "",
+    pagesSection(input.brief),
     "## 参考样例(学它的结构与纪律,设计必须按需求原创,禁止照抄)",
     "```tsx",
     REFERENCE_EXAMPLE,
@@ -213,12 +285,18 @@ export async function generateCodeTemplate(input: GenerateCodeTemplateInput): Pr
   if (!input.style?.trim()) throw new Error("style 必填");
   const orientation = input.orientation ?? "portrait";
   const size = orientation === "landscape" ? { w: 1920, h: 1080 } : { w: 1080, h: 1920 };
+  // 2026-09-02 整片 web 出口:默认 web(HTML/WAAPI/WebGL,表达力上限远高于 Revideo);
+  // renderer:"revideo" 走原 TSX 流程(兼容)
+  if ((input.renderer ?? "web") === "web") {
+    return generateCodeTemplateWeb(input, size);
+  }
 
   const prompt = buildCodeTemplatePrompt({ ...input, orientation });
   let draft = await runJsonPrompt<LlmCodeTemplateResponse>(prompt, {
     stage: "plan", // 代码生成走强力档
     timeoutMs: 600_000,
     maxAttempts: 2,
+    fallbackStage: "assets", // kimi 网关 504 时回退 deepseek(2026-09-02 事故);主档 2 次即回退,不在抖动服务上空烧
   });
 
   // 渲染验证 + 定点修复循环(复用模板生成的 repair 哲学:渲染错误是最高质量的反馈)
@@ -272,7 +350,7 @@ export async function generateCodeTemplate(input: GenerateCodeTemplateInput): Pr
         "",
         '输出: {"name": "同前", "tsx": "修复后的完整 TSX 源码"}',
       ].join("\n"),
-      { stage: "plan", timeoutMs: 600_000, maxAttempts: 2 },
+      { stage: "plan", timeoutMs: 600_000, maxAttempts: 2, fallbackStage: "assets", maxTokens: 65536 },
     );
   }
   throw new Error(`代码模板生成失败(修复 2 轮后仍不可渲染): ${lastError}`);
@@ -288,18 +366,104 @@ function previewParams(input: GenerateCodeTemplateInput): Record<string, unknown
   };
 }
 
+/**
+ * 整片 web 出口(2026-09-02):LLM 产自包含 HTML → 静态检查 → web-worker 真实渲染 5s →
+ * 黑屏拦截 → fidelity 视觉比对 → 失败定点修复(≤2 轮) → 入库 layers[0].customHtml。
+ * 渲染验证与 templates-web 镜头模板同栈,契约纪律见 buildCodeTemplateHtmlPrompt。
+ */
+async function generateCodeTemplateWeb(
+  input: GenerateCodeTemplateInput,
+  size: { w: number; h: number },
+): Promise<DbTemplate> {
+  const { staticCheckHtml } = await import("./scene-template-generator.js");
+  const prompt = buildCodeTemplateHtmlPrompt(input);
+  let draft = await runJsonPrompt<{ name?: string; html?: string }>(prompt, {
+    stage: "plan",
+    timeoutMs: 600_000,
+    // 2026-09-07 实测:整片模板 HTML + thinking 模型的推理 token 合计轻松超 32768
+    // (deepseek 推理 token 计入 completion),给足 65536 防静默截断(供应商实测 131072 可请求)
+    maxTokens: 65536,
+    maxAttempts: 2,
+    fallbackStage: "assets", // kimi 网关 504 时回退 deepseek(2026-09-02 事故);主档 2 次即回退,不在抖动服务上空烧
+  });
+
+  let lastError = "";
+  for (let round = 0; round <= 2; round++) {
+    const html = draft.html ?? "";
+    const staticErrors = staticCheckHtml(html);
+    if (staticErrors.length === 0) {
+      const preview = await renderCodeScene({
+        workId: "tpl_codegen",
+        filename: `preview_${randomUUID().slice(0, 8)}`,
+        customHtml: html,
+        params: { ...previewParams(input), duration: 5 },
+        duration: 5,
+        size,
+      });
+      if (preview.success && preview.path) {
+        const blacks = await blackSegments(preview.path);
+        if (blacks.length === 0) {
+          const fidelityIssue = await checkTemplateFidelity(preview.path, input);
+          if (!fidelityIssue) {
+            return await saveCodeTemplate(draft, undefined, input, size, preview.path, html);
+          }
+          lastError = fidelityIssue;
+        } else {
+          lastError = `预览可渲染但画面黑屏/纯色(${blacks[0]})——模版必须渲染出真实可见内容:检查元素尺寸/坐标/颜色对比度/初始 opacity/视频占位分支`;
+        }
+      } else {
+        lastError = preview.error ?? "渲染失败(无错误信息)";
+      }
+    } else {
+      lastError = `静态检查未过: ${staticErrors.join("; ")}`;
+    }
+    if (round === 2) break;
+    console.warn(`[code-template-gen:web] round ${round + 1} 未过,定点修复: ${lastError.slice(0, 200)}`);
+    draft = await runJsonPrompt<{ name?: string; html?: string }>(
+      [
+        "你是前端动画修复师。下面这份整片模板 HTML 未通过验收,请定点修复后输出完整修复版。",
+        "保持设计意图与参数契约不变,只修导致失败的问题。",
+        "",
+        "## 失败原因",
+        lastError,
+        "",
+        "## 硬性契约(重申)",
+        "自包含 ≤200KB;主题 var(--xxx) 带 fallback;动画全部 WAAPI fill:'both';",
+        "window.__seek 确定性挂钩(WebGL 绘制也在 __seek 内,u_time=t,禁 rAF);读 window.__PARAMS__;",
+        `字幕带避让(${input.orientation === "landscape" ? "横屏下缘≤880" : "竖屏 y1418-1562"});videoSrc 缺省渲染占位`,
+        "",
+        "## 原代码",
+        "```html",
+        html,
+        "```",
+        "",
+        '输出: {"name": "同前", "html": "修复后的完整 HTML 源码"}',
+      ].join("\n"),
+      { stage: "plan", timeoutMs: 600_000, maxAttempts: 2, fallbackStage: "assets", maxTokens: 65536 },
+    );
+  }
+  throw new Error(`整片 web 模板生成失败(修复 2 轮后仍不可渲染): ${lastError}`);
+}
+
 async function saveCodeTemplate(
   draft: LlmCodeTemplateResponse,
-  tsx: string,
+  tsx: string | undefined,
   input: GenerateCodeTemplateInput,
   size: { w: number; h: number },
   previewPath: string,
+  /** 2026-09-02 web 出口:存在时存 customHtml(web 支路),与 tsx 互斥 */
+  html?: string,
 ): Promise<DbTemplate> {
   const id = `tpl_code_${randomUUID().slice(0, 8)}`;
   // 预览视频归位到模板预览基建:/api/templates/:id/preview-file 端点按此路径取流
   await mkdir(join(dataDir, "templates"), { recursive: true });
   const previewDest = join(dataDir, "templates", `${id}-preview.mp4`);
   await copyFile(previewPath, previewDest);
+
+  // 媒体槽位扫描:TSX 用 params.videoSrc,HTML 用 P.videoSrc——统一按源码文本探测
+  const code = tsx ?? html ?? "";
+  const usesVideo = /videoSrc/.test(code);
+  const usesImage = /imageSrc/.test(code);
 
   return createTemplate({
     id,
@@ -318,16 +482,18 @@ async function saveCodeTemplate(
       // params.videoSrc 做视频窗口,但 variables 未声明——agent 渲染时不知道要传,
       // 模板全部渲染成灰色占位框被判"假窗口"。扫描代码中的媒体参数自动补齐声明,
       // 让槽位对渲染方(agent/UI)可见
-      ...(!input.withDigitalHuman && /params\.videoSrc/.test(tsx)
+      ...(!input.withDigitalHuman && usesVideo
         ? [{ name: "videoSrc", type: "video" as const, label: "视频窗口素材(必须填充真实素材,禁止占位)" }]
         : []),
-      ...(/params\.imageSrc/.test(tsx)
+      ...(usesImage
         ? [{ name: "imageSrc", type: "image" as const, label: "图片窗口素材(必须填充真实素材,禁止占位)" }]
         : []),
     ],
-    // kind=code 约定:layers[0] 场景配置;customCode 为 LLM 生成的 TSX 源码;
+    // kind=code 约定:layers[0] 场景配置;customCode=Revideo TSX,customHtml=web 支路(2026-09-02);
     // brief/style 随 layers[0] 持久化(批次8.4:fidelity 审计与 refine 的设计意图依据)
-    layers: [{ scene: "custom", customCode: tsx, params: {}, brief: input.brief ?? null, style: input.style }],
+    layers: [html
+      ? { scene: "custom-html", customHtml: html, params: {}, brief: input.brief ?? null, style: input.style }
+      : { scene: "custom", customCode: tsx, params: {}, brief: input.brief ?? null, style: input.style }],
     audio: [],
     transitions: [],
     preview_url: `/api/templates/${id}/preview-file`,

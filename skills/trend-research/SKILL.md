@@ -175,6 +175,46 @@ curl http://localhost:3271/api/trends/xiaohongshu
 
 ---
 
+## 调研方法论（强制）
+
+> **本小节强制执行，不可跳过。** 根治"research 阶段零联网检索、事实全靠 LLM 记忆，文号/年份错误连过两轮评审"（AutoViral R5/R6）。凡报告中出现的具体事实（文号、年份、百分比、机构、排名、数据值），**必须**走下述联网核验链路，禁止凭记忆默写。
+
+### 1. topic 拆解 → facts-to-verify.json
+
+开研前先把调研主题拆解为**必须核验的问题清单**，写入 `facts-to-verify.json`：
+
+```json
+{
+  "claims": [
+    { "text": "《政府采购法》2022 年修订", "type": "文号", "verify_status": "待核", "source_url": "" },
+    { "text": "城更投资占固投 15%", "type": "百分比", "verify_status": "待核", "source_url": "" }
+  ]
+}
+```
+
+- `type` ∈ `文号 | 年份 | 百分比 | 机构 | 排名 | 数据`。
+- 每条断言先标 `verify_status: "待核"`。
+
+### 2. 逐项联网核验（WebSearch + WebFetch）
+
+- L1 事实/政策/数据类 → `WebSearch`（Bing RSS 检索，F1）+ `WebFetch` 抓原文。
+- 检索 query 需含**事实关键词 + 平台/地区 + 当前年月**（保持时效性）。
+- 权威源（gov.cn / stats.gov.cn / 房企或行业协会官网等）命中后，用 `WebFetch` 拉原文段落核准，不要只信搜索摘要。
+
+### 3. 核验态回写
+
+每条断言核验后回写 `facts-to-verify.json` 与报告：
+
+- 核准 → `verify_status: "已核验"` + `source_url`（原文链接）。
+- 有矛盾/权威源冲突 → `"矛盾"`，列出双方来源，勿采信单方。
+- 检索无果 → 保持 `"待核"`，报告中明确标注"该条未联网核验"。
+
+### 4. 输出约定
+
+- 报告末尾附 `facts-to-verify.json` 对应的"已核验 / 待核清单"；**全为"待核"且无任何联网调用记录 → 直接视为数据真实性不达标**（见 content-evaluator 的"事实核验（硬性）"维度）。
+
+---
+
 ## 输出格式
 
 研究完成后，按照以下格式输出结构化报告：
