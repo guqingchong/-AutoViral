@@ -173,6 +173,10 @@ export async function reconcileWorkStates(trigger: "startup" | "periodic" = "per
     }
 
     // ── 2. 派生状态只向前对齐 ────────────────────────────────────────
+    // P6 配套(2026-09-08 复审 C-1):draft 是"待启动"确认态,对账无权提拔——
+    // v2 首步出生即 active,派生必得 researching,不跳过则 P6 出生 draft
+    // 活不过 1 分钟,看门狗误拉起链完整复原。researching 由启动路径显式写入。
+    if ((w.status as WorkStatus) === "draft") continue;
     const derived = deriveStatusFromPipeline(pipeline, w.status as WorkStatus);
     if (statusOrder(derived) > statusOrder(w.status as WorkStatus)) {
       await updateWork(w.id, { status: derived });

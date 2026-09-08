@@ -120,8 +120,11 @@ function detectQsvInline() {
   if (mode === "qsv") return true;
   const list = spawnSync(ff, ["-hide_banner", "-encoders"], { encoding: "utf-8" });
   if (list.status !== 0 || !/\bh264_qsv\b/.test(list.stdout ?? "")) return false;
+  // 2026-09-08 复审 H2:试编码必须用完整参数组——裸 -c:v 会漏掉构建不支持的子选项
+  // (ffmpeg 8.1 essentials 认 h264_qsv 但不认 -qsv_brc,裸试通过、真实渲染必炸一次
+  // 再回退,与 src/services/encoder.ts 的修复同款)
   const trial = spawnSync(ff, ["-hide_banner", "-loglevel", "error",
-    "-f", "lavfi", "-i", "color=black:s=256x256:d=1", "-c:v", "h264_qsv", "-f", "null", "-"], { encoding: "utf-8" });
+    "-f", "lavfi", "-i", "color=black:s=256x256:d=1", ...QSV_ARGS, "-f", "null", "-"], { encoding: "utf-8" });
   return trial.status === 0;
 }
 

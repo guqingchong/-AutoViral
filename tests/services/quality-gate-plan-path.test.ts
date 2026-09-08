@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assertPlanDeliverables, assertPlanReferences } from "../../src/services/quality-gate.js";
+import { assertPlanDeliverables, assertPlanReferences, assertContractArtifacts } from "../../src/services/quality-gate.js";
 
 // P5 修复:v2 契约要求写 plan/plan.md,门禁候选路径必须覆盖
 describe("assertPlanDeliverables 分镜文档定位(P5)", () => {
@@ -69,5 +69,34 @@ describe("assertPlanReferences registry 核验(B12)", () => {
     );
     const keys = assertPlanReferences(dir).map((i) => i.key);
     expect(keys).toContain("plan_ref_missing");
+  });
+});
+
+// B7 配套:图文版 plan-assets 门禁豁免 script.json(指令侧已不再要求)
+describe("assertContractArtifacts 图文分版(B7)", () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "av-contract-"));
+    await mkdir(join(dir, "assets"), { recursive: true });
+    await writeFile(join(dir, "assets", "registry.json"), "{}", "utf-8");
+    await writeFile(join(dir, "assets", "material-candidates.md"), "# 台账", "utf-8");
+  });
+  afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+
+  it("视频版缺 script.json → 拦", () => {
+    const keys = assertContractArtifacts(dir, "plan-assets", { workType: "short-video" }).map((i) => i.key);
+    expect(keys).toContain("contract_script_missing");
+  });
+
+  it("图文版无 script.json → 不拦(registry/candidates 仍查)", () => {
+    const keys = assertContractArtifacts(dir, "plan-assets", { workType: "image-text" }).map((i) => i.key);
+    expect(keys).not.toContain("contract_script_missing");
+    expect(keys).toEqual([]); // registry 与 candidates 已备齐
+  });
+
+  it("图文版缺 registry 仍拦", async () => {
+    await rm(join(dir, "assets", "registry.json"));
+    const keys = assertContractArtifacts(dir, "plan-assets", { workType: "image-text" }).map((i) => i.key);
+    expect(keys).toContain("contract_registry_missing");
   });
 });

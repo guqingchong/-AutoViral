@@ -150,8 +150,13 @@
         ["Pixabay", pixabayApiKey, verify.pixabayApiKey ?? ""],
         ["Unsplash", unsplashAccessKey, verify.unsplashAccessKey ?? ""],
       ];
+      // C2 配套(2026-09-08 复审 B3):远端是掩码值——本地为掩码回显(未改)跳过;
+      // 本地是新明文时,远端应回掩码且前缀一致(与 llm 段同款判定)
       const mismatches = keyChecks
-        .filter(([, local, remote]) => local.trim() !== remote)
+        .filter(([, local, remote]) => {
+          if (!local.trim() || local.includes("***")) return false;
+          return !remote.includes("***") || !remote.startsWith(local.slice(0, 6));
+        })
         .map(([name]) => name);
       if (mismatches.length > 0) {
         throw new Error(`${mismatches.join("、")} Key 未能写入，请重试或联系管理员`);

@@ -262,6 +262,9 @@ export class AgentLoop {
           // auto_continue 在长任务运行中也会跳过续跑,不会立刻把 agent 拉回来。
           this.state = "idle";
           this.deps.onLoopEvent({ type: "tool_progress", text: "回合超时但有后台长任务运行中:LLM 轮次收尾,待长任务完成回调接管" });
+          // 复审 低#8:补发 turn_complete——ws-compat 靠它 flushText/finalizeTurn(saveWorkChat),
+          // 只发 tool_progress 会把批处理窗内未 flush 的文本丢出聊天记录
+          this.deps.onLoopEvent({ type: "turn_complete", resultText: "", stopReason: "long_task_wait" });
           return { resultText: "", stopReason: "long_task_wait" };
         }
         if ((this.state as LoopState) === "aborted") {

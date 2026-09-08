@@ -10,6 +10,17 @@ import type { DbAccount } from "../../db/types.js";
 
 export const accountsRoutes = new Hono();
 
+/** 复审 H3(2026-09-08):password/cookie 不明文出 GET 接口(读端点免鉴权) */
+const CRED_MASK = "***";
+function maskSecret(v: string | undefined | null): string | undefined {
+  if (!v) return undefined;
+  return v.length > 10 ? `${v.slice(0, 6)}${CRED_MASK}${v.slice(-4)}` : CRED_MASK;
+}
+/** 序列化输出:凭证字段掩码 */
+function presentAccount(a: DbAccount): DbAccount {
+  return { ...a, password: maskSecret(a.password), cookie: maskSecret(a.cookie) };
+}
+
 /** RPA 平台（Playwright 网页自动化）：session_cookie 直接驱动浏览器登录态 */
 const RPA_PLATFORMS = new Set(["douyin", "xiaohongshu", "channels", "zhihu"]);
 
@@ -84,7 +95,7 @@ async function loginForAccount(account: DbAccount): Promise<boolean> {
 
 // GET / — list all accounts
 accountsRoutes.get("/", (c) => {
-  const accounts = accountsRepo.listAccounts();
+  const accounts = accountsRepo.listAccounts().map(presentAccount);
   return c.json({ accounts });
 });
 
@@ -122,7 +133,7 @@ accountsRoutes.get("/:id", (c) => {
   const id = c.req.param("id");
   const account = accountsRepo.getAccount(id);
   if (!account) return c.json({ error: "Account not found" }, 404);
-  return c.json(account);
+  return c.json(presentAccount(account));
 });
 
 const VALID_PLATFORMS = new Set(["douyin", "xiaohongshu", "channels", "kuaishou", "bilibili", "wechat_mp", "zhihu"]);
@@ -160,18 +171,22 @@ accountsRoutes.post("/", async (c) => {
 accountsRoutes.put("/:id", async (c) => {
   const id = c.req.param("id");
   const body = await c.req.json<Partial<DbAccount>>();
+  // 复审 H3 配套:掩码回显值(含 ***)保留原值不覆盖——GET 已掩码,前端不改就回传掩码
+  const existing = accountsRepo.getAccount(id);
+  const keepIfMasked = (incoming: string | undefined, old: string | undefined) =>
+    incoming !== undefined && incoming.includes(CRED_MASK) ? old : incoming;
   const updates: Partial<DbAccount> = {};
   if (body.name !== undefined) updates.name = body.name;
   if (body.platform !== undefined) updates.platform = body.platform;
   if (body.tone_profile !== undefined) updates.tone_profile = body.tone_profile;
   if (body.status !== undefined) updates.status = body.status;
   if (body.username !== undefined) updates.username = body.username;
-  if (body.password !== undefined) updates.password = body.password;
-  if (body.cookie !== undefined) updates.cookie = body.cookie;
+  if (body.password !== undefined) updates.password = keepIfMasked(body.password, existing?.password);
+  if (body.cookie !== undefined) updates.cookie = keepIfMasked(body.cookie, existing?.cookie);
   const account = accountsRepo.updateAccount(id, updates);
   if (!account) return c.json({ error: "Account not found" }, 404);
   const stored = storeAccountCredentials(account.id, account.platform, account.username, account.cookie);
-  return c.json({ ...account, bridgedCredentials: stored });
+  return c.json({ ...presentAccount(account), bridgedCredentials: stored });
 });
 
 // POST /:id/default — 设为该平台默认账号

@@ -49,6 +49,10 @@ export interface ConformResult {
   output: string;
 }
 
+/** B3 配套(2026-09-08 复审 高#3):conform 是合成首选路径却不能没有超时——
+ *  挂死的 conform 会让 long_tasks 永驻 running,反过来卡死回合豁免/auto_continue */
+const CONFORM_FFMPEG_TIMEOUT_MS = 30 * 60_000;
+
 function runFfmpeg(ffmpeg: string, args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
     const proc = spawn(ffmpeg, args, { stdio: ["ignore", "ignore", "pipe"] });
@@ -57,8 +61,18 @@ function runFfmpeg(ffmpeg: string, args: string[]): Promise<void> {
       stderr += c.toString();
       if (stderr.length > 8000) stderr = stderr.slice(-8000);
     });
-    proc.on("error", reject);
+    const killTimer = setTimeout(() => {
+      if (process.platform === "win32") {
+        spawn("taskkill", ["/pid", String(proc.pid), "/T", "/F"], { windowsHide: true }).unref();
+      } else {
+        try { proc.kill("SIGKILL"); } catch { /* already dead */ }
+      }
+      reject(new Error(`conform ffmpeg 超时(${CONFORM_FFMPEG_TIMEOUT_MS / 60_000}min)强杀`));
+    }, CONFORM_FFMPEG_TIMEOUT_MS);
+    killTimer.unref?.();
+    proc.on("error", (err) => { clearTimeout(killTimer); reject(err); });
     proc.on("exit", (code) => {
+      clearTimeout(killTimer);
       if (code === 0) resolve();
       else reject(new Error(`conform ffmpeg 失败(exit ${code}): ${stderr.slice(-500)}`));
     });

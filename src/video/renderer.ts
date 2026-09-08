@@ -168,6 +168,11 @@ export async function renderTimeline(timeline: Timeline, options: RenderOptions)
       // 验收修复(2026-09-07):快路径任何失败(光栅化/overlay/编码器)都回退
       // libass 慢速 subtitles 滤镜整片重烧,绝不让"加速优化"变成渲染失败。
       console.warn("[renderer] 字幕 PNG 快路径失败,回退 libass 慢速烧录:", err);
+      // 复审 中#6:若快路径失败根因是硬件编码(overlay 段才触发的驱动问题),
+      // 慢速回退用同一 encArgs 会再撞一次——硬件参数先切 CPU 兜底
+      if (encArgs.includes("h264_qsv") || encArgs.includes("h264_nvenc")) {
+        encArgs = [...CPU_VIDEO_ARGS];
+      }
       const slowArgs = buildFilterComplexArgs(tl, inputs, renderDuration, targetPath, encArgs, { skipSubtitles: false });
       await runFfmpegArgs(slowArgs);
     } finally {

@@ -48,7 +48,7 @@ function stripTags(html: string): string {
 }
 
 /** SSRF 防护(2026-09-16 S2;X19 加固 2026-09-07;C1 补齐 2026-09-08):拦截回环/内网/元数据地址。 */
-const SSRF_BLOCKED_HOSTS = ["localhost", "127.0.0.1", "0.0.0.0", "::1", "169.254.169.254"];
+const SSRF_BLOCKED_HOSTS = ["localhost", "127.0.0.1", "0.0.0.0", "::1", "::", "169.254.169.254"];
 /** 内网网段正则:10.x / 192.168.x / 172.16~31.x */
 const SSRF_PRIVATE_RE = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/;
 /** IPv6 链路本地(fe80::/10)与 ULA(fc00::/7)前缀(X19:此前只拦 IPv4 网段) */
@@ -57,11 +57,23 @@ const SSRF_PRIVATE6_RE = /^(fe80|fe90|fea0|feb0|fc|fd)/i;
 const SSRF_CGNAT_RE = /^100\.(6[4-9]|[78]\d|9\d|1[01]\d|12[0-7])\./;
 
 /** 单个 IP/主机字面量校验(C1:127.0.0.0/8 全段、::ffff: 映射归一、169.254/16 全段、100.64/10) */
-function assertIpSafe(rawHost: string): void {
+export function assertIpSafe(rawHost: string): void {
   let normalized = rawHost.replace(/^\[|\]$/g, "").toLowerCase(); // 去除 IPv6 方括号
-  // C1:::ffff: IPv4-mapped 归一化后按 IPv4 判(此前 [::ffff:127.0.0.1] 穿透全部 IPv4 规则)
-  const v4mapped = normalized.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/);
-  if (v4mapped) normalized = v4mapped[1];
+  // C1:::ffff: IPv4-mapped 归一化后按 IPv4 判。两种序列化都要处理——
+  // ①点分十进制(dns.lookup 返回形): ::ffff:127.0.0.1
+  // ②hex 两段(WHATWG URL hostname 序列化形,2026-09-08 复审实测):
+  //   new URL("http://[::ffff:127.0.0.1]/").hostname === "[::ffff:7f00:1]"
+  //   只认①则 hex 形穿透全部 IPv4 规则(SSRF 主修复失效)
+  const v4mappedDotted = normalized.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/);
+  if (v4mappedDotted) normalized = v4mappedDotted[1];
+  const v4mappedHex = normalized.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (v4mappedHex) {
+    const hi = parseInt(v4mappedHex[1], 16), lo = parseInt(v4mappedHex[2], 16);
+    normalized = `${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`;
+  }
+  if (normalized.startsWith("::ffff:") || normalized.startsWith("0:0:0:0:0:ffff:")) {
+    throw new Error("SSRF 拦截:无法归一的 IPv4-mapped 地址");
+  }
   if (SSRF_BLOCKED_HOSTS.includes(normalized)) throw new Error("SSRF 拦截:禁止访问回环/内网/元数据地址");
   if (/^127\./.test(normalized)) throw new Error("SSRF 拦截:禁止访问回环网段 127.0.0.0/8");
   if (/^169\.254\./.test(normalized)) throw new Error("SSRF 拦截:禁止访问链路本地网段 169.254.0.0/16");
@@ -72,7 +84,7 @@ function assertIpSafe(rawHost: string): void {
   if (/^\d+$/.test(normalized) || /^0x/i.test(normalized)) throw new Error("SSRF 拦截:禁止 IP 数字字面量");
 }
 
-async function assertSafeUrl(rawUrl: string): Promise<void> {
+export async function assertSafeUrl(rawUrl: string): Promise<void> {
   let host: string;
   try {
     host = new URL(rawUrl).hostname;

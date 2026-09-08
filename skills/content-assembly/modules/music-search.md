@@ -22,7 +22,7 @@
 
 ```bash
 # BGM 模式（无人声，纯器乐配乐）
-curl -s -X POST http://localhost:3271/api/generate/music \
+curl -s -X POST http://localhost:3271/api/generate/music -H "Authorization: Bearer $AUTOVIRAL_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "workId": "WORK_ID",
@@ -31,7 +31,7 @@ curl -s -X POST http://localhost:3271/api/generate/music \
   }'
 
 # 带歌词歌曲模式（有主唱+伴奏）
-curl -s -X POST http://localhost:3271/api/generate/music \
+curl -s -X POST http://localhost:3271/api/generate/music -H "Authorization: Bearer $AUTOVIRAL_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "workId": "WORK_ID",

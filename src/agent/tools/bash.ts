@@ -53,7 +53,7 @@ export function bashExecutor(blocklist?: string[]): ToolExecutor {
   return {
     def: {
       name: "Bash",
-      description: "执行 shell 命令（Git Bash 语义，支持管道/重定向/ffmpeg/curl/py -3）。默认 120 秒超时。调用内部 API 写请求必须带 -H \"Authorization: Bearer $AUTOVIRAL_TOKEN\"（token 已注入你的环境变量）。",
+      description: "执行 shell 命令（Git Bash 语义，支持管道/重定向/ffmpeg/curl/py -3）。默认 120 秒超时。调用内部 API 写请求必须带 -H \"Authorization: Bearer $AUTOVIRAL_TOKEN\"（token 已注入你的环境变量;cmd.exe 回退环境下 $VAR 语法无效,需改用 %AUTOVIRAL_TOKEN%）。",
       input_schema: {
         type: "object",
         properties: {

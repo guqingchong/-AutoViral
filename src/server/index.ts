@@ -238,8 +238,19 @@ export async function startServer(port: number): Promise<{ server: Server }> {
         const text = task.status === "done"
           ? `后台任务 ${task.kind}(${task.id})已完成`
           : `后台任务 ${task.kind}(${task.id})失败: ${task.error ?? "未知错误"}`;
-        const session = task.work_id ? wsBridge.getSession(task.work_id) : undefined;
-        session?.loop?.injectNotification(`【后台任务完成】${text}`);
+        const workId = task.work_id;
+        if (!workId) return;
+        const session = wsBridge.getSession(workId);
+        if (!session) return;
+        // B3 配套(2026-09-08 复审 高#2):回合已结束(B3 long_task_wait 收尾/auto_continue
+        // 跳过)时,注入通知要等下个回合才消费——而下个回合没人发起,实际靠 watchdog
+        // 10min 停滞通道复活,且复活发生在任务运行中。完成时直接驱动新回合闭环。
+        if (session.loopState === "running") {
+          session.loop?.injectNotification(`【后台任务完成】${text}`);
+        } else if (session.cliSessionId || session.messageHistory.length > 0) {
+          wsBridge.sendMessage(workId, `【后台任务完成】${text}。请检查产物并继续当前阶段工作。`)
+            .catch((err) => log("error", "api", "longtask_resume_failed", workId, { error: (err as Error).message }));
+        }
       });
     }
   }

@@ -177,6 +177,11 @@ async function scanOnce(deps: WatchdogDeps): Promise<void> {
   try {
     for (const stalled of findStalledWorks()) {
       if (deps.isSessionAlive(stalled.id)) continue; // 会话活着只是慢，不动
+      // B3 配套(2026-09-08 复审):后台长任务(ffmpeg 30min/ASR 60min/conform)运行中
+      // 不算停滞——works/pipeline 时间戳不随长任务心跳更新,不豁免会在任务跑到
+      // ~10min 时被误判停滞、重复拉起会话(可能重复提交 conform 同写 final.mp4)
+      const { hasRunningLongTask } = await import("./long-tasks.js");
+      if (hasRunningLongTask(stalled.id)) continue;
       // 不在队列的停滞作品（历史遗留）→ 入队；在队列的由 Runner 健康检查负责恢复
       if (!queueRepo.getItem(stalled.id)) queueRepo.enqueue(stalled.id);
       kickRunner();

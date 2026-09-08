@@ -641,6 +641,8 @@ async function ensureImageTextChild(
   opts?: { backfillApproved?: boolean },
 ): Promise<{ childId: string; cardFiles: string[]; cardsDir?: string } | null> {
   const existing = getChildWorkByParent(parent.id);
+  // 复审 中#4:空卡回填只补卡片——用户可能已在待审区编辑过子作品文章,文章不动
+  let backfilling = false;
   if (existing && existing.status !== "reviewing") {
     // B8②(2026-09-08):研究成果子作品允许"空卡回填"一次——assets 完成前过审的
     // 空卡条目(output/cards 无 PNG),assets 完成后照常渲染填入;已有卡的过审作品不动
@@ -651,6 +653,7 @@ async function ensureImageTextChild(
       });
       return { childId: existing.id, cardFiles: [] };
     }
+    backfilling = true;
     log("info", "server", "dual_output_child_backfill", parent.id, { childId: existing.id, status: existing.status });
   }
 
@@ -680,17 +683,20 @@ async function ensureImageTextChild(
   }
 
   // 文章复制到子作品名下(独立编辑,互不影响父作品文章)
-  const childArticle = listArticlesByWork(childId)[0];
-  if (childArticle) {
-    updateArticle(childArticle.id, { title: article.title, content: article.content });
-  } else {
-    createArticle({
-      work_id: childId,
-      topic_id: article.topic_id ?? parent.topic_id,
-      title: article.title,
-      content: article.content,
-      status: article.status as import("../db/types.js").DbArticle["status"],
-    });
+  // 复审 中#4:空卡回填模式跳过——只补卡片,不覆盖用户可能已编辑的子作品文章
+  if (!backfilling) {
+    const childArticle = listArticlesByWork(childId)[0];
+    if (childArticle) {
+      updateArticle(childArticle.id, { title: article.title, content: article.content });
+    } else {
+      createArticle({
+        work_id: childId,
+        topic_id: article.topic_id ?? parent.topic_id,
+        title: article.title,
+        content: article.content,
+        status: article.status as import("../db/types.js").DbArticle["status"],
+      });
+    }
   }
 
   const childWorkDir = join(dataDir, "works", childId);
@@ -820,12 +826,11 @@ export async function ensureResearchArticleChild(parentWorkId: string): Promise<
     return null;
   }
 
-  const existing = getChildWorkByParent(parentWorkId);
-  if (existing && existing.status !== "reviewing") return { childId: existing.id };
-
   // B8①(2026-09-08):v2 文章此前只落文件(research/article.md)不落 articles 表——
   // deriveDualOutputs 的内容源是 articles 表,v2+dualOutput 作品到 reviewing 时
   // "无文章"静默失效。派生时同步把研究文章写入主作品 articles 表(幂等 upsert)。
+  // 复审 I-3:必须在 early-return 之前——子作品过审后若 regress 修订文章重新过研究,
+  // 主作品 articles 仍要跟进最新版,否则 deriveDualOutputs 读到旧文
   const parentArticle = listArticlesByWork(parentWorkId)[0];
   if (parentArticle) {
     updateArticle(parentArticle.id, { title: article.title, content: article.content });
@@ -838,6 +843,9 @@ export async function ensureResearchArticleChild(parentWorkId: string): Promise<
       status: article.status as import("../db/types.js").DbArticle["status"],
     });
   }
+
+  const existing = getChildWorkByParent(parentWorkId);
+  if (existing && existing.status !== "reviewing") return { childId: existing.id };
 
   const now = new Date().toISOString();
   const childId = existing?.id ?? generateChildId(); // 与双产物子作品同 ID 格式

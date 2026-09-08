@@ -242,7 +242,16 @@ function flattenAnalytics(cfg: import("../config.js").Config) {
   return {
     analyticsEnabled: cfg.analytics.enabled,
     analyticsInterval: cfg.analytics.collectInterval,
-    analyticsSourcesJson: JSON.stringify(cfg.analytics.sources),
+    // C2 配套(2026-09-08 复审 H2):sources 里的 credentials(cookie/口令)不得明文下发;
+    // 掩码后前端回显,PUT 侧 parseAnalytics 对含 *** 的值按 platform+key 保留原值
+    analyticsSourcesJson: JSON.stringify(
+      cfg.analytics.sources.map((s) => ({
+        ...s,
+        credentials: s.credentials
+          ? Object.fromEntries(Object.entries(s.credentials).map(([k, v]) => [k, maskApiKey(v)]))
+          : s.credentials,
+      })),
+    ),
   };
 }
 
@@ -252,7 +261,24 @@ function parseAnalytics(body: Record<string, unknown>, prev: import("../config.j
   const sources = (() => {
     try {
       const raw = body.analyticsSourcesJson;
-      return raw ? (JSON.parse(String(raw)) as AnalyticsSource[]) : prev.sources;
+      if (!raw) return prev.sources;
+      const parsed = JSON.parse(String(raw)) as AnalyticsSource[];
+      // C2 配套:掩码回显的 credentials 值(含 ***)按 platform+key 保留原值
+      return parsed.map((s) => {
+        if (!s.credentials) return s;
+        const prevSrc = prev.sources.find((p) => p.platform === s.platform);
+        return {
+          ...s,
+          credentials: Object.fromEntries(
+            Object.entries(s.credentials).map(([k, v]) => [
+              k,
+              typeof v === "string" && v.includes(LLM_KEY_MASK)
+                ? (prevSrc?.credentials?.[k] ?? "")
+                : v,
+            ]),
+          ),
+        };
+      });
     } catch {
       return prev.sources;
     }
@@ -437,15 +463,25 @@ apiRoutes.post("/api/llm/ping", async (c) => {
 });
 
 /** 校验前端提交的隧道候选数组:逐条补默认值,丢弃缺 host/port 的无效行 */
-function sanitizeTunnels<T extends { host: string; port: number; user?: string }>(raw: unknown, defaults: T, prev?: T[]): T[] {
+function sanitizeTunnels<T extends { host: string; port: number; user?: string; localPort?: number }>(raw: unknown, defaults: T, prev?: T[]): T[] {
   if (!Array.isArray(raw)) return [];
   return raw
     .filter((t): t is Record<string, unknown> => !!t && typeof t === "object")
     .map((t, i) => {
       const merged = { ...defaults, ...t } as T;
-      // C2:GET 下发掩码版 host/user,回显未改(含 ***)时按位保留原值
-      if (typeof merged.host === "string" && merged.host.includes(LLM_KEY_MASK) && prev?.[i]) merged.host = prev[i].host;
-      if (typeof merged.user === "string" && merged.user.includes(LLM_KEY_MASK) && prev?.[i]?.user) merged.user = prev[i].user;
+      // C2 配套(2026-09-08 复审 B2/H1):GET 下发掩码版 host/user,回显未改(含 ***)时
+      // 保留原值。匹配键优先 localPort(隧道稳定标识),删除/重排行后按索引会错配;
+      // prev 由调用方合成(含单数 tunnel 回落),绝不会缺省——掩码无匹配时拒绝写入,
+      // 防止掩码串被当真值写盘(旧实现一旦写入即不可自愈)
+      const masked = (v: unknown) => typeof v === "string" && v.includes(LLM_KEY_MASK);
+      if (masked(merged.host) || masked(merged.user)) {
+        const cand = prev?.find((p) => p.localPort !== undefined && p.localPort === merged.localPort) ?? prev?.[i];
+        if (!cand) {
+          throw new Error("隧道 host/user 为掩码值但找不到原配置可保留——请重新填写完整 host/user");
+        }
+        if (masked(merged.host)) merged.host = cand.host;
+        if (masked(merged.user) && cand.user) merged.user = cand.user;
+      }
       return merged;
     })
     .filter((t) => typeof t.host === "string" && t.host.length > 0 && Number.isFinite(Number(t.port)) && Number(t.port) > 0)
@@ -535,7 +571,17 @@ apiRoutes.put("/api/config", async (c) => {  const body = await c.req.json<Recor
   // 多实例候选:前端传整组数组(host/port/user/localPort/remotePort),覆盖式更新
   if (body.heygemTunnels !== undefined) {
     if (!config.heygem) config.heygem = { apiToken: "", baseUrl: "", gpuHourlyRateYuan: 1.78, idleReminderMinutes: 15 };
-    const list = sanitizeTunnels<HeygemTunnelConfig>(body.heygemTunnels, HEYGEM_TUNNEL_DEFAULTS, config.heygem.tunnels);
+    // 复审 B2:prev 缺省时回落到 GET 同款的合成候选(单数 tunnel),否则旧配置
+    // 一保存就把掩码值当真值写盘且不可自愈
+    const prevTunnels = config.heygem.tunnels?.length
+      ? config.heygem.tunnels
+      : [{ ...HEYGEM_TUNNEL_DEFAULTS, ...(config.heygem.tunnel ?? {}) }];
+    let list: HeygemTunnelConfig[];
+    try {
+      list = sanitizeTunnels<HeygemTunnelConfig>(body.heygemTunnels, HEYGEM_TUNNEL_DEFAULTS, prevTunnels);
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 400);
+    }
     if (list.length > 0) {
       config.heygem.tunnels = list;
       delete config.heygem.tunnel;  // tunnels 优先,清掉单数避免歧义
@@ -550,7 +596,15 @@ apiRoutes.put("/api/config", async (c) => {  const body = await c.req.json<Recor
     if (body.h3GpuHourlyRateYuan !== undefined) config.h3.gpuHourlyRateYuan = Number(body.h3GpuHourlyRateYuan);
     if (body.h3IdleReminderMinutes !== undefined) config.h3.idleReminderMinutes = Number(body.h3IdleReminderMinutes);
     if (body.h3Tunnels !== undefined) {
-      const list = sanitizeTunnels<H3TunnelConfig>(body.h3Tunnels, H3_TUNNEL_DEFAULTS, config.h3.tunnels);
+      const prevTunnels = config.h3.tunnels?.length
+        ? config.h3.tunnels
+        : [{ ...H3_TUNNEL_DEFAULTS, ...(config.h3.tunnel ?? {}) }];
+      let list: H3TunnelConfig[];
+      try {
+        list = sanitizeTunnels<H3TunnelConfig>(body.h3Tunnels, H3_TUNNEL_DEFAULTS, prevTunnels);
+      } catch (err) {
+        return c.json({ error: (err as Error).message }, 400);
+      }
       if (list.length > 0) {
         config.h3.tunnels = list;
         delete config.h3.tunnel;
@@ -2025,6 +2079,14 @@ export async function startWorkSession(id: string, extraInstruction?: string): P
 
   const work = await getWork(id);
   if (!work) throw new Error("Work not found");
+
+  // P6 配套(2026-09-08 复审 C-1):出生 draft 的作品在会话启动(runner 首次启动/
+  // 恢复/手动启动全部汇聚于此)时显式转 researching——reconcile 已不对 draft 提拔,
+  // 不补这一步则 UI 恒显示"草稿"且看门狗(不含 draft)失明
+  if (work.status === "draft") {
+    await storeUpdateWork(id, { status: deriveStatusFromPipeline(work.pipeline, "researching") });
+    work.status = deriveStatusFromPipeline(work.pipeline, "researching");
+  }
 
   // Look up account tone profile for style injection
   const account = work.accountId ? getAccount(work.accountId) : undefined;
@@ -3799,7 +3861,7 @@ apiRoutes.post("/api/works/:id/pipeline/advance", async (c) => {
       gateIssues.push(...assertPlanGateExtensions(wDir));
       gateIssues.push(...assertPlanStructure(wDir));
       gateIssues.push(...assertTemplateBindingConsistency(wDir, work.templateId));
-      gateIssues.push(...assertContractArtifacts(wDir, "plan-assets"));
+      gateIssues.push(...assertContractArtifacts(wDir, "plan-assets", { workType: work.type }));
       if (gateIssues.length) {
         log("info", "api", "plan_assets_gate_blocked", id, { count: gateIssues.length });
         return c.json({
@@ -3811,7 +3873,7 @@ apiRoutes.post("/api/works/:id/pipeline/advance", async (c) => {
     // 图文 v2 的 plan-assets:契约文件门禁(结构断言是视频向的,图文有独立 criteria)
     if (completedStep === "plan-assets" && work.type === "image-text") {
       const { assertContractArtifacts } = await import("../services/quality-gate.js");
-      const gateIssues = assertContractArtifacts(join(dataDir, "works", id), "plan-assets");
+      const gateIssues = assertContractArtifacts(join(dataDir, "works", id), "plan-assets", { workType: work.type });
       if (gateIssues.length) {
         return c.json({ error: `内容规划与配图探查契约文件未齐备(${gateIssues.length} 项)`, issues: gateIssues.map((i) => i.detail) }, 400);
       }

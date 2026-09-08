@@ -798,7 +798,7 @@ export async function ensureShotMap(workDir: string): Promise<boolean> {
  * (research)、registry.json(material-search)此前只有 prompt 要求,无机器检查,
  * 契约链"据此校验"未闭环。缺文件即 fail,error 里写清期望路径。
  */
-export function assertContractArtifacts(workDir: string, step: "research" | "material-search" | "content-research" | "plan-assets"): DeliverableIssue[] {
+export function assertContractArtifacts(workDir: string, step: "research" | "material-search" | "content-research" | "plan-assets", opts: { workType?: string } = {}): DeliverableIssue[] {
   const issues: DeliverableIssue[] = [];
   const find = (name: string, sub: string) =>
     [join(workDir, name), join(workDir, sub, name), join(workDir, "assets", name)].find(existsSync);
@@ -825,7 +825,10 @@ export function assertContractArtifacts(workDir: string, step: "research" | "mat
     }
   }
   if (step === "plan-assets") {
-    if (!find("script.json", "assets")) {
+    // B7 配套(2026-09-08 复审):图文版指令只要求 plan/plan.md 卡片规划 +
+    // registry/material-candidates,无 script.json(逐句口播溯源对图文无下游消费者)——
+    // 门禁必须同版豁免,否则图文 v2 按指令执行反被 400
+    if (opts.workType !== "image-text" && !find("script.json", "assets")) {
       issues.push({ key: "contract_script_missing", detail: "分镜与素材探查阶段未产出 assets/script.json(逐句带 source_section 溯源 article 的脚本)——落盘后再推进" });
     }
     if (!find("registry.json", "plan-assets")) {

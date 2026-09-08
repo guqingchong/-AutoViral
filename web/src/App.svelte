@@ -295,10 +295,16 @@
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       // 回读校验：确认 key 真正落盘（与 SettingsPanel 一致的防呆）
       const verify = await (await fetch("/api/config")).json();
-      if (pexelsApiKey.trim() !== (verify.pexelsApiKey ?? "")) {
+      // C2 配套(2026-09-08 复审 B3):远端是掩码值——本地为掩码回显(未改)跳过;
+      // 本地是新明文时,远端应回掩码且前缀一致
+      const maskAwareOk = (local: string, remote: string) => {
+        if (!local.trim() || local.includes("***")) return true;
+        return remote.includes("***") && remote.startsWith(local.slice(0, 6));
+      };
+      if (!maskAwareOk(pexelsApiKey, verify.pexelsApiKey ?? "")) {
         throw new Error("Pexels Key 未能写入，请重试");
       }
-      if (minimaxKey.trim() !== (verify.minimaxKey ?? "")) {
+      if (!maskAwareOk(minimaxKey, verify.minimaxKey ?? "")) {
         throw new Error("MiniMax Key 未能写入，请重试");
       }
       // llm key 回读校验:本地是新明文(非掩码回显)时,远端应回掩码且前缀一致

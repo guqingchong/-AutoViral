@@ -63,7 +63,7 @@ export const platformSearchExecutor: ToolExecutor = {
     name: "PlatformSearch",
     description:
       "平台站内搜索。支持 bilibili(B站视频,免登录)、youtube、zhihu(知乎问答/文章,官方 API)、" +
-      "douyin/xiaohongshu(复用发布登录态,有防风控限速)。" +
+      "douyin/xiaohongshu(独立搜索画像 douyin:search/xiaohongshu:search——未登录会报明确错误,报错时不要重试,换 bilibili/zhihu)。" +
       "返回视频/问答/笔记链接清单,可用 WebFetch 抓页面看详情。查中文场景案例/竞品视频时优先 bilibili;查专业观点用 zhihu。",
     input_schema: {
       type: "object",

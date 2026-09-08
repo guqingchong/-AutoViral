@@ -166,8 +166,8 @@ export class XiaohongshuScraper implements PlatformAdapter {
       // C7:空结果显式报错(未登录/被风控可分辨),不静默返回空数组
       if (!items.length) {
         throw new Error(
-          `小红书搜索无结果(画像 ${this.contextKey})——可能未登录或被风控;` +
-          `请检查 browser-profiles/${this.contextKey.replace(":", "/")} 登录态后重试`,
+          `小红书搜索无结果(画像 ${this.contextKey})——可能未登录或被风控。` +
+          `重试无效,需人工检查 browser-profiles/${this.contextKey.replace(":", "/")} 登录态;agent 请改走 bilibili/zhihu 通道`,
         );
       }
       return items.map((it) => ({

@@ -487,7 +487,8 @@ export class OpenAICompatProvider implements LlmProvider {
         // 截断是"上限不够"而非"格式异常",重试同参数无意义(noRetry),报错直指根因。
         const finishReason = data.choices?.[0]?.finish_reason;
         if (finishReason === "length") {
-          throw noRetry(new Error(`模型输出达 max_tokens(${opts.maxTokens ?? 32768})被截断,JSON 不完整——请缩小产物体积或调高上限`));
+          // 复审 L1:收敛重试后真实上限是 reqBody.max_tokens(cap),不是 opts.maxTokens
+          throw noRetry(new Error(`模型输出达 max_tokens(${reqBody.max_tokens})被截断,JSON 不完整——请缩小产物体积或调高上限`));
         }
         const extracted = extractJsonFromText(text);
         if (extracted === undefined || extracted === null) {

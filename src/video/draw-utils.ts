@@ -74,9 +74,9 @@ export function getFontPath(weight: FontWeight = "bold"): string {
   return join(FONT_TARGET_DIR, FONT_FILES[weight]);
 }
 
-/** 文件路径 → FFmpeg filter 语法安全形式（正斜杠 + 盘符冒号转义） */
+/** 文件路径 → FFmpeg filter 语法安全形式（正斜杠 + 盘符冒号转义 + 单引号转义,供 '...' 包裹使用） */
 export function escapeFilterPath(p: string): string {
-  return p.replace(/\\/g, "/").replace(/:/g, "\\:");
+  return p.replace(/\\/g, "/").replace(/:/g, "\\:").replace(/'/g, "\\'");
 }
 
 // ── 颜色规范化 ───────────────────────────────────────────────────────────────

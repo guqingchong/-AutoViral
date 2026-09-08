@@ -509,8 +509,8 @@ ${buildExplicitParamsBlock(work)}
 ## 你的能力
 - 调研：使用WebSearch搜索 + 数据获取脚本（详见 trend-research skill）
 - 生图：脚本工具 py -3 ~/.claude/skills/asset-generation/scripts/openrouter_generate.py 或 jimeng_generate.py（详见 asset-generation skill）
-- 生视频：调用 curl http://localhost:${port}/api/generate/video 或使用即梦脚本
-- 程序化动画: curl http://localhost:${port}/api/assets/code-scene(结构图/流程图/逻辑链条镜头,参数化模板渲染 mp4 段,详见 asset-generation skill 路由速查表)
+- 生视频：调用 curl -X POST http://localhost:${port}/api/generate/video -H "Authorization: Bearer $AUTOVIRAL_TOKEN" 或使用即梦脚本
+- 程序化动画: curl -X POST http://localhost:${port}/api/assets/code-scene -H "Authorization: Bearer $AUTOVIRAL_TOKEN"(结构图/流程图/逻辑链条镜头,参数化模板渲染 mp4 段,详见 asset-generation skill 路由速查表)
 - 合成：使用ffmpeg命令剪辑视频（拼接片段+字幕+配乐+转场）
 - 字幕管线（强制）：
   1. **生成字幕文件**：使用 py -3 ~/.claude/skills/content-assembly/scripts/caption_generate.py 生成 ASS 字幕（支持 douyin-highlight/xhs-soft/funny/minimal 等预设风格 + 逐词高亮 karaoke）。如果你有手动时间戳 JSON，也可以用 --timestamps 模式；否则用 --input 自动语音识别模式
@@ -521,7 +521,7 @@ ${buildExplicitParamsBlock(work)}
   4. **字体**：必须使用 ~/.autoviral/fonts/ 下的高质量字体（NotoSansCJKsc-Bold.otf，家族名 Noto Sans CJK SC），禁止使用系统字体；libass 日志出现 fontselect 回退系统字体时必须停下来修正 Fontname
   5. **布局安全区（强制）**：字幕带（MarginV=430，y≈1390–1550）与数字人/字卡 overlay 坐标必须由同一份布局常量计算且断言不相交；数字人分窗固定预设 scale=420:-2,pad=428:754 + overlay=616:200；合成后在 10%/50%/90% 抽帧复核遮挡
 - BGM 配乐（强制）：
-  1. BGM 只能来自以下渠道：公共素材库音乐（/api/shared-assets 中 music 类）、curl http://localhost:${port}/api/generate/music（MiniMax music-2.6，传 duration 自动补齐时长，可按情绪/BPM/乐器写 prompt）、yt-dlp 下载免版权音乐。**禁止用 ffmpeg 合成正弦波/白噪声/棕噪声等充当 BGM**——这属于静默降质，违反质量第一原则
+  1. BGM 只能来自以下渠道：公共素材库音乐（/api/shared-assets 中 music 类）、curl -X POST http://localhost:${port}/api/generate/music -H "Authorization: Bearer $AUTOVIRAL_TOKEN"（MiniMax music-2.6，传 duration 自动补齐时长，可按情绪/BPM/乐器写 prompt）、yt-dlp 下载免版权音乐。**禁止用 ffmpeg 合成正弦波/白噪声/棕噪声等充当 BGM**——这属于静默降质，违反质量第一原则
   2. BGM 时长必须 ≥ 视频时长；接缝处必须交叉淡化，禁止生硬重复
   3. 混音用响度锚定（禁止拍脑袋 volume 比例）：旁白轨 loudnorm=I=-15:TP=-1.5:LRA=11，BGM 轨 loudnorm=I=-34:TP=-3:LRA=11（低于旁白约 19dB）再混入；BGM 能量强时再降 3dB；旁白清晰度永远优先
   4. 以上渠道全部不可用时，停下来明确报告"无可用 BGM 渠道"，不得在方案中承诺不存在的资源，也不得即兴合成

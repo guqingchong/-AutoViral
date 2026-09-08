@@ -134,10 +134,10 @@ export class DouyinScraper implements PlatformAdapter {
   }
 
   /**
-   * 抖音站内搜索（2026-09 F6）。复用同一 persistent context（browser-profiles
-   * 同一画像，不重导 cookie），打开搜索结果页抓视频列表。
+   * 抖音站内搜索（2026-09 F6）。独立搜索画像 persistent context（browser-profiles
+   * douyin/search,与发布画像物理分离——C7），打开搜索结果页抓视频列表。
    * 【待实测校准】DOM 选择器为初版，页面结构变化可能失效。
-   * 防风控：每条结果间延迟 ≥2s + 抖动。
+   * 防风控：请求前一次性 2s 间隔(C7 前为逐条空转延迟,已删)。
    */
   async search(query: string, limit = 5): Promise<{ title: string; url: string; snippet: string }[]> {
     const ctx = await getContext(this.contextKey);
@@ -164,8 +164,8 @@ export class DouyinScraper implements PlatformAdapter {
       // C7:空结果必须显式报错(未登录/被风控可分辨),不再静默返回空数组当"无结果"
       if (!items.length) {
         throw new Error(
-          `抖音搜索无结果(画像 ${this.contextKey})——可能未登录或被风控;` +
-          `请检查 browser-profiles/${this.contextKey.replace(":", "/")} 登录态后重试`,
+          `抖音搜索无结果(画像 ${this.contextKey})——可能未登录或被风控。` +
+          `重试无效,需人工检查 browser-profiles/${this.contextKey.replace(":", "/")} 登录态;agent 请改走 bilibili/zhihu 通道`,
         );
       }
       return items.map((it) => ({

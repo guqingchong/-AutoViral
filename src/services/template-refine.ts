@@ -253,12 +253,18 @@ async function refineCodeTemplate(
     throw new Error("该指令属于整体重做——再加工适合局部调整。请到模板库用「生成」重新做一版,或把指令拆成局部调整(先改底板、再改字体)");
   }
   const maxRounds = instructionClass === "structural" ? 4 : 2;
-  // C5(2026-09-08):structural 通道接预算熔断——日预算已超时不启动强模型多轮打磨
+  // C5(2026-09-08):structural 通道接预算熔断——预算已超时不启动强模型多轮打磨
   // (kimi-for-coding × 4 轮 × 65k maxTokens 是全线最贵单点,熔断期照跑等于烧穿)
+  // 复审 M3:getBudgetStatus().status 只看月预算——日预算(dailyLimitYuan)要单独判
   if (instructionClass === "structural") {
     const { getBudgetStatus } = await import("./budget-service.js");
-    if (getBudgetStatus().status === "exceeded") {
-      throw new Error("预算已熔断:structural 类再加工(强模型多轮打磨)暂停,请明日预算复位后再试或改走参数微调指令");
+    const { getDailyCostYuan } = await import("./llm-usage.js");
+    const { loadConfig } = await import("../config.js");
+    const monthlyExceeded = getBudgetStatus().status === "exceeded";
+    const dailyLimit = (await loadConfig()).budget?.dailyLimitYuan;
+    const dailyExceeded = !!dailyLimit && getDailyCostYuan() >= dailyLimit;
+    if (monthlyExceeded || dailyExceeded) {
+      throw new Error(`预算已熔断(${monthlyExceeded ? "月预算" : "日预算"}超限):structural 类再加工(强模型多轮打磨)暂停,请预算复位后再试或改走参数微调指令`);
     }
   }
   const llmOpts = {
