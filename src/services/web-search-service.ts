@@ -14,6 +14,7 @@
 import { spawn } from "node:child_process";
 import { appendFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { lookup } from "node:dns/promises";
 import { dataDir } from "../config.js";
 import { zhihuSearch } from "./zhihu-data-api.js";
 
@@ -46,26 +47,52 @@ function stripTags(html: string): string {
   return decodeEntities(html.replace(/<[^>]+>/g, ""));
 }
 
-/** SSRF 防护(2026-09-16 S2;X19 加固 2026-09-07):拦截回环/内网/元数据地址。 */
+/** SSRF 防护(2026-09-16 S2;X19 加固 2026-09-07;C1 补齐 2026-09-08):拦截回环/内网/元数据地址。 */
 const SSRF_BLOCKED_HOSTS = ["localhost", "127.0.0.1", "0.0.0.0", "::1", "169.254.169.254"];
 /** 内网网段正则:10.x / 192.168.x / 172.16~31.x */
 const SSRF_PRIVATE_RE = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/;
 /** IPv6 链路本地(fe80::/10)与 ULA(fc00::/7)前缀(X19:此前只拦 IPv4 网段) */
 const SSRF_PRIVATE6_RE = /^(fe80|fe90|fea0|feb0|fc|fd)/i;
+/** C1:CGNAT 共享地址段 100.64.0.0/10(运营商内网,同 SSRF 风险) */
+const SSRF_CGNAT_RE = /^100\.(6[4-9]|[78]\d|9\d|1[01]\d|12[0-7])\./;
 
-function assertSafeUrl(rawUrl: string): void {
+/** 单个 IP/主机字面量校验(C1:127.0.0.0/8 全段、::ffff: 映射归一、169.254/16 全段、100.64/10) */
+function assertIpSafe(rawHost: string): void {
+  let normalized = rawHost.replace(/^\[|\]$/g, "").toLowerCase(); // 去除 IPv6 方括号
+  // C1:::ffff: IPv4-mapped 归一化后按 IPv4 判(此前 [::ffff:127.0.0.1] 穿透全部 IPv4 规则)
+  const v4mapped = normalized.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/);
+  if (v4mapped) normalized = v4mapped[1];
+  if (SSRF_BLOCKED_HOSTS.includes(normalized)) throw new Error("SSRF 拦截:禁止访问回环/内网/元数据地址");
+  if (/^127\./.test(normalized)) throw new Error("SSRF 拦截:禁止访问回环网段 127.0.0.0/8");
+  if (/^169\.254\./.test(normalized)) throw new Error("SSRF 拦截:禁止访问链路本地网段 169.254.0.0/16");
+  if (SSRF_CGNAT_RE.test(normalized)) throw new Error("SSRF 拦截:禁止访问共享地址段 100.64.0.0/10");
+  if (SSRF_PRIVATE_RE.test(normalized)) throw new Error("SSRF 拦截:禁止访问内网网段");
+  if (SSRF_PRIVATE6_RE.test(normalized)) throw new Error("SSRF 拦截:禁止访问 IPv6 链路本地/ULA 网段");
+  // X19:域名以 IP 字面量的十进制/十六进制变种绕过(如 2130706433 = 127.0.0.1)
+  if (/^\d+$/.test(normalized) || /^0x/i.test(normalized)) throw new Error("SSRF 拦截:禁止 IP 数字字面量");
+}
+
+async function assertSafeUrl(rawUrl: string): Promise<void> {
   let host: string;
   try {
     host = new URL(rawUrl).hostname;
   } catch {
     throw new Error("非法 URL");
   }
-  const normalized = host.replace(/^\[|\]$/g, "").toLowerCase(); // 去除 IPv6 方括号
-  if (SSRF_BLOCKED_HOSTS.includes(normalized)) throw new Error("SSRF 拦截:禁止访问回环/内网/元数据地址");
-  if (SSRF_PRIVATE_RE.test(normalized)) throw new Error("SSRF 拦截:禁止访问内网网段");
-  if (SSRF_PRIVATE6_RE.test(normalized)) throw new Error("SSRF 拦截:禁止访问 IPv6 链路本地/ULA 网段");
-  // X19:域名以 IP 字面量的十进制/十六进制变种绕过(如 2130706433 = 127.0.0.1)
-  if (/^\d+$/.test(normalized) || /^0x/i.test(normalized)) throw new Error("SSRF 拦截:禁止 IP 数字字面量");
+  const normalized = host.replace(/^\[|\]$/g, "").toLowerCase();
+  assertIpSafe(normalized);
+  // C1:主机名(非 IP 字面量)先 DNS 解析再逐个校验地址——防"校验时公网 IP、连接时
+  // 内网 IP"的 DNS rebinding/TOCTOU 穿透
+  const isIpLiteral = /^\d{1,3}(\.\d{1,3}){3}$/.test(normalized) || normalized.includes(":");
+  if (!isIpLiteral) {
+    let addrs: Array<{ address: string }>;
+    try {
+      addrs = await lookup(normalized, { all: true });
+    } catch {
+      throw new Error(`DNS 解析失败: ${normalized}`);
+    }
+    for (const a of addrs) assertIpSafe(a.address);
+  }
 }
 
 async function fetchText(url: string, timeoutMs = FETCH_TIMEOUT_MS): Promise<string> {
@@ -77,7 +104,7 @@ async function fetchText(url: string, timeoutMs = FETCH_TIMEOUT_MS): Promise<str
     let current = url;
     let res: Response | undefined;
     for (let hop = 0; hop <= 5; hop++) {
-      assertSafeUrl(current);
+      await assertSafeUrl(current);
       res = await fetch(current, {
         headers: { "User-Agent": UA, "Accept-Language": "zh-CN,zh;q=0.9" },
         signal: ctrl.signal,
@@ -292,17 +319,18 @@ export async function platformSearch(platform: string, query: string, limit = 5)
     return results;
   }
   // F6 验收修复(2026-09-07):抖音/小红书走 Playwright 登录态 scraper 的 search()
-  // (此前两个 search 方法建好但 platformSearch 未路由,属死代码)。复用发布画像的
-  // persistent context,scraper 内部已带 ≥2s 防风控间隔。
+  // (此前两个 search 方法建好但 platformSearch 未路由,属死代码)。
+  // C7(2026-09-08):搜索走独立画像(douyin:search / xiaohongshu:search),
+  // 与发布画像(default)物理分离——搜索高频非常规,风控不连坐发布通道。
   if (key === "douyin") {
     const { DouyinScraper } = await import("./platform-adapters/douyin-scraper.js");
-    const results = await new DouyinScraper().search(query, n);
+    const results = await new DouyinScraper(undefined, "douyin:search").search(query, n);
     void appendSearchLog("platform", query, key, results);
     return results;
   }
   if (key === "xiaohongshu" || key === "xhs") {
     const { XiaohongshuScraper } = await import("./platform-adapters/xiaohongshu-scraper.js");
-    const results = await new XiaohongshuScraper().search(query, n);
+    const results = await new XiaohongshuScraper(undefined, "xiaohongshu:search").search(query, n);
     void appendSearchLog("platform", query, "xiaohongshu", results);
     return results;
   }

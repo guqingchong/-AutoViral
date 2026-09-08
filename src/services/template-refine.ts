@@ -253,6 +253,14 @@ async function refineCodeTemplate(
     throw new Error("该指令属于整体重做——再加工适合局部调整。请到模板库用「生成」重新做一版,或把指令拆成局部调整(先改底板、再改字体)");
   }
   const maxRounds = instructionClass === "structural" ? 4 : 2;
+  // C5(2026-09-08):structural 通道接预算熔断——日预算已超时不启动强模型多轮打磨
+  // (kimi-for-coding × 4 轮 × 65k maxTokens 是全线最贵单点,熔断期照跑等于烧穿)
+  if (instructionClass === "structural") {
+    const { getBudgetStatus } = await import("./budget-service.js");
+    if (getBudgetStatus().status === "exceeded") {
+      throw new Error("预算已熔断:structural 类再加工(强模型多轮打磨)暂停,请明日预算复位后再试或改走参数微调指令");
+    }
+  }
   const llmOpts = {
     stage: "plan" as const,
     timeoutMs: 480_000,
@@ -265,6 +273,10 @@ async function refineCodeTemplate(
   };
   /** 视觉回译:上一轮产出的画面客观描述(层2——代码模型看不见渲染结果,回译文本是它的眼睛) */
   let sceneDesc = "";
+  // C5:输出 token 累计软上限——4 轮 × 65k maxTokens 理论上限 262k,超限提前终止交人工,
+  // 不再把第 4 轮也烧完(实测整片 HTML 单轮输出 ~15-30k tokens,200k 约 7-13 轮产出的量)
+  const OUTPUT_TOKEN_SOFT_CAP = 200_000;
+  let estOutputTokens = 0;
   for (let round = 1; round <= maxRounds; round++) {
     const result = await runJsonPrompt<{ name?: string; tsx?: string; html?: string }>(
       [
@@ -311,6 +323,12 @@ async function refineCodeTemplate(
     );
     code = (isWeb ? result.html : result.tsx) ?? "";
     if (result.name) name = result.name;
+    // C5:按产出代码量估算输出 token(代码 ~2.5 字符/token),软上限触发即终止
+    estOutputTokens += Math.ceil(code.length / 2.5);
+    if (estOutputTokens > OUTPUT_TOKEN_SOFT_CAP) {
+      lastError = `输出 token 累计软上限(${OUTPUT_TOKEN_SOFT_CAP / 1000}k)触发,提前终止交人工——请拆小指令或改用「生成」重做`;
+      break;
+    }
     const staticErrors = isWeb ? staticCheckHtml(code) : staticCheckTsx(code);
     if (staticErrors.length) { lastError = `静态检查未过: ${staticErrors.join("; ")}`; continue; }
     const preview = await renderCodeScene({

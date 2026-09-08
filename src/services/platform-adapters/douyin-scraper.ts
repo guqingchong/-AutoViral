@@ -15,8 +15,10 @@ export class DouyinScraper implements PlatformAdapter {
   /** 浏览器 context 键:`douyin:<accountId ?? "default">`,画像目录按账号隔离 */
   readonly contextKey: string;
 
-  constructor(readonly accountId?: string) {
-    this.contextKey = `douyin:${accountId ?? "default"}`;
+  constructor(readonly accountId?: string, contextKeyOverride?: string) {
+    // C7(2026-09-08):搜索用独立画像(如 douyin:search),与发布画像物理分离——
+    // 搜索行为(高频/非常规路径)触发风控不连坐发布通道
+    this.contextKey = contextKeyOverride ?? `douyin:${accountId ?? "default"}`;
   }
 
   async collectAccountMetrics(): Promise<CollectedMetrics> {
@@ -141,6 +143,9 @@ export class DouyinScraper implements PlatformAdapter {
     const ctx = await getContext(this.contextKey);
     const page = await ctx.newPage();
     try {
+      // C7:防风控改为请求前一次性 2s 间隔——旧实现"每条结果间 2s+ 抖动"是纯空转
+      // (结果由一次 $$eval 全部取出,逐条延迟期间无任何请求),5 条白等 10-17s
+      await page.waitForTimeout(2_000);
       await page.goto(`https://www.douyin.com/search/${encodeURIComponent(query)}`, {
         waitUntil: "domcontentloaded",
         timeout: 30_000,
@@ -156,13 +161,17 @@ export class DouyinScraper implements PlatformAdapter {
             snippet: "",
           })),
       );
-      // 防风控：每条间延迟 2s+ 抖动
-      const results: Array<{ title: string; url: string; snippet: string }> = [];
-      for (const it of items) {
-        results.push({ ...it, url: it.url.startsWith("http") ? it.url : `https://www.douyin.com${it.url}` });
-        await page.waitForTimeout(2_000 + Math.floor(Math.random() * 1_500));
+      // C7:空结果必须显式报错(未登录/被风控可分辨),不再静默返回空数组当"无结果"
+      if (!items.length) {
+        throw new Error(
+          `抖音搜索无结果(画像 ${this.contextKey})——可能未登录或被风控;` +
+          `请检查 browser-profiles/${this.contextKey.replace(":", "/")} 登录态后重试`,
+        );
       }
-      return results;
+      return items.map((it) => ({
+        ...it,
+        url: it.url.startsWith("http") ? it.url : `https://www.douyin.com${it.url}`,
+      }));
     } finally {
       await page.close();
     }

@@ -274,6 +274,11 @@ function maskApiKey(key: string | undefined): string {
   return key.length > 10 ? `${key.slice(0, 6)}${LLM_KEY_MASK}${key.slice(-4)}` : LLM_KEY_MASK;
 }
 
+/** C2(2026-09-08) PUT 掩码保留:回显值含掩码标记 *** 时保留原值不覆盖;空串=显式清除 */
+function unmaskOrKeep(incoming: string, old: string): string {
+  return incoming.includes(LLM_KEY_MASK) ? old : incoming;
+}
+
 /**
  * GET 呈现用:三家预设永远出现(未配置也给默认 baseUrl,设置页直接可填),
  * 用户自定义的额外 provider 原样保留;apiKey 一律掩码,绝不明文出接口。
@@ -353,36 +358,50 @@ apiRoutes.get("/api/config", async (c) => {
   return c.json({
     ...config,
     server: sanitizedServer,
-    jimengAccessKey: config.jimeng?.accessKey ?? "",
-    jimengSecretKey: config.jimeng?.secretKey ?? "",
-    openrouterKey: config.openrouter?.apiKey ?? "",
-    minimaxKey: config.minimax?.apiKey ?? "",
+    // C2:嵌套对象明文密钥一并剥离——...config 展开会原样带出所有子段
+    jimeng: config.jimeng ? { accessKey: maskApiKey(config.jimeng.accessKey), secretKey: maskApiKey(config.jimeng.secretKey) } : undefined,
+    openrouter: config.openrouter ? { apiKey: maskApiKey(config.openrouter.apiKey) } : undefined,
+    minimax: config.minimax ? { ...config.minimax, apiKey: maskApiKey(config.minimax.apiKey) } : undefined,
+    zhihuData: config.zhihuData ? { ...config.zhihuData, accessSecret: maskApiKey(config.zhihuData.accessSecret) } : undefined,
+    pexels: config.pexels ? { apiKey: maskApiKey(config.pexels.apiKey) } : undefined,
+    pixabay: config.pixabay ? { apiKey: maskApiKey(config.pixabay.apiKey) } : undefined,
+    unsplash: config.unsplash ? { accessKey: maskApiKey(config.unsplash.accessKey) } : undefined,
+    memory: config.memory ? { ...config.memory, apiKey: maskApiKey(config.memory.apiKey) } : undefined,
+    heygem: config.heygem ? { ...config.heygem, apiToken: maskApiKey(config.heygem.apiToken), tunnel: undefined, tunnels: undefined } : undefined,
+    h3: config.h3 ? { ...config.h3, tunnel: undefined, tunnels: undefined } : undefined,
+    jimengAccessKey: maskApiKey(config.jimeng?.accessKey),
+    jimengSecretKey: maskApiKey(config.jimeng?.secretKey),
+    openrouterKey: maskApiKey(config.openrouter?.apiKey),
+    minimaxKey: maskApiKey(config.minimax?.apiKey),
     digitalHumanBatchThreshold: config.digitalHuman?.batchThreshold ?? 3,
-    zhihuDataSecret: config.zhihuData?.accessSecret ?? "",
+    zhihuDataSecret: maskApiKey(config.zhihuData?.accessSecret),
     researchEnabled: config.research?.enabled ?? false,
     researchCron: config.research?.schedule ?? "0 9 * * *",
     researchTopN: config.research?.topN ?? 10,
     memorySyncEnabled: config.memory?.syncEnabled ?? false,
     heygemBaseUrl: config.heygem?.baseUrl ?? "",
-    heygemApiToken: config.heygem?.apiToken ?? "",
+    heygemApiToken: maskApiKey(config.heygem?.apiToken),
     heygemGpuHourlyRateYuan: config.heygem?.gpuHourlyRateYuan ?? 1.78,
     heygemIdleReminderMinutes: config.heygem?.idleReminderMinutes ?? 15,
-    heygemTunnelHost: config.heygem?.tunnel?.host ?? HEYGEM_TUNNEL_DEFAULTS.host,
+    heygemTunnelHost: maskApiKey(config.heygem?.tunnel?.host ?? HEYGEM_TUNNEL_DEFAULTS.host),
     heygemTunnelPort: config.heygem?.tunnel?.port ?? HEYGEM_TUNNEL_DEFAULTS.port,
     // 多实例候选(tunnels 优先;无则由单数 tunnel 合成单候选,保持前端模型统一)
-    heygemTunnels: config.heygem?.tunnels?.length
+    // C2:SSH user/host 不下发明文(掩码,PUT 侧含 *** 保留原值)
+    heygemTunnels: (config.heygem?.tunnels?.length
       ? config.heygem.tunnels
-      : [{ ...HEYGEM_TUNNEL_DEFAULTS, ...(config.heygem?.tunnel ?? {}) }],
+      : [{ ...HEYGEM_TUNNEL_DEFAULTS, ...(config.heygem?.tunnel ?? {}) }]
+    ).map((t) => ({ ...t, host: maskApiKey(t.host), user: maskApiKey(t.user) })),
     // H3 本地视频生成:h3 段存在即启用
     h3Enabled: !!config.h3,
-    h3Tunnels: config.h3?.tunnels?.length
+    h3Tunnels: (config.h3?.tunnels?.length
       ? config.h3.tunnels
-      : [{ ...H3_TUNNEL_DEFAULTS, ...(config.h3?.tunnel ?? {}) }],
+      : [{ ...H3_TUNNEL_DEFAULTS, ...(config.h3?.tunnel ?? {}) }]
+    ).map((t) => ({ ...t, host: maskApiKey(t.host), user: maskApiKey(t.user) })),
     h3GpuHourlyRateYuan: config.h3?.gpuHourlyRateYuan ?? 2.18,
     h3IdleReminderMinutes: config.h3?.idleReminderMinutes ?? 30,
-    pexelsApiKey: config.pexels?.apiKey ?? "",
-    pixabayApiKey: config.pixabay?.apiKey ?? "",
-    unsplashAccessKey: config.unsplash?.accessKey ?? "",
+    pexelsApiKey: maskApiKey(config.pexels?.apiKey),
+    pixabayApiKey: maskApiKey(config.pixabay?.apiKey),
+    unsplashAccessKey: maskApiKey(config.unsplash?.accessKey),
     // LLM 直连:覆盖 ...config 里的明文 llm 段,apiKey 掩码+预设补全(P1-T7)
     llm: presentLlm(config.llm),
     ...flattenAnalytics(config),
@@ -418,11 +437,17 @@ apiRoutes.post("/api/llm/ping", async (c) => {
 });
 
 /** 校验前端提交的隧道候选数组:逐条补默认值,丢弃缺 host/port 的无效行 */
-function sanitizeTunnels<T extends { host: string; port: number }>(raw: unknown, defaults: T): T[] {
+function sanitizeTunnels<T extends { host: string; port: number; user?: string }>(raw: unknown, defaults: T, prev?: T[]): T[] {
   if (!Array.isArray(raw)) return [];
   return raw
     .filter((t): t is Record<string, unknown> => !!t && typeof t === "object")
-    .map((t) => ({ ...defaults, ...t }) as T)
+    .map((t, i) => {
+      const merged = { ...defaults, ...t } as T;
+      // C2:GET 下发掩码版 host/user,回显未改(含 ***)时按位保留原值
+      if (typeof merged.host === "string" && merged.host.includes(LLM_KEY_MASK) && prev?.[i]) merged.host = prev[i].host;
+      if (typeof merged.user === "string" && merged.user.includes(LLM_KEY_MASK) && prev?.[i]?.user) merged.user = prev[i].user;
+      return merged;
+    })
     .filter((t) => typeof t.host === "string" && t.host.length > 0 && Number.isFinite(Number(t.port)) && Number(t.port) > 0)
     .map((t) => ({ ...t, port: Number(t.port) }));
 }
@@ -432,20 +457,21 @@ apiRoutes.put("/api/config", async (c) => {  const body = await c.req.json<Recor
   const config = await loadConfig();
 
   // Map flat frontend fields to nested config structure
+  // C2:密钥类字段一律走 unmaskOrKeep——GET 下发的是掩码版,回显未改(含 ***)时保留原值
   if (body.jimengAccessKey !== undefined) {
     if (!config.jimeng) config.jimeng = { accessKey: "", secretKey: "" };
-    config.jimeng.accessKey = body.jimengAccessKey as string;
+    config.jimeng.accessKey = unmaskOrKeep(body.jimengAccessKey as string, config.jimeng.accessKey);
   }
   if (body.jimengSecretKey !== undefined) {
     if (!config.jimeng) config.jimeng = { accessKey: "", secretKey: "" };
-    config.jimeng.secretKey = body.jimengSecretKey as string;
+    config.jimeng.secretKey = unmaskOrKeep(body.jimengSecretKey as string, config.jimeng.secretKey);
   }
   if (body.openrouterKey !== undefined) {
-    config.openrouter = { apiKey: body.openrouterKey as string };
+    config.openrouter = { apiKey: unmaskOrKeep(body.openrouterKey as string, config.openrouter?.apiKey ?? "") };
   }
   if (body.minimaxKey !== undefined) {
     // 保留 groupId 等其他 minimax 字段，避免保存 key 时被覆盖丢失
-    config.minimax = { ...config.minimax, apiKey: body.minimaxKey as string };
+    config.minimax = { ...config.minimax, apiKey: unmaskOrKeep(body.minimaxKey as string, config.minimax?.apiKey ?? "") };
   }
   if (body.digitalHumanBatchThreshold !== undefined) {
     // 渲染池攒批阈值：>=1 的整数，非法值回落默认 3
@@ -453,7 +479,7 @@ apiRoutes.put("/api/config", async (c) => {  const body = await c.req.json<Recor
     config.digitalHuman = { ...config.digitalHuman, batchThreshold: Number.isFinite(n) && n > 0 ? n : 3 };
   }
   if (body.zhihuDataSecret !== undefined) {
-    config.zhihuData = { ...config.zhihuData, accessSecret: body.zhihuDataSecret as string };
+    config.zhihuData = { ...config.zhihuData, accessSecret: unmaskOrKeep(body.zhihuDataSecret as string, config.zhihuData?.accessSecret ?? "") };
   }
   if (body.interests !== undefined) {
     // 关注领域：选题中心 updateConfig 走本接口，此前未映射导致保存被静默丢弃
@@ -496,20 +522,20 @@ apiRoutes.put("/api/config", async (c) => {  const body = await c.req.json<Recor
     || body.heygemTunnelHost !== undefined || body.heygemTunnelPort !== undefined) {
     if (!config.heygem) config.heygem = { apiToken: "", baseUrl: "", gpuHourlyRateYuan: 1.78, idleReminderMinutes: 15 };
     if (body.heygemBaseUrl !== undefined) config.heygem.baseUrl = body.heygemBaseUrl as string;
-    if (body.heygemApiToken !== undefined) config.heygem.apiToken = body.heygemApiToken as string;
+    if (body.heygemApiToken !== undefined) config.heygem.apiToken = unmaskOrKeep(body.heygemApiToken as string, config.heygem.apiToken ?? "");
     if (body.heygemGpuHourlyRateYuan !== undefined) config.heygem.gpuHourlyRateYuan = Number(body.heygemGpuHourlyRateYuan);
     if (body.heygemIdleReminderMinutes !== undefined) config.heygem.idleReminderMinutes = Number(body.heygemIdleReminderMinutes);
     if (body.heygemTunnelHost !== undefined || body.heygemTunnelPort !== undefined) {
       // 其余 tunnel 字段（user/localPort/remotePort）用默认值
       config.heygem.tunnel = { ...HEYGEM_TUNNEL_DEFAULTS, ...(config.heygem.tunnel ?? {}) };
-      if (body.heygemTunnelHost !== undefined) config.heygem.tunnel.host = body.heygemTunnelHost as string;
+      if (body.heygemTunnelHost !== undefined) config.heygem.tunnel.host = unmaskOrKeep(body.heygemTunnelHost as string, config.heygem.tunnel.host);
       if (body.heygemTunnelPort !== undefined) config.heygem.tunnel.port = Number(body.heygemTunnelPort);
     }
   }
   // 多实例候选:前端传整组数组(host/port/user/localPort/remotePort),覆盖式更新
   if (body.heygemTunnels !== undefined) {
     if (!config.heygem) config.heygem = { apiToken: "", baseUrl: "", gpuHourlyRateYuan: 1.78, idleReminderMinutes: 15 };
-    const list = sanitizeTunnels<HeygemTunnelConfig>(body.heygemTunnels, HEYGEM_TUNNEL_DEFAULTS);
+    const list = sanitizeTunnels<HeygemTunnelConfig>(body.heygemTunnels, HEYGEM_TUNNEL_DEFAULTS, config.heygem.tunnels);
     if (list.length > 0) {
       config.heygem.tunnels = list;
       delete config.heygem.tunnel;  // tunnels 优先,清掉单数避免歧义
@@ -524,7 +550,7 @@ apiRoutes.put("/api/config", async (c) => {  const body = await c.req.json<Recor
     if (body.h3GpuHourlyRateYuan !== undefined) config.h3.gpuHourlyRateYuan = Number(body.h3GpuHourlyRateYuan);
     if (body.h3IdleReminderMinutes !== undefined) config.h3.idleReminderMinutes = Number(body.h3IdleReminderMinutes);
     if (body.h3Tunnels !== undefined) {
-      const list = sanitizeTunnels<H3TunnelConfig>(body.h3Tunnels, H3_TUNNEL_DEFAULTS);
+      const list = sanitizeTunnels<H3TunnelConfig>(body.h3Tunnels, H3_TUNNEL_DEFAULTS, config.h3.tunnels);
       if (list.length > 0) {
         config.h3.tunnels = list;
         delete config.h3.tunnel;
@@ -533,15 +559,15 @@ apiRoutes.put("/api/config", async (c) => {  const body = await c.req.json<Recor
   }
   if (body.pexelsApiKey !== undefined) {
     if (!config.pexels) config.pexels = { apiKey: "" };
-    config.pexels.apiKey = body.pexelsApiKey as string;
+    config.pexels.apiKey = unmaskOrKeep(body.pexelsApiKey as string, config.pexels.apiKey);
   }
   if (body.pixabayApiKey !== undefined) {
     if (!config.pixabay) config.pixabay = { apiKey: "" };
-    config.pixabay.apiKey = body.pixabayApiKey as string;
+    config.pixabay.apiKey = unmaskOrKeep(body.pixabayApiKey as string, config.pixabay.apiKey);
   }
   if (body.unsplashAccessKey !== undefined) {
     if (!config.unsplash) config.unsplash = { accessKey: "" };
-    config.unsplash.accessKey = body.unsplashAccessKey as string;
+    config.unsplash.accessKey = unmaskOrKeep(body.unsplashAccessKey as string, config.unsplash.accessKey);
   }
   // LLM 直连段(设置页「大模型直连」):整组提交、掩码 key 保留原值,见 mergeLlm
   const llmChanged = body.llm !== undefined;
@@ -2968,8 +2994,9 @@ async function pickFallbackEvalModel(
   for (const [key, model] of candidates) {
     if (key === currentProvider) continue;
     const p = config.llm?.providers?.[key];
-    const preset = PROVIDER_PRESETS[key];
-    if ((p?.enabled !== false) && (p?.apiKey || preset)) return `${key}:${model}`;
+    // C6 修复(2026-09-08):`|| preset` 兜底删除——preset 存在不代表配了 key,
+    // 未配 key 的 provider 进降级链只会以 401 再失败一轮(白烧一次超时)
+    if ((p?.enabled !== false) && p?.apiKey) return `${key}:${model}`;
   }
   return undefined;
 }
@@ -5849,6 +5876,8 @@ interface RefineJob {
   error?: string;
 }
 const refineJobs = new Map<string, RefineJob>();
+/** C5(2026-09-08):同模板 refine 互斥锁——进行中的模板拒第二个(并发改同一份代码必互相踩踏) */
+const refineRunning = new Set<string>();
 
 // POST /api/templates/:id/refine - 自然语言二次加工模板(异步)
 apiRoutes.post("/api/templates/:id/refine", async (c) => {
@@ -5856,12 +5885,17 @@ apiRoutes.post("/api/templates/:id/refine", async (c) => {
   if (!getTemplate(id)) return c.json({ error: "Template not found" }, 404);
   const body = await c.req.json<{ instruction?: string; saveAsCopy?: boolean }>().catch(() => ({} as { instruction?: string; saveAsCopy?: boolean }));
   if (!body.instruction?.trim()) return c.json({ error: "instruction is required" }, 400);
+  if (refineRunning.has(id)) {
+    return c.json({ error: "该模板已有再加工任务进行中,请等待完成后再提交" }, 409);
+  }
 
+  refineRunning.add(id);
   const jobId = "tplrefine_" + Date.now();
   refineJobs.set(jobId, { status: "running" });
   refineTemplate(id, body.instruction, body.saveAsCopy ?? false)
     .then((r) => refineJobs.set(jobId, { status: "done", templateId: r.templateId, diffSummary: r.diffSummary, copied: r.copied }))
-    .catch((err) => refineJobs.set(jobId, { status: "error", error: err instanceof Error ? err.message : String(err) }));
+    .catch((err) => refineJobs.set(jobId, { status: "error", error: err instanceof Error ? err.message : String(err) }))
+    .finally(() => refineRunning.delete(id));
   return c.json({ jobId, status: "running" });
 });
 

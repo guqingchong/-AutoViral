@@ -141,7 +141,8 @@ describe("digital-human API (heygem)", () => {
     const res = await apiRoutes.request("/api/config");
     expect(res.status).toBe(200);
     const data = await res.json();
-    expect(data.heygemTunnelHost).toBe("connect.nmb1.seetacloud.com");
+    // C2(2026-09-08):SSH host 不再下发明文,掩码下发(前 6 + *** + 后 4)
+    expect(data.heygemTunnelHost).toBe("connec***.com");
     expect(data.heygemTunnelPort).toBe(28830);
 
     const put = await apiRoutes.request("/api/config", {
@@ -152,6 +153,16 @@ describe("digital-human API (heygem)", () => {
     expect(put.status).toBe(200);
     const saved = await put.json();
     expect(saved.heygem.tunnel.host).toBe("connect.example.com");
+
+    // C2:回显掩码值(含 ***)PUT 时保留原值不覆盖
+    const putMasked = await apiRoutes.request("/api/config", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ heygemTunnelHost: "connec***.com" }),
+    });
+    expect(putMasked.status).toBe(200);
+    const savedMasked = await putMasked.json();
+    expect(savedMasked.heygem.tunnel.host).toBe("connect.example.com");
     expect(saved.heygem.tunnel.port).toBe(30000);
     // 其余 tunnel 字段补默认值
     expect(saved.heygem.tunnel.user).toBe("root");

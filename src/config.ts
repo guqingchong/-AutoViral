@@ -341,6 +341,10 @@ export async function loadConfig(): Promise<Config> {
       config.server = { authToken: randomBytes(32).toString("hex") };
       await saveConfig(config);
     }
+    // C3 修复(2026-09-08):catch 分支此前不写 cachedConfig——saveConfig 虽写了缓存,
+    // 但测试环境/未来任何不走 saveConfig 的路径下,getConfig() 会回落 getDefaultConfig()
+    // (无 authToken),authGuard 按"未配置 token 放行"语义 fail-open,首启窗口写端点裸奔
+    cachedConfig = config;
     return config;
   }
 }

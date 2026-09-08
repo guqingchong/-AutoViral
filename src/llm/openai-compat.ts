@@ -428,24 +428,41 @@ export class OpenAICompatProvider implements LlmProvider {
       const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 120_000);
       const callStart = Date.now();
       try {
-        const res = await fetch(`${this.opts.baseUrl}/chat/completions`, {
+        // C4(2026-09-08):请求体独立成变量,400+max_tokens 报文时与 streamRequest
+        // 同款收敛重试一次(此前 chatJson 无此兜底,超上限直接 noRetry 失败)
+        const reqBody: Record<string, unknown> = {
+          model: opts.model,
+          messages: [{ role: "user", content: prompt + JSON_OUTPUT_DISCIPLINE }],
+          // 2026-09-07 修复(模板生成"格式异常"根因):此前不传 max_tokens,走供应商缺省
+          // (deepseek 缺省 4096/8192),整片模板 HTML(15k+ tokens)被静默截断 →
+          // JSON 不闭合 → "无法从响应提取 JSON"误导性报错。显式给足上限;
+          // 供应商若报错带 cap,走下方 400 收敛(与 streamRequest 同款)。
+          max_tokens: opts.maxTokens ?? 32768,
+          stream: false,
+        };
+        const postOnce = () => fetch(`${this.opts.baseUrl}/chat/completions`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             Authorization: `Bearer ${this.opts.apiKey}`,
           },
-          body: JSON.stringify({
-            model: opts.model,
-            messages: [{ role: "user", content: prompt + JSON_OUTPUT_DISCIPLINE }],
-            // 2026-09-07 修复(模板生成"格式异常"根因):此前不传 max_tokens,走供应商缺省
-            // (deepseek 缺省 4096/8192),整片模板 HTML(15k+ tokens)被静默截断 →
-            // JSON 不闭合 → "无法从响应提取 JSON"误导性报错。显式给足上限;
-            // 供应商若报错带 cap,400 收敛逻辑见 streamRequest(此处模型实测 131072 可请求)。
-            max_tokens: opts.maxTokens ?? 32768,
-            stream: false,
-          }),
+          body: JSON.stringify(reqBody),
           signal: controller.signal,
         });
+        let res = await postOnce();
+        if (!res.ok && res.status === 400) {
+          const peek = await res.clone().text().catch(() => "");
+          if (/max_tokens/i.test(peek)) {
+            const capMatch = peek.match(/\[\s*1\s*,\s*(\d+)\s*\]/)
+              ?? peek.match(/(?:上限|最大|不得超过|maximum|limit)\D{0,12}(\d{3,6})/i);
+            const cap = capMatch ? Number(capMatch[1]) : 0;
+            if (cap > 0 && Number(reqBody.max_tokens) > cap) {
+              console.warn(`[llm] chatJson max_tokens ${reqBody.max_tokens} 超出 ${this.name}/${opts.model} 上限 ${cap},收敛后重试一次`);
+              reqBody.max_tokens = cap;
+              res = await postOnce();
+            }
+          }
+        }
         if (!res.ok) {
           const body = await res.text().catch(() => "");
           const err = new Error(`LLM API ${res.status}: ${body.slice(0, 300)}`);

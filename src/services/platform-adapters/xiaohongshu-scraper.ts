@@ -15,8 +15,9 @@ export class XiaohongshuScraper implements PlatformAdapter {
   /** 浏览器 context 键:`xiaohongshu:<accountId ?? "default">`,画像目录按账号隔离 */
   readonly contextKey: string;
 
-  constructor(readonly accountId?: string) {
-    this.contextKey = `xiaohongshu:${accountId ?? "default"}`;
+  constructor(readonly accountId?: string, contextKeyOverride?: string) {
+    // C7(2026-09-08):搜索用独立画像(如 xiaohongshu:search),与发布画像物理分离
+    this.contextKey = contextKeyOverride ?? `xiaohongshu:${accountId ?? "default"}`;
   }
 
   async collectAccountMetrics(): Promise<CollectedMetrics> {
@@ -142,6 +143,8 @@ export class XiaohongshuScraper implements PlatformAdapter {
     const ctx = await getContext(this.contextKey);
     const page = await ctx.newPage();
     try {
+      // C7:防风控改为请求前一次性 2s 间隔(旧"逐条延迟"期间无任何请求,纯空转)
+      await page.waitForTimeout(2_000);
       await page.goto(`https://www.xiaohongshu.com/search_result?keyword=${encodeURIComponent(query)}`, {
         waitUntil: "domcontentloaded",
         timeout: 30_000,
@@ -160,13 +163,17 @@ export class XiaohongshuScraper implements PlatformAdapter {
             }))
             .filter((it) => it.url),
       );
-      // 防风控：每条间延迟 2s+ 抖动
-      const results: Array<{ title: string; url: string; snippet: string }> = [];
-      for (const it of items) {
-        results.push({ ...it, url: it.url.startsWith("http") ? it.url : `https://www.xiaohongshu.com${it.url}` });
-        await page.waitForTimeout(2_000 + Math.floor(Math.random() * 1_500));
+      // C7:空结果显式报错(未登录/被风控可分辨),不静默返回空数组
+      if (!items.length) {
+        throw new Error(
+          `小红书搜索无结果(画像 ${this.contextKey})——可能未登录或被风控;` +
+          `请检查 browser-profiles/${this.contextKey.replace(":", "/")} 登录态后重试`,
+        );
       }
-      return results;
+      return items.map((it) => ({
+        ...it,
+        url: it.url.startsWith("http") ? it.url : `https://www.xiaohongshu.com${it.url}`,
+      }));
     } finally {
       await page.close();
     }
