@@ -76,4 +76,23 @@ describe("zhihu-data-api", () => {
     mockResponse({}, false, 401);
     await expect(svc.fetchZhihuHotList()).rejects.toThrow("401");
   });
+
+  // 2026-09-10 实测根因:真实 API 返回 PascalCase(Data.Items/Title/ContentText),
+  // extractItems 此前只查小写键,知乎搜索在生产环境永远空命中而测试全绿。
+  it("知乎搜索解析真实 API 的 PascalCase 响应(Data.Items)", async () => {
+    mockResponse({
+      Code: 0,
+      Message: "success",
+      Data: {
+        HasMore: false,
+        Items: [
+          { Title: "城市发展转向城市运营? - 知乎", ContentType: "Answer", ContentText: "核心是三场底层变革……" },
+          { Title: "另一条", ContentText: "内容" },
+        ],
+      },
+    });
+    const items = await svc.zhihuSearch("城市经营", 3);
+    expect(items).toHaveLength(2);
+    expect(items[0].title).toContain("城市运营");
+  });
 });

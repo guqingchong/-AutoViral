@@ -32,8 +32,11 @@ description: Create detailed content plans and storyboards for Douyin (抖音) a
 
 1. **制作方式路由必填**:分镜表每个镜头必须标注制作方式——`chart`(数据图表)/`snapshot`(文件快照)/`diagram`(程序化动画)/`digital_human`(口播)/`ai_video`(AI 生视频)/`stock`(素材库)/`upload`(用户上传)/`reuse`(资产库复用,注明 path)。精确数据/文件原文/结构关系**禁止路由到 AI 生图**(详见 asset-generation 技能的路由速查表)
 2. **数据必须署名**:凡引用数据,策划案必须写明来源(用于图表/快照卡的来源署名)
-3. **时长自律**:短视频成片目标 ≤3 分钟;每镜 3-5 秒,复杂镜头 ≤10 秒
+3. **时长自律**:短视频成片目标 ≤3 分钟;每镜 3-5 秒,复杂镜头 ≤10 秒。口播时长按**朗读口径**估算:汉字=1、数字逐位展开(41518=5)、%=3(百分之)、拉丁字母逐个(REITs=5)、标点与〔角标〕不计,秒数=朗读字符÷4.5——数字密集的稿子时长会显著膨胀,禁止按汉字数估时
 4. **发布前过门禁**:合成完成后必须 `curl http://localhost:3271/api/works/{workId}/quality` 查看质量门禁报告,`passed=false` 的作品禁止进入发布流程,先修复 fail 项(无声/黑帧/缺字幕)
+5. **事实断言与素材引用过机器预检**(提交 pipeline/advance 时强制,命中即打回,勿翻源码溯源):
+   - **事实断言核验**(plan.md/article.md 全文):`〔XXXX〕X号`文号、`XXXX 年`年份、`X%`百分比被捕获后,以其为锚点**前 80 字 + 后 120 字**窗口内需含 `已核验`/`据…发布|通知|印发`/`来源:`/URL 任一标记;未核验断言只允许以`画面披露`+`以官方发布为准`形式存在。写法:每个断言就近挂来源角标(角标含"来源:"即自动豁免)
+   - **素材引用存在性**:分镜引用的每个素材文件名(mp4/mov/png/jpg/jpeg/webp/wav/mp3)必须在 material-candidates 保留清单/素材库中存在,或已在 `assets/registry.json` 登记;程序化产物(customHtml/code-scene/scene-N-/chart/snapshot)豁免
 
 
 **图文创作路线是强制三选一**，详见 `modules/emotional-hooks.md` 中的模板定义：
@@ -383,6 +386,7 @@ curl -X POST http://localhost:3271/api/works/{workId}/pipeline/advance -H "Autho
 - **`modules/packaging-first.md`** — 包装先行：标题四式、封面概念、承诺一致性校验。**写分镜前强制先完成。**
 - **`modules/hook-engineering.md`** — 钩子工程：9类钩子模板、开场三步法、开头禁用项、一脚本多Hook版本。**设计任何视频开头时强制加载。**
 - **`modules/script-structure.md`** — 口播脚本结构：60s五段式时间轴、五段式/SCQA/金字塔结构选择器、句长与信息密度硬规则、财经合规红线。**撰写口播文案时强制加载。**
+- **`modules/style-exemplars.md`** — 真人口播风格范例库：5段真人稿 few-shot 范例（开场钩/白描推进/概念解释/类比落地）、24条AI腔负向句式清单、交稿前默读检验清单。**撰写口播文案时与 script-structure.md 一起强制加载（2026-09-15 新增，治"AI腔"）。**
 - **`modules/storyboard-grammar.md`** — 分镜语法：镜头类型→叙事功能映射、景别节奏、运镜理由、连续性轻量规则。**排分镜表时强制加载。**
 - **`modules/finance-compliance.md`** — 财经合规红线：信源规范、表述边界、极限词自检。**财经/政策类内容强制加载。**
 - **`modules/visual-aesthetics.md`** — 视觉美学进阶：封面设计系统、色彩理论进阶、13种构图模式、2026审美趋势。当需要精细的视觉方向指导时加载。

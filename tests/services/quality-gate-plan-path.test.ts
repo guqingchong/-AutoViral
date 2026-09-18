@@ -72,6 +72,49 @@ describe("assertPlanReferences registry 核验(B12)", () => {
   });
 });
 
+// 2026-09-12 口播"AI腔"治理 P0:单句上限 20→35 字 + 连续3句<10字判电报体
+describe("assertPlanDeliverables 旁白句长与电报体(2026-09-12 P0)", () => {
+  let dir: string;
+  beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "av-narr-gate-")); });
+  afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+
+  async function writePlan(narration: string) {
+    await writeFile(
+      join(dir, "plan.md"),
+      `# 分镜\n\n| 镜号 | 时长 | 旁白 |\n| --- | --- | --- |\n| 01 | 5s | ${narration} |\n`,
+      "utf-8",
+    );
+  }
+  const keysOf = () => assertPlanDeliverables(dir).map((i) => i.key);
+
+  it("21-35 字单句不再拦(旧 20 字铁律已放宽)", async () => {
+    // 24 字:旧门禁拦,新门禁放行
+    await writePlan("这个月财政部又发了一批专项债规模比上个月翻了一倍。");
+    expect(keysOf()).not.toContain("narration_len");
+  });
+
+  it(">35 字单句仍拦 narration_len", async () => {
+    // 46 字
+    await writePlan("这个月财政部又发了一批专项债规模比上个月翻了一倍而且投向第一次明确写进了区县一级的项目清单里。");
+    expect(keysOf()).toContain("narration_len");
+  });
+
+  it("连续 3 句 <10 字 → 判电报体 narration_telegraph", async () => {
+    await writePlan("钱来了。项目定了。节奏变了。");
+    expect(keysOf()).toContain("narration_telegraph");
+  });
+
+  it("短句连击被 ≥10 字完整句打断 → 不判电报体", async () => {
+    await writePlan("钱来了。这批专项债的投向第一次明确到了区县一级。项目定了。");
+    expect(keysOf()).not.toContain("narration_telegraph");
+  });
+
+  it("仅连续 2 句短句 → 不判电报体", async () => {
+    await writePlan("钱来了。项目定了。这批专项债的投向第一次明确到了区县一级。");
+    expect(keysOf()).not.toContain("narration_telegraph");
+  });
+});
+
 // B7 配套:图文版 plan-assets 门禁豁免 script.json(指令侧已不再要求)
 describe("assertContractArtifacts 图文分版(B7)", () => {
   let dir: string;

@@ -16,6 +16,7 @@
     fetchAccounts,
     publishWorkToPlatform,
     rejectWork,
+    approveWork,
     type WorkSummary,
     type PublishRecord,
   } from "../lib/api.js";
@@ -143,9 +144,20 @@
     return configuredPlatforms.every((p) => platformState(workId, p.key).state === "published");
   }
 
-  /** 待发布/已发布栏作品未发布完成的已配置平台 */
+  /** 待发布/已发布栏作品未发布完成的已配置平台。
+   *  2026-09-18 修复:排除"发布中"平台——发布状态以服务端 publish_records 为准,
+   *  离开页面再回来时内存 busy 态已丢失,若不排除,一键全发布会重复触发正在
+   *  发布的平台(服务端虽有并发防护会拒绝,但前端不应把它算进目标数)。 */
   function pendingPlatforms(workId: string): BoardPlatform[] {
-    return configuredPlatforms.filter((p) => platformState(workId, p.key).state !== "published");
+    return configuredPlatforms.filter((p) => {
+      const st = platformState(workId, p.key).state;
+      return st !== "published" && st !== "publishing";
+    });
+  }
+
+  /** 是否有平台正在发布中(以服务端记录为准,组件重建后依然准确) */
+  function hasPublishing(workId: string): boolean {
+    return configuredPlatforms.some((p) => platformState(workId, p.key).state === "publishing");
   }
 
   async function loadRecordsFor(workIds: string[]) {
@@ -318,17 +330,13 @@
     selectedWorkId = "";
   }
 
-  /** 审核通过：reviewing → approved（进入待发布栏），不再直接置为 published */
+  /** 审核通过：reviewing → approved（进入待发布栏），不再直接置为 published。
+   *  走专用人工确认端点 /approve——PUT 直写 status 已被服务端门禁禁止（403）。 */
   async function handleApprove() {
     if (!selectedWorkId || approving) return;
     approving = true;
     try {
-      const res = await fetch(`/api/works/${selectedWorkId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "approved" }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await approveWork(selectedWorkId);
       showMessage("success", "审核通过，作品已进入「待发布」栏");
       selectedWorkId = "";
       await loadWorks();
@@ -366,6 +374,9 @@
   async function publishOne(workId: string, platform: string, label: string): Promise<boolean> {
     const busyKey = `${workId}:${platform}`;
     publishing = { ...publishing, [busyKey]: true };
+    // 2026-09-18:明确告知"后台执行"——发布是 5-10 分钟长任务,离开页面组件销毁后
+    // 内存 busy 态丢失、按钮复原,用户曾误判为"发布中断"并重复点击触发并发互杀
+    showMessage("success", `${label} 发布已开始（服务端后台执行，离开本页面不会中断，状态每 10 秒自动刷新）`);
     try {
       const result = await publishWorkToPlatform(workId, platform, undefined, selectedAccount[platform]);
       const ok = result.status === "published";
@@ -507,17 +518,17 @@
                   {#each platforms as p}
                     {@const st = platformState(work.id, p.key)}
                     <span class="chip" class:chip-ok={st.state === "published"} class:chip-fail={st.state === "failed"} class:chip-dim={!isConfigured(p.key)}>
-                      {p.label}{st.state === "published" ? "✓" : st.state === "failed" ? "✗" : ""}
+                      {p.label}{st.state === "published" ? "✓" : st.state === "failed" ? "✗" : st.state === "publishing" ? "…" : ""}
                     </span>
                   {/each}
                 </div>
                 <button
                   class="btn-publish-all"
                   disabled={publishAllBusy || cardsPending[work.id] || pendingPlatforms(work.id).length === 0}
-                  title={cardsPending[work.id] ? "卡片生成中,素材阶段完成后自动回填" : ""}
+                  title={cardsPending[work.id] ? "卡片生成中,素材阶段完成后自动回填" : hasPublishing(work.id) ? "有平台正在发布中,服务端后台执行,离开页面不影响" : ""}
                   onclick={(e) => { e.stopPropagation(); handlePublishAll(work.id); }}
                 >
-                  {cardsPending[work.id] ? "卡片生成中…" : publishAllBusy ? "发布中…" : `一键全发布（${pendingPlatforms(work.id).length} 个平台）`}
+                  {cardsPending[work.id] ? "卡片生成中…" : publishAllBusy || (pendingPlatforms(work.id).length === 0 && hasPublishing(work.id)) ? "发布中…" : `一键全发布（${pendingPlatforms(work.id).length} 个平台）`}
                 </button>
               </div>
             </div>
@@ -552,17 +563,17 @@
                   {#each platforms as p}
                     {@const st = platformState(work.id, p.key)}
                     <span class="chip" class:chip-ok={st.state === "published"} class:chip-fail={st.state === "failed"} class:chip-dim={!isConfigured(p.key)}>
-                      {p.label}{st.state === "published" ? "✓" : st.state === "failed" ? "✗" : ""}
+                      {p.label}{st.state === "published" ? "✓" : st.state === "failed" ? "✗" : st.state === "publishing" ? "…" : ""}
                     </span>
                   {/each}
                 </div>
-                {#if pendingPlatforms(work.id).length > 0}
+                {#if pendingPlatforms(work.id).length > 0 || hasPublishing(work.id)}
                   <button
                     class="btn-publish-all"
-                    disabled={publishAllBusy}
+                    disabled={publishAllBusy || pendingPlatforms(work.id).length === 0}
                     onclick={(e) => { e.stopPropagation(); handlePublishAll(work.id); }}
                   >
-                    {publishAllBusy ? "发布中…" : `补发剩余平台（${pendingPlatforms(work.id).length}）`}
+                    {publishAllBusy || (pendingPlatforms(work.id).length === 0 && hasPublishing(work.id)) ? "发布中…" : `补发剩余平台（${pendingPlatforms(work.id).length}）`}
                   </button>
                 {/if}
               </div>
@@ -694,7 +705,7 @@
               disabled={publishAllBusy || pendingPlatforms(selectedWork.id).length === 0}
               onclick={() => handlePublishAll(selectedWork!.id)}
             >
-              {publishAllBusy ? "发布中…" : `一键全发布（${pendingPlatforms(selectedWork.id).length} 个平台）`}
+              {publishAllBusy || (pendingPlatforms(selectedWork.id).length === 0 && hasPublishing(selectedWork.id)) ? "发布中…" : `一键全发布（${pendingPlatforms(selectedWork.id).length} 个平台）`}
             </button>
           </div>
           <div class="platform-grid">

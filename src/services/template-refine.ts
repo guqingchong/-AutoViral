@@ -175,11 +175,9 @@ async function checkRefineFidelity(
   instruction: string,
 ): Promise<{ missing: string[]; sceneDesc: string } | null> {
   try {
-    const { execFile } = await import("node:child_process");
-    const { promisify } = await import("node:util");
+    const { execFileSilent: execFileAsync } = await import("../utils/proc.js");
     const { mkdir } = await import("node:fs/promises");
     const { dataDir } = await import("../config.js");
-    const execFileAsync = promisify(execFile);
     const frameDir = join(dataDir, "tmp");
     await mkdir(frameDir, { recursive: true });
     // 抽两帧:前段(封面/开场) + 中段(正文)——单帧抽查曾漏掉分页模板的封面页
@@ -381,11 +379,10 @@ async function refineCodeTemplate(
     await copyFile(passedPreviewPath, dest);
     // poster 中帧同步刷新(编辑器/卡片 <video poster>)
     try {
-      const { execFile } = await import("node:child_process");
-      const { promisify } = await import("node:util");
+      const { execFileSilent } = await import("../utils/proc.js");
       const tplDir = join(dataDir, "templates", targetId);
       await mkdir(tplDir, { recursive: true });
-      await promisify(execFile)("ffmpeg", ["-ss", "2.5", "-i", dest, "-frames:v", "1", "-y", join(tplDir, "poster.png")], { timeout: 10_000 });
+      await execFileSilent("ffmpeg", ["-ss", "2.5", "-i", dest, "-frames:v", "1", "-y", join(tplDir, "poster.png")], { timeout: 10_000 });
     } catch { /* poster 失败不阻断 */ }
   } catch { /* 预览归位失败不阻断加工结果 */ }
 

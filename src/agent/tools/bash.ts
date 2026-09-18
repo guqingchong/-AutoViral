@@ -32,7 +32,7 @@ function detectBash(): Promise<string | null> {
     }
   }
   return new Promise((resolvePromise) => {
-    const p = spawn("where", ["bash"], { shell: true });
+    const p = spawn("where", ["bash"], { shell: true, windowsHide: true });
     let out = "";
     p.stdout.on("data", (d) => (out += d));
     p.on("close", (code) => {

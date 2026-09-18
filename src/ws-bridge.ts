@@ -110,8 +110,11 @@ const ACTIVITY_GRACE_MS = 120_000;
 /** H3 开机语音提醒:每作品每进程最多一次(2026-09-03) */
 const h3PowerOnVoiced = new Set<string>();
 
-/** 素材阶段会话启动且分镜确认需要 H3 时,语音提醒开机一次(web 横幅之外的听得见通道) */
-async function maybeVoiceH3PowerOn(work: Work): Promise<void> {
+/** 素材阶段会话启动且分镜确认需要 H3 时,语音提醒开机一次(web 横幅之外的听得见通道)。
+ *  2026-09-11 修复时机漏洞:会话跨步骤复用,仅在"会话创建恰逢 assets active"才发声,
+ *  连续跑 research→assets 的正常流程永远不触发——改为同时挂在 assets 步骤激活点
+ *  (advance/eval-pass/force-pass),幂等 Set 去重。导出供 api.ts 步骤激活处调用。 */
+export async function maybeVoiceH3PowerOn(work: { id: string; title: string; pipeline?: Record<string, { status?: string }>; assetSource?: string }): Promise<void> {
   try {
     if (h3PowerOnVoiced.has(work.id)) return;
     const activeStep = Object.entries(work.pipeline ?? {}).find(([, s]) => s.status === "active")?.[0];
@@ -121,7 +124,7 @@ async function maybeVoiceH3PowerOn(work: Work): Promise<void> {
     const sbPath = sbCandidates.find((p) => existsSync(p));
     if (!sbPath) {
       // 分镜未落盘(或路径漂移):按素材来源预估,与 reminders 端点 possible 档对齐
-      const src = (work as { assetSource?: string }).assetSource;
+      const src = work.assetSource;
       if (!src || !["ai", "auto", "smart"].includes(src)) return;
       h3PowerOnVoiced.add(work.id);
       const { voiceNotify } = await import("./services/voice-notify.js");
@@ -195,6 +198,15 @@ export class WsBridge {
       return now - lastActivity < 12 * 60_000;
     }
     return now - lastActivity < ACTIVITY_GRACE_MS;
+  }
+
+  /** 会话最近 loop 活动时间戳(ms,无会话/无活动返回 null)。
+   *  供 /api/works 列表合并进作品 lastActivityAt——看板"最近活动"此前只由
+   *  works.updated_at 与步骤时间戳推导,长回合(工具连跑几十分钟不改步骤状态)
+   *  期间看板假死;会话 loop 事件(tool_use/tool_result/assistant_text)每动一次
+   *  就刷新该值,是真实的 loop 活性(2026-09-10 实测暴露)。 */
+  getSessionActivityAt(workId: string): number | null {
+    return this.sessions.get(workId)?.lastActivityAt ?? null;
   }
 
   constructor(_serverPort: number) {
@@ -417,6 +429,9 @@ export class WsBridge {
           // 此前此处统一说"用即梦替代",与 eco 门禁(/api/generate/video 代码级 403)直接互斥
           ? `- H3 本地生成(ComfyUI ${h3Base}):**已配置但当前离线**。本作品为 eco 成本档——禁止使用云端视频生成(即梦/Seedance,系统已在 API 层拦截 403),素材规划改用素材库/程序化渲染;确需 AI 视频镜头时阻塞并在交付说明中显著提醒"H3 离线,请开机后重试该镜头"`
           : `- H3 本地生成(ComfyUI ${h3Base}):**已配置但当前离线**(AutoDL 实例未启动或隧道断开)。本作品素材规划不要依赖 H3;用素材库/即梦/程序化渲染替代,并在最终交付说明中明确注明"H3 离线,已降级"。若后续恢复在线可改用。`;
+        // 2026-09-11 定位修正:本条只服务素材相关阶段——研究阶段看到它会越界评估
+        // 素材/生成环境(城市经营新范式实测:研究步跑去检索素材库),故显式声明适用边界
+        h3StatusLine += `(本条仅适用于素材准备/合成阶段;内容研究阶段不评估素材可得性与生成环境)`;
       if (!h3Online) {
         console.warn(`[ws-bridge] H3 离线降级声明已注入:workId=${work.id}`);
         // 2026-09-03 实测:开机提醒此前只有 web 横幅(前端轮询拉取),用户不在屏前
@@ -447,7 +462,7 @@ export class WsBridge {
   竖版安全区:画面底部 y≥1390 为卡拉 OK 字幕带,场景内容不得进入(2026-08-31 实测:字幕压内容)
 - assembly 阶段的 advance 有机器门禁,以下缺一即被 400 拦截(提前备齐):
   ① output/ 下文件名含 final 的成片视频 ② output/publish-text.md(发布文案)
-  ③ output/quality-report.json——对当前成片跑质量门禁生成,videoPath 指向该片且内容时间(createdAt)不早于成片(复制旧报告刷时间会被拦)
+  ③ output/quality-report.json——必须调 GET /api/works/:id/quality 由服务端机器生成(带 generator 标记,手写/手改报告被拦;声明值=机器实测值);videoPath 指向该片且内容时间(createdAt)不早于成片(复制旧报告刷时间会被拦)
   ④ output/ 下 .ass 字幕(单可视行 ≤15 字、CPS ≤8) ⑤ 绑定模板的作品:模板渲染段必须在合成清单(assembly-plan.json/concat.txt)中实际引用,渲染了但弃用会被拦
 - plan 阶段的 advance 有机器预检,命中即被 400 拦截(提交前逐项自检):
   ① 分镜表时长合计 ${work.explicitParams?.duration ? `≤${work.explicitParams.duration}s(用户显式时长,豁免通用 ${MAX_PLAN_DURATION_S}s 上限——以显式值为准绳)` : `≤${MAX_PLAN_DURATION_S}s`} ② 旁白单句 ≤20 字 ③ 不得引用 material-candidates.md 剔除区素材

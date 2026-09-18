@@ -5,6 +5,7 @@
   import { createTrendWs } from "../lib/ws";
   import ResearchProgress from "../components/ResearchProgress.svelte";
   import InterestTags from "../components/InterestTags.svelte";
+  import { modelLabel } from "../lib/model-labels.js";
 
   let lang = $state(getLanguage());
   function tt(key: string): string { void lang; return t(key); }
@@ -57,7 +58,7 @@
     for (const [key, p] of Object.entries<any>(data.llm?.providers ?? {})) {
       if (p.enabled === false) continue;
       for (const m of p.modelSuggestions ?? []) {
-        opts.push({ value: `${key}:${m}`, label: `${names[key] ?? key} / ${m}` });
+        opts.push({ value: `${key}:${m}`, label: `${names[key] ?? key} / ${modelLabel(m)}` });
       }
     }
     return opts;

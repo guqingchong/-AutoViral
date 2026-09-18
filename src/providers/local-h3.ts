@@ -52,6 +52,36 @@ function framesForSeconds(sec: number): number {
   return raw + ((5 - (raw % 17)) % 17)
 }
 
+// ── SageAttention 加速(2026-09-11,加速调研落地)────────────────────────────
+// 实测(4060Ti 16GB,minimax-h3-local-deployment qa-benchmarks):SageAttention 是
+// 唯一无损可靠加速(~1.3-2×);TE-Speed 在 turbo+INT8 下失真禁用;turbo LoRA 不适用
+// pruned 模型。实现:探测实例是否装了 KJNodes(PatchSageAttentionKJ),装了就把
+// UNET 输出经补丁节点再进 Scheduler/Guider;没装按原图跑并 warn 引导安装。
+// config.h3.sageAttention=false 可整体关闭。
+const SAGE_NODE = 'PatchSageAttentionKJ'
+let sageProbeCache: { available: boolean; at: number } | null = null
+const SAGE_PROBE_TTL_MS = 30 * 60_000
+
+/** 探测实例 KJNodes SageAttention 可用性(进程内缓存 30min;探测失败按不可用且不缓存) */
+async function probeSageAttention(baseUrl: string): Promise<boolean> {
+  if (sageProbeCache && Date.now() - sageProbeCache.at < SAGE_PROBE_TTL_MS) return sageProbeCache.available
+  try {
+    const res = await fetch(`${baseUrl}/object_info/${SAGE_NODE}`, { signal: AbortSignal.timeout(10_000) })
+    const available = res.ok
+    sageProbeCache = { available, at: Date.now() }
+    if (!available) {
+      console.warn('[local-h3] 实例未安装 KJNodes(PatchSageAttentionKJ),SageAttention 加速未启用——' +
+        '安装 ComfyUI-KJNodes 后单镜可提速约 1.3-2×(无损);或在实例侧以 --use-sage-attention 启动 ComfyUI')
+    }
+    return available
+  } catch {
+    return false // 探测失败(隧道抖动等):不缓存,下次再试,按未加速跑
+  }
+}
+
+/** 测试专用:清 SageAttention 探测缓存 */
+export function __resetSageProbeForTests(): void { sageProbeCache = null }
+
 /**
  * shotType 音轨约定(设计文档 §3.1):H3 原生音画同生,需在 prompt 中声明音频意图。
  * dialogue 的台词由调用方写入 prompt(如「主持人开口说:…」),provider 不追加;
@@ -78,7 +108,8 @@ function resolveSize(opts: VideoOpts): { width: number; height: number } {
   return ratio === '16:9' ? { width: 864, height: 480 } : { width: 480, height: 864 }
 }
 
-/** 构建 ComfyUI API 图(PoC api_*.json 的模板化)。传 uploadedFirstFrame 则走 i2v */
+/** 构建 ComfyUI API 图(PoC api_*.json 的模板化)。传 uploadedFirstFrame 则走 i2v;
+ *  sage=true 时经 PatchSageAttentionKJ 补丁节点接入模型(无损加速 ~1.3-2×) */
 function buildWorkflow(opts: {
   prompt: string
   width: number
@@ -87,6 +118,7 @@ function buildWorkflow(opts: {
   seed: number
   filenamePrefix: string
   uploadedFirstFrame?: string
+  sage?: boolean
 }): Record<string, unknown> {
   const h3Inputs: Record<string, unknown> = {
     clip: ['13', 0],
@@ -104,8 +136,8 @@ function buildWorkflow(opts: {
     '104': { class_type: 'MiniMaxH3ImageToVideo', inputs: h3Inputs },
     '15': { class_type: 'RandomNoise', inputs: { noise_seed: opts.seed } },
     '17': { class_type: 'KSamplerSelect', inputs: { sampler_name: 'res_multistep' } },
-    '9': { class_type: 'BasicScheduler', inputs: { model: ['6', 0], scheduler: 'simple', steps: 20, denoise: 1.0 } },
-    '16': { class_type: 'BasicGuider', inputs: { model: ['6', 0], conditioning: ['104', 0] } },
+    '9': { class_type: 'BasicScheduler', inputs: { model: [opts.sage ? '6s' : '6', 0], scheduler: 'simple', steps: 20, denoise: 1.0 } },
+    '16': { class_type: 'BasicGuider', inputs: { model: [opts.sage ? '6s' : '6', 0], conditioning: ['104', 0] } },
     '14': {
       class_type: 'SamplerCustomAdvanced',
       inputs: { noise: ['15', 0], guider: ['16', 0], sampler: ['17', 0], sigmas: ['9', 0], latent_image: ['104', 1] },
@@ -114,6 +146,10 @@ function buildWorkflow(opts: {
     '23': { class_type: 'VAEDecodeAudio', inputs: { samples: ['14', 0], vae: ['24', 0] } },
     '91': { class_type: 'CreateVideo', inputs: { images: ['10', 0], fps: FPS, audio: ['23', 0], bit_depth: 8 } },
     '92': { class_type: 'SaveVideo', inputs: { video: ['91', 0], filename_prefix: opts.filenamePrefix, format: 'auto', codec: 'auto' } },
+  }
+  // SageAttention 补丁节点:UNET → PatchSageAttentionKJ → Scheduler/Guider
+  if (opts.sage) {
+    graph['6s'] = { class_type: SAGE_NODE, inputs: { model: ['6', 0], sage_attention: 'sageattn' } }
   }
   // i2v: 首帧图片先上传到 ComfyUI,再经 LoadImage 节点接入
   if (opts.uploadedFirstFrame) {
@@ -258,6 +294,8 @@ export class LocalH3Provider implements GenerateProvider {
     const { width, height } = resolveSize(opts)
     const length = framesForSeconds(opts.duration ?? 5)
     const filenamePrefix = `h3/${workId}-${basename(filename, '.mp4')}`
+    // SageAttention 无损加速:实例装有 KJNodes 即启用(config.h3.sageAttention=false 可关)
+    const sage = getConfig().h3?.sageAttention !== false && await probeSageAttention(this.baseUrl)
 
     try {
       // i2v: 上传首帧;t2v(dialogue 镜头优先)不传
@@ -286,6 +324,7 @@ export class LocalH3Provider implements GenerateProvider {
                 seed: Math.floor(Math.random() * Number.MAX_SAFE_INTEGER),
                 filenamePrefix,
                 uploadedFirstFrame,
+                sage,
               })
               const output = await this.submitAndPoll(graph)
               const assetPath = join(dataDir, 'works', workId, 'assets', filename)

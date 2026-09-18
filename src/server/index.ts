@@ -36,6 +36,7 @@ import { recoverStuckJobs, startPublishCron } from "../services/publish-service.
 import { recoverStuckRenderJobs } from "../services/video-factory.js";
 import { startHealthLoop, stopHealthLoop } from "../services/instance-service.js";
 import { startH3HealthLoop, stopH3HealthLoop } from "../services/h3-instance-service.js";
+import { scheduleDeepseekModelRefresh } from "../llm/deepseek-models.js";
 import { reconcileWorkStates, initReconcile } from "../services/reconcile.js";
 import { registerAllPublishers } from "../services/publishers/factory.js";
 
@@ -182,6 +183,15 @@ export async function startServer(port: number): Promise<{ server: Server }> {
 
   // 0.7. Start periodic stuck-job sweep (every 5 minutes)
   startPublishCron();
+
+  // 0.7b. AutoDL 开机提醒语音守望(2026-09-18 实测根因修复):
+  // 此前开机语音只挂在 generate/video 的 eco 分支(实际发起生成才触发),
+  // 作品页横幅场景从未接线语音——横幅的意义是"提前催开机",那时还没发起生成,
+  // 语音自然从未响过。守望进程按 reminders 同款聚合每 60s 一扫,离线缺料即播报。
+  {
+    const { startAutodlReminderWatch } = await import("../services/autodl-reminders.js");
+    startAutodlReminderWatch();
+  }
 
   // 0.8. Register all platform publishers (PRD Phase 4a/4b)
   registerAllPublishers();
@@ -385,6 +395,12 @@ export async function startServer(port: number): Promise<{ server: Server }> {
   // 实例手动控制模式：30 秒健康探测驱动 ready/offline 状态，供前端提醒
   startHealthLoop();
   startH3HealthLoop();
+  // DeepSeek 家族模型路由自动更新（2026-09-10）：启动后台拉一次官方
+  // GET /models，之后每 6h 刷新；设置页建议清单读该缓存（详见 llm/deepseek-models.ts）。
+  scheduleDeepseekModelRefresh(() => {
+    const d = getConfig().llm?.providers?.deepseek;
+    return { apiKey: d?.apiKey, baseUrl: d?.baseUrl };
+  });
 
   // 8. Graceful shutdown: drain pending chat saves on SIGTERM/SIGINT
   const shutdown = async (signal: string) => {

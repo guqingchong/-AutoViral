@@ -1,0 +1,4 @@
+#!/bin/sh
+# 密钥泄漏防线(2026-09-18):提交前扫描 staged 内容中的疑似真实凭据。
+# 由 core.hooksPath=.githooks 挂载;绕过仅限确认误报:SECRET_SCAN_SKIP=1 git commit …
+node scripts/secret-scan.mjs

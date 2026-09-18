@@ -29,6 +29,26 @@ function enabled(): boolean {
     && !process.env.VITEST; // 测试环境不真的发声
 }
 
+/**
+ * spawn PowerShell 的唯一入口(speakNow 与测试共用,防止参数漂移)。
+ *
+ * 2026-09-18 实测根因:此前带 detached:true,在本机(Node 25 / Windows 11)
+ * 子进程拿到 PID 却从未执行脚本(marker 文件探针实证)——语音提醒自引入起
+ * 从未响过的真正原因。Windows 上子进程生命周期本就不随父进程结束,
+ * detached 无必要;stdio ignore + windowsHide + unref 已满足 fire-and-forget。
+ */
+export function _spawnPs(ps: string): void {
+  try {
+    const child = spawn("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps], {
+      stdio: "ignore",
+      windowsHide: true, // 2026-09-11 弹窗治理:Electron 无控制台父进程下,缺省会弹黑窗
+    });
+    child.unref();
+  } catch {
+    // 播报失败不影响业务
+  }
+}
+
 function speakNow(text: string): void {
   if (!enabled()) return;
   // base64 传文本,规避 PowerShell 字符串转义/中文编码问题
@@ -41,15 +61,7 @@ function speakNow(text: string): void {
     "$s.Speak($t);",
     "$s.Dispose();",
   ].join(" ");
-  try {
-    const child = spawn("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps], {
-      detached: true,
-      stdio: "ignore",
-    });
-    child.unref();
-  } catch {
-    // 播报失败不影响业务
-  }
+  _spawnPs(ps);
 }
 
 function rateLimited(): boolean {

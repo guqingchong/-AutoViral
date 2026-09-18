@@ -6,6 +6,7 @@
  * spawn 渲染、质量门禁、资产登记。
  */
 import { spawn } from "node:child_process";
+import { SPAWN_HIDE } from "../utils/proc.js";
 import { writeFile, mkdir, rm } from "node:fs/promises";
 import { existsSync, statSync, readFileSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -581,6 +582,13 @@ async function doRender(input: CodeSceneInput): Promise<CodeSceneResult> {
     await padWithLastFrame(outputPath, pad);
     info = await probeMedia(outputPath);
   }
+  // 静音轨归一化(2026-09-18 实测根因):Revideo/web 产物天然无音频流,
+  // "视频无音频轨"是素材评审 Critical 常客——渲染收尾统一补静音轨,
+  // 该问题类别在物理上消失,不再消耗评审轮次
+  try {
+    const { ensureAudioTrack } = await import("../video/ffmpeg.js");
+    if (await ensureAudioTrack(outputPath)) info = await probeMedia(outputPath);
+  } catch { /* 补轨失败不阻断渲染交付,由素材门禁/评审兜底 */ }
   // 质量门禁:无声中间段语义(2026-08-14 起 expectAudio 区分)
   try {
     const { runQualityGate } = await import("./quality-gate.js");
@@ -639,7 +647,18 @@ async function stageDigitalHumanAsset(
   return {
     url: `/staged/${stagedName}`,
     ratio,
-    cleanup: async () => { await rm(stagedPath, { force: true }).catch(() => {}); },
+    // Windows 文件锁:渲染 worker 退出后句柄释放有延迟(高负载全量测试时实测
+    // 单次 rm 静默失败残留中转文件),退避重试兜底;最终失败不阻断主流程
+    cleanup: async () => {
+      for (let i = 0; i < 6; i++) {
+        try {
+          await rm(stagedPath, { force: true });
+          return;
+        } catch {
+          await new Promise((r) => setTimeout(r, 400 * (i + 1)));
+        }
+      }
+    },
   };
 }
 
@@ -660,49 +679,62 @@ export function decidePadSeconds(actual: number | undefined, target: number, tol
   return gap > tolerance ? gap : 0;
 }
 
-/** 用 tpad 克隆末帧把无声渲染段延长 pad 秒(原地替换,返回新探测信息) */
+/** 用 tpad 克隆末帧把无声渲染段延长 pad 秒(原地替换,返回新探测信息)
+ *  2026-09-18:-an 改 -c:a copy——补时不再剥离已有音轨(静音轨归一化后场景段带音轨) */
 export async function padWithLastFrame(outputPath: string, padSeconds: number): Promise<void> {
   const { getFFmpegPath } = await import("../video/ffmpeg.js");
   const ffmpeg = await getFFmpegPath();
   const tmp = outputPath.replace(/\.mp4$/, ".pad.mp4");
-  const { execFile } = await import("node:child_process");
-  const { promisify } = await import("node:util");
-  await promisify(execFile)(ffmpeg, [
+  const { execFileSilent } = await import("../utils/proc.js");
+  await execFileSilent(ffmpeg, [
     "-i", outputPath,
     "-vf", `tpad=stop_mode=clone:stop_duration=${padSeconds.toFixed(3)}`,
     "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
-    "-an", "-y", tmp,
+    "-c:a", "copy", "-y", tmp,
   ]);
   const { rename } = await import("node:fs/promises");
   await rename(tmp, outputPath);
 }
 
 /**
- * 导航超时自动重试一次(2026-08-24 端口竞态根治的兜底):
+ * 瞬时渲染故障自动重试(2026-08-24 端口竞态根治的兜底;2026-09-11 扩展):
  * worker 每任务已随机 vite 端口,但 Edge/系统资源未释放仍可能偶发
- * "Navigation timeout"——这是瞬时故障,重试(新进程+新端口)即可恢复;
+ * "Navigation timeout";Playwright 侧偶发 "Target page, context or browser
+ * has been closed"(渲染进程/浏览器被系统回收,2026-09-10 城市经营作品实测,
+ * 人工手动重渲即恢复)——两者都是瞬时故障,重试(新进程+新端口)即可恢复;
  * 其他错误(参数/代码问题)重试无意义,直接抛出。
  */
+export function isTransientWorkerError(msg: string): boolean {
+  return /navigation timeout/i.test(msg)
+    || /target closed/i.test(msg)
+    || /target (page|context|browser).{0,50}closed/i.test(msg)
+    || /browser has been closed/i.test(msg);
+}
+
+const MAX_TRANSIENT_RETRIES = 2;
+
 async function runWorkerWithRetry(specPath: string, timeoutMs: number, workerFile = "worker.mjs"): Promise<void> {
-  try {
-    await runWorker(specPath, timeoutMs, workerFile);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (err instanceof WorkerTimeout || !/navigation timeout/i.test(msg)) throw err;
-    console.warn("[code-scene] navigation timeout,重试一次(新端口)");
-    await runWorker(specPath, timeoutMs, workerFile);
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await runWorker(specPath, timeoutMs, workerFile);
+      return;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (err instanceof WorkerTimeout || !isTransientWorkerError(msg) || attempt >= MAX_TRANSIENT_RETRIES) throw err;
+      console.warn(`[code-scene] 瞬时渲染故障(${msg.slice(0, 80)}),重试第 ${attempt + 1} 次(新端口)`);
+    }
   }
 }
 
 function runWorker(specPath: string, timeoutMs: number, workerFile = "worker.mjs"): Promise<void> {
   return new Promise((resolve, reject) => {
-    const proc = spawn("node", [workerFile, specPath], { cwd: WORKER_DIR, stdio: ["ignore", "pipe", "pipe"] });
+    const proc = spawn("node", [workerFile, specPath], { cwd: WORKER_DIR, stdio: ["ignore", "pipe", "pipe"], ...SPAWN_HIDE });
     let stderr = "";
     proc.stderr?.on("data", (d) => { stderr += String(d); });
     const timer = setTimeout(() => {
       // R4 进程组 kill：Windows 用 taskkill /T 连带杀死 Playwright/Edge 子进程（修 #02 孤儿进程）
       if (process.platform === "win32") {
-        spawn("taskkill", ["/PID", String(proc.pid), "/T", "/F"], { stdio: "ignore" });
+        spawn("taskkill", ["/PID", String(proc.pid), "/T", "/F"], { stdio: "ignore", ...SPAWN_HIDE });
       } else {
         proc.kill("SIGKILL");
       }

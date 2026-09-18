@@ -56,13 +56,25 @@ export function buildAssetConstraintSection(assetForm?: string, assetSource?: st
       `必须调用本地程序化素材 API: 数据图表 POST /api/assets/data-card(简单数据)或 /api/assets/chart(复杂 ECharts);` +
       `政策/网页原文快照 POST /api/assets/snapshot-card;图标 GET /api/assets/icons。数据来源必须署名。` +
       `快照卡必须传 highlights 红框标注关键条款/段落(禁止整页裸截,截正文区避开广告与侧栏);` +
+      `**字幕安全区(2026-09-11 镜26 复盘)**: 用于视频成片的快照卡/数据卡,底部 13% 是字幕带安全区,禁放正文/红框——` +
+      `snapshot-card 必须传 \`safeBottomPct:13\`,自制卡片同等预留,正文压字幕带评审必打回;` +
       `图表数值与旁白口径必须一致——旁白说"超六成",图表须标">60%"或"超60%",禁止写成精确值 60%;` +
       `结构/流程/逻辑镜头调用 POST /api/assets/code-scene 生成程序化动画(模板清单与参数先 GET /api/assets/code-scene/templates,竖屏 9 款+横屏 11 款 -wide 按成片画幅选);` +
       `**多个镜头必须批量提交(2026-09-01 起,消灭轮询空等)**: 把全部镜头 spec 写进一个 JSON,` +
       `\`curl -X POST http://localhost:3271/api/assets/code-scene/batch -H "Authorization: Bearer $AUTOVIRAL_TOKEN" --data-binary @renders.json\` 一次提交(renders.json: {"workId":"本作品id","renders":[{...镜头1},{...镜头2}]}),` +
       `立即返回 taskId;服务端 2 路并发渲染,完成时系统会推送通知;其间你去做别的事(写文案/备字幕),` +
       `收到完成通知或 60s 后查一次 GET /api/long-tasks/<taskId> 即可。禁止单条渲染循环、禁止 sleep 轮询渲染产物;` +
-      `凡 POST body 含中文(code-scene/chart/snapshot-card 的参数都含),必须先把 JSON 写成 UTF-8 文件再 --data-binary @file,禁止 curl -d 内联(Windows 下必乱码);`,
+      `凡 POST body 含中文(code-scene/chart/snapshot-card 的参数都含),必须先把 JSON 写成 UTF-8 文件再 --data-binary @file,禁止 curl -d 内联(Windows 下必乱码);` +
+      `**数值卡台账(2026-09-11 起强制)**: 凡画面展示精确数值的程序化卡(data-card/chart/code-scene 数值模板),必须登记 \`assets/render-specs.json\`:` +
+      `{"cards":[{"shot":镜号,"file":"产物相对路径","on_screen_value":"屏上数值字符串","caption":"图题/来源说明"}]}——` +
+      `assets 门禁机器逐字核对屏上数字与旁白口径("旁白 4万亿 画面 4.4万亿"直接 400),不登记=放弃自证,评审打回重做;` +
+      `快照卡另须声明几何契约供机器预检(红框/遮罩不再靠 LLM 评审目测):cards[] 加 \`"kind":"snapshot"\` + ` +
+      `\`"highlights":[{left,top,width,height}]\`(红框 % 坐标,必须在显示区 [0,100] 内) + \`"source_px"/"wrap_px"\`(源图与显示区像素,contain 占满率 <0.96 判框坐标错位);` +
+      `有遮罩的镜头声明 \`"mask":{"file":"overlays/xx.png","region":{left,top,width,height},"min_coverage":0.6,"min_max_alpha":0.8}\`,` +
+      `门禁用 ffmpeg 实测区域内 alpha 覆盖率/最大 alpha,不达标直接 400(镜38 眩光遮罩 37% 渐变 major 同类);` +
+      `**视觉核验服务化(2026-09-11 起)**: 快照卡红框是否框住条款、抽帧画面语义等看图核验,一律 \`POST /api/assets/vision-check\`` +
+      `(body: {"workId":"本作品id","images":["assets/frames/x.jpg",...],"prompt":"核验要求+输出 JSON 格式"};视频直接传 {"video":{"path":"assets/clips/x.mp4","times":[秒,...]}} 服务端抽帧),` +
+      `同步返回核验 JSON——**禁止自写 vision 脚本(视觉模型 Key 只在服务端)、禁止 sleep 轮询**;`,
   );
   // smart 精品混合:按镜头内容路由到最优来源,是"出品即精品"的默认策略
   if (assetSource === "smart") {
@@ -136,6 +148,18 @@ export function buildStepContractSection(
       `conform.json 字段: segments[{path}](按分镜顺序)/narration/bgm/subtitle/width/height/fps/loudness{narration:-15,bgm:-34}/color{contrast,saturation};路径相对作品目录,产物默认 output/final.mp4。`,
       `异步语义:返回 202+taskId,完成时系统自动通知你,无需轮询(也可 60s 一次 GET /api/long-tasks/<taskId>);提交后去做发布文案等别的事,禁止 sleep 轮询产物。`,
       `手工 ffmpeg 仅当 conform 返回 5xx/任务 failed 且为 spec 无法表达的特殊需求时兜底,并须在交付说明记录原因。`,
+    ].join("\n"));
+  }
+  // 2026-09-18(四轮连挂根因):素材阶段提交前自检清单,与 advance 机器门禁同规则——
+  // 这些全是 ffprobe/文件系统可判的确定性事实,agent 自查零成本,不再烧评审轮次
+  if (step === "assets") {
+    parts.push([
+      `## 提交前机器自检(advance 门禁同规则,逐条跑完再提交)`,
+      `1. **逐镜素材时长**: ffprobe 实测每镜在用视频 ≥ timeline.json 该镜时长(不足 → 换足长素材或 tpad 补时,并把实测值回填 timeline);`,
+      `2. **逐镜旁白时长**: ffprobe 实测 audio/shot-NN.mp3 ≤ 该镜时长 - 0.2s 安全尾(超长 → 缩短该镜文案重配 TTS,并用实测值重排 timeline.json——禁止手写估值);`,
+      `3. **音轨**: 每个在用 mp4 必须有音频流(\`ffprobe -v error -select_streams a:0 -show_entries stream=codec_type -of csv=p=0 文件\` 有输出);无则补静音轨(\`-f lavfi -i anullsrc=channel_layout=stereo:sample_rate=48000 -c:v copy -c:a aac -shortest\`);`,
+      `4. **引用一致性**: shot-map.json 引用的文件全部存在且不在 _archive;clips/ 下无未登记残留的媒体文件(弃用文件移入 _archive 并登记台账,下划线开头的草稿文件豁免);`,
+      `5. **契约同步收尾**: 修复/替换任何素材后,manifest.md、shot-map.json、timeline.json、registry.json、render-specs.json 中的相关陈述必须与磁盘实测一致——文档间自相矛盾是独立的打回理由。`,
     ].join("\n"));
   }
   if (opts.includeAssets !== false) {
@@ -250,6 +274,9 @@ export function buildResearchDepthSection(depth: ResearchDepth): string {
       `## 研究深度档:完整深度研究(full)`,
       `- ≥6 组查询词(政策原文/权威数据/案例/争议/竞品/国际对照等不同角度),每组记录命中情况;`,
       `- ≥3 篇权威原文用 WebFetch 抓取全文核对(政策文件库/统计局/官方公告优先);`,
+      `- **成稿篇幅 ≥2500 字**(机器门禁核验)——深度档文章过短即不达标,篇幅来自纵深而非注水;`,
+      `- 每个核心论点必须有数据/政策原文展开支撑(背景、数值、条款细节),禁止一句带过;`,
+      `- ≥1 处纵深段落:历史脉络对比 / 国内外对照 / 典型案例拆解,三选一以上;`,
       `- 文章必须含论证链(论点→证据→推论),禁止观点堆砌;`,
       `- 争议/不确定性必须显式呈现,禁止单边叙述。`,
     ].join("\n");
@@ -258,21 +285,31 @@ export function buildResearchDepthSection(depth: ResearchDepth): string {
     return [
       `## 研究深度档:精简研究(quick)`,
       `- 1-2 组查询词即可;本地热搜缓存(/api/trends/*)可直接作为趋势依据;`,
-      `- 只核查将进入口播的事实断言(文号/年份/百分比/机构名),其余从简;`,
+      `- 只核查将入文的事实断言(文号/年份/百分比/机构名),其余从简;`,
       `- 时效优先于深度;在 article.json 显式声明 depth="quick"。`,
     ].join("\n");
   }
   return [
     `## 研究深度档:标准研究(standard)`,
-    `- 2-3 组查询词;核心事实断言(将进入口播的)逐条联网核查并附来源 URL;`,
-    `- ≥1 篇权威原文用 WebFetch 抓取核对;论证链可以简短但必须有证据支撑。`,
+    `- 2-3 组查询词;核心事实断言逐条联网核查并附来源 URL;`,
+    `- ≥1 篇权威原文用 WebFetch 抓取核对;论证链可以简短但必须有证据支撑;`,
+    `- **成稿篇幅 ≥1200 字**(机器门禁按 960 字下限核验,留 20% 容差)。`,
   ].join("\n");
 }
 
 /**
- * 内容研究阶段指令(流水线 v2 第一步)——趋势调研成果 → 事实核查 → 可行性论证
- * → 深度研究 → 最终作品文章落盘(research/article.md + research/article.json)。
+ * 内容研究阶段指令(流水线 v2 第一步)——趋势调研成果 → 事实核查 → 合规与事实可行性
+ * → 深度研究 → 最终研究文章落盘(research/article.md + research/article.json)。
  * article 是后续所有阶段(分镜/口播/素材/发布)的唯一事实源。
+ *
+ * 2026-09-10 定位修正(业主实测意见):article.md 是**纯粹的深度研究文章**——
+ * 此前指令把"时长适配/口播预算/角标"等视频脚本概念前置进研究阶段,导致
+ * 文章被写成口播稿(深度被时长锁死、口语化、衔接断裂)。脚本化转化统一
+ * 收拢到 plan-assets 阶段(文章→script.json 口播稿改写)。
+ *
+ * 2026-09-11 定位再修正:可行性论证剥离"素材可得性"——研究阶段检索素材库/
+ * 评估生成环境(H3/eco)是素材搜索环节的越界残留,素材可得性由 plan-assets
+ * 阶段的"需求驱动素材探查"承担。研究阶段只评合规风险与事实充分性。
  */
 export function buildContentResearchInstruction(
   work: { id: string; title: string; topicHint?: string; purpose?: string; contentForm?: string },
@@ -280,7 +317,7 @@ export function buildContentResearchInstruction(
   isAutoMode: boolean,
 ): string {
   return [
-    `Execute the "内容研究" step(流水线 v2 第一步)。目标:把选题做成一篇**可直接发布的最终作品文章**,并完成事实核查与可行性论证。`,
+    `Execute the "内容研究" step(流水线 v2 第一步)。目标:把选题做成一篇**纯粹的深度研究文章**(行业研究文体),并完成事实核查与合规/事实可行性论证。`,
     `选题: "${work.title}"${work.topicHint ? `\n选题提示: ${work.topicHint}` : ""}`,
     ``,
     `## 输入`,
@@ -291,10 +328,10 @@ export function buildContentResearchInstruction(
     `## 流程(四步,顺序不可跳)`,
     `1. **事实核查**: 拆解选题中必须核验的断言清单(文号/年份/百分比/机构名),逐项 WebSearch + WebFetch 抓原文核验,逐条打「已核验(附 URL)/待核」;`,
     `   - **检索留痕(强制)**: 每一次检索/抓取追加一行到 \`research/search-log.jsonl\`(JSONL 格式: {"ts":"ISO","tool":"WebSearch|WebFetch","query":"…","hits":["url1","url2"]})——评审在该路径逐条取证,无留痕=未检索;`,
-    `2. **可行性论证**: 评估 ①素材可得性(哪些场景素材库可能没有,记入 feasibility.materialRisks) ②合规风险 ③时长适配(文章字数 ÷ 语速 4.5 字/秒 ≈ 目标片长);`,
+    `2. **可行性论证(仅限内容侧)**: 评估 ①合规风险(选题是否触碰平台/法规红线) ②事实充分性(公开证据是否足以支撑论点)——**禁止评估素材可得性、禁止检索素材库、禁止评估生成环境(H3/成本档)**:素材探查是 plan-assets 阶段的职责,与本阶段无关;也不评估视频时长(时长是脚本转化阶段的事);`,
     `3. **深度研究**: 按下方深度档执行;`,
     `4. **成文落盘**(两个文件都必须写):`,
-    `   - \`research/article.md\`: 最终作品文章(可直接发布的中文成稿,非调研笔记);`,
+    `   - \`research/article.md\`: 最终研究文章(行业研究文体的中文成稿,非调研笔记、非视频脚本);`,
     `   - \`research/article.json\`: 机器可读契约,结构如下(所有字段必填):`,
     ``,
     "```json",
@@ -304,13 +341,19 @@ export function buildContentResearchInstruction(
     `  "purpose": "${work.purpose ?? ""}",`,
     `  "contentForm": "${work.contentForm ?? ""}",`,
     `  "depth": "${depth}",`,
-    `  "wordCount": 800,`,
-    `  "speechBudget": { "charsPerSec": 4.5, "targetDurationS": 180, "maxChars": 810 },`,
-    `  "facts": [{ "text": "断言原文", "type": "文号|年份|百分比|机构", "verify_status": "已核验|待核", "source_url": "https://…" }],`,
-    `  "feasibility": { "verdict": "feasible|conditional|infeasible", "materialRisks": ["…"], "notes": "…" },`,
+    `  "wordCount": 3000,`,
+    `  "facts": [{ "text": "断言原文", "type": "文号|年份|时间|百分比|机构|排名|数据|政策条文", "verify_status": "已核验|待核", "source_url": "https://…" }],`,
+    `  "feasibility": { "verdict": "feasible|conditional|infeasible", "risks": ["…合规/事实风险"], "notes": "…" },`,
     `  "sections": [{ "heading": "小节标题", "summary": "小节摘要", "anchor": "sec-1" }]`,
     `}`,
     "```",
+    ``,
+    `## 文体要求(行业深度研究文体——违反即评审打回)`,
+    `- 书面语、完整句式;以第三人称客观叙述为主。**禁止**:第二人称喊话("如果你是…的人""你们那儿")、口播式短句堆砌、设问/号召式收尾("算得过账吗?");`,
+    `- 段落之间是**论证递进**(背景→数据→机制→影响→预判),每段内部观点、证据、推论齐全;禁止镜头式跳切(一句一段、上下文无承接);`,
+    `- 来源引用用文章规范:正文括注来源机构与文件名(如"据财政部国库司《2025年财政收支情况》"),文末列参考来源清单(含 URL)。**禁止"〔来源:…〕"角标格式**——那是视频字幕概念,不是文章引注;`,
+    `- **禁止考虑任何后期制作因素**:时长、口播、封面、钩子、分镜、画面、字幕——文章只为读者写,不为镜头写。口播化/时长适配是 plan-assets 阶段把文章改写成脚本时的工作,不要提前自我设限;`,
+    `- 篇幅服从深度:把论题讲透是第一优先级,**不设字数上限**。`,
     ``,
     buildResearchDepthSection(depth),
     ``,
@@ -319,7 +362,7 @@ export function buildContentResearchInstruction(
     ``,
     `## 铁律`,
     `- **article 是唯一事实源**: 后续分镜/口播/素材全部从这里派生,禁止在后续阶段新造事实;`,
-    `- **待核断言禁进口播**: verify_status=待核 的内容只允许画面披露+"以官方发布为准"(机器门禁会拦);`,
+    `- **待核断言不得作为确定事实陈述**: verify_status=待核 的内容只能以"尚待确认/尚无公开结论"措辞呈现或剔除(机器门禁会拦);`,
     `- **可行性 verdict=infeasible 时不许硬写**: 在 article.json 如实标注并在文章内给出替代叙事角度;`,
     ``,
     isAutoMode
@@ -376,10 +419,16 @@ export function buildPlanAssetsInstruction(
     ``,
     `## 输入(先全部读完再动手)`,
     `- \`research/article.md\`(作品文章,唯一事实源)与 \`research/article.json\`(含 facts/feasibility/sections 锚点);`,
-    `- 可行性结论中的 feasibility.materialRisks——标记过风险的场景,探查时优先验证。`,
+    `- **素材可得性评估由本阶段承担**(2026-09-11 定位修正:研究阶段不再评素材)——逐镜需求检索后,素材库确实没有的场景记入缺口声明(plan/material-gaps.json 或 material-candidates.md 缺口段),这是素材可行性的唯一合法出口。`,
     ``,
     `## 流程`,
-    `1. **成稿脚本**: 从 article 一次成稿 \`assets/script.json\`(scenes 数组:每句旁白带 \`source_section\` 锚定 article.json 的 sections[].anchor;字数 × 语速 4.5 字/秒 ≈ 目标时长,超预算先精简文章语句,禁止塞入文章之外的新事实);`,
+    `1. **成稿脚本(文章→口播稿的转化步,本阶段核心)**: 把 article **改写**(不是搬运)成 \`assets/script.json\` 口播稿——`,
+    `   - 口播化:书面长句拆成口语短句、补钩子与节奏点;研究文章的引注括注转化为画面角标(〔来源:…〕,不朗读);`,
+    `   - **风格基准(2026-09-15 口播"AI腔"治理):写稿前必读 \`skills/content-planning/modules/style-exemplars.md\`——模仿其中真人稿范例的结构动作(判断句定调/设问过渡/类比落地/数字体感翻译),以"模拟语音转文字的口述初稿"方式写,默读顺口为判定标准;严禁 AI 腔负向句式(清单同文件,命中≥3条即返工);`,
+    `   - 时长适配:朗读口径(数字逐位展开、%=百分之、字母逐个)实测旁白 ÷ 4.5 ≈ 目标时长,超预算时优先合并/删除信息点、合并镜头;精简不得牺牲主语完整性和句间承接;`,
+    `   - **禁止回改 article.md 迁就口播**——文章保持研究文体母本,一切脚本化只发生在 script.json;`,
+    `   - scenes 数组:每句旁白带 \`source_section\` 锚定 article.json 的 sections[].anchor;禁止塞入文章之外的新事实;`,
+    `   - **无旁白镜头的结构化表达(2026-09-11 镜50 事故):narration 留空字符串 \`""\`,时长由 duration_s 表达;禁止写"（无旁白）/（空镜）"等占位文字——占位文字没有专门通道,会被 TTS 照读、烧进字幕,门禁直接拦截;`,
     `2. **分镜规划**: 写 \`plan/plan.md\` 分镜表(表头:镜号/时长/旁白/景别/制作方式/素材——旁白列逐句引 script.json,素材列填素材文件名或"程序化:模板名");`,
     `3. **需求驱动素材探查**(与盲下载的本质区别:先有镜头需求,再检索):`,
     `   - 逐镜列出"本镜需要什么素材"(主体/场景/情绪/规格);`,

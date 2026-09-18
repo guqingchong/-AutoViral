@@ -5,7 +5,7 @@ import { promisify } from 'node:util'
 import { dataDir } from '../config.js'
 import type { GenerateProvider, ImageOpts, VideoOpts, GenerateResult } from './base.js'
 
-const execFileAsync = promisify(execFile)
+import { execFileSilent as execFileAsync } from "../utils/proc.js";
 
 const POLL_TIMEOUT = 120 // seconds
 

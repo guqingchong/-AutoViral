@@ -1,11 +1,12 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { t, getLanguage, subscribe } from "../lib/i18n";
-  import { fetchWork, startWorkSession, type Work, fetchSharedAssets, uploadAsset, type AssetFile, toggleEvalMode, forcePassEval, retryWithGuidance } from "../lib/api";
+  import { fetchWork, startWorkSession, type Work, fetchSharedAssets, uploadAsset, type AssetFile, toggleEvalMode, forcePassEval, retryWithGuidance, ApiError, type EvalIssue } from "../lib/api";
   import { createWorkWs } from "../lib/ws";
   import PipelineSteps from "../components/PipelineSteps.svelte";
   import MarkdownBlock from "../components/MarkdownBlock.svelte";
   import AssetPanel from "../components/AssetPanel.svelte";
+  import ForcePassConfirmModal from "../components/ForcePassConfirmModal.svelte";
   interface AskQuestion {
     question: string;
     header: string;
@@ -111,6 +112,9 @@
   // 批次12c-B:kind 区分 eval_blocked / awaiting_human(横幅文案不同);
   // 打开作品时从 pipeline 恢复,不限于当次 WS 事件
   let evalBlocked = $state<{ step: string; attempt: number; kind?: string } | null>(null);
+  // 2026-09-11:force-pass 带病放行逐条确认(后端 409 返回未修复清单)
+  let forcePassPending = $state<{ step: string; stepName: string; nextStep?: string; issues: EvalIssue[] } | null>(null);
+  let forcePassBusy = $state(false);
   let guidanceText = $state("");
 
   /** 从 pipeline 推导受阻状态（作品加载/WS pipeline_updated 时调用） */
@@ -259,7 +263,30 @@
       }
       evalBlocked = null;
     } catch (err) {
+      // 409:评审仍有未修复问题 → 弹逐条确认清单(2026-09-11 带病放行确认)
+      if (err instanceof ApiError && err.status === 409 && Array.isArray(err.payload?.issues)) {
+        forcePassPending = { step: evalBlocked.step, stepName: evalBlocked.step, nextStep, issues: err.payload.issues as EvalIssue[] };
+      } else {
+        alert(`强制通过失败：${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  }
+
+  async function confirmForcePass() {
+    if (!work || !forcePassPending) return;
+    forcePassBusy = true;
+    try {
+      const result = await forcePassEval(workId, forcePassPending.step, forcePassPending.nextStep, true);
+      if (result?.pipeline) {
+        work.pipeline = result.pipeline;
+        work = { ...work };
+      }
+      forcePassPending = null;
+      evalBlocked = null;
+    } catch (err) {
       alert(`强制通过失败：${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      forcePassBusy = false;
     }
   }
 
@@ -956,6 +983,16 @@
         {/if}
 
       </div>
+
+      {#if forcePassPending}
+        <ForcePassConfirmModal
+          issues={forcePassPending.issues}
+          stepName={forcePassPending.stepName}
+          busy={forcePassBusy}
+          onConfirm={confirmForcePass}
+          onCancel={() => (forcePassPending = null)}
+        />
+      {/if}
 
       {#if evalBlocked}
         <div class="eval-blocked-panel">

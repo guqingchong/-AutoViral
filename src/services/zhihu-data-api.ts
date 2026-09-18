@@ -60,7 +60,8 @@ async function callApi<T>(path: string, params: Record<string, string>): Promise
 function extractItems(data: unknown): Record<string, unknown>[] {
   if (!data || typeof data !== "object") return [];
   const d = data as Record<string, unknown>;
-  for (const key of ["data", "items", "list", "results", "Data"]) {
+  // 2026-09-10 实测:线上返回 PascalCase(Data.Items),此前只有小写键导致知乎搜索永远空命中
+  for (const key of ["data", "items", "list", "results", "Data", "Items", "List", "Results"]) {
     const v = d[key];
     if (Array.isArray(v)) return v as Record<string, unknown>[];
     if (v && typeof v === "object") {
@@ -87,10 +88,10 @@ export async function zhihuSearch(query: string, count = 5): Promise<ZhihuSearch
   const data = await callApi<unknown>("/zhihu_search", { Query: query, Count: String(count) });
   return extractItems(data).slice(0, count).map((it) => ({
     title: String(it.title ?? it.Title ?? ""),
-    excerpt: String(it.excerpt ?? it.Excerpt ?? it.content ?? "").slice(0, 300),
-    url: String(it.url ?? it.link ?? ""),
-    author: String(it.author ?? it.author_name ?? ""),
-    voteupCount: Number(it.voteup_count ?? it.voteupCount ?? 0) || undefined,
+    excerpt: String(it.excerpt ?? it.Excerpt ?? it.content ?? it.ContentText ?? "").slice(0, 300),
+    url: String(it.url ?? it.link ?? it.Url ?? ""),
+    author: String(it.author ?? it.author_name ?? it.Author ?? ""),
+    voteupCount: Number(it.voteup_count ?? it.voteupCount ?? it.VoteupCount ?? 0) || undefined,
   })).filter((it) => it.title || it.excerpt);
 }
 
@@ -99,8 +100,8 @@ export async function globalSearch(query: string, count = 5): Promise<ZhihuSearc
   const data = await callApi<unknown>("/global_search", { Query: query, Count: String(count), SearchDB: "all" });
   return extractItems(data).slice(0, count).map((it) => ({
     title: String(it.title ?? it.Title ?? ""),
-    excerpt: String(it.excerpt ?? it.Excerpt ?? it.content ?? "").slice(0, 300),
-    url: String(it.url ?? it.link ?? ""),
-    author: String(it.author ?? it.author_name ?? it.host ?? ""),
+    excerpt: String(it.excerpt ?? it.Excerpt ?? it.content ?? it.ContentText ?? "").slice(0, 300),
+    url: String(it.url ?? it.link ?? it.Url ?? ""),
+    author: String(it.author ?? it.author_name ?? it.host ?? it.Author ?? ""),
   })).filter((it) => it.title || it.excerpt);
 }

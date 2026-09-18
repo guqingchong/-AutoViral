@@ -5,6 +5,8 @@ export class ApiError extends Error {
     public status: number,
     public code?: string,
     message?: string,
+    /** 2026-09-11:409 force_pass_confirm_required 等场景的结构化负载(如 issues 清单) */
+    public payload?: Record<string, unknown>,
   ) {
     super(message || `${status}`);
     this.name = "ApiError";
@@ -16,7 +18,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!res.ok) {
     let body: Record<string, unknown> = {};
     try { body = (await res.json()) as Record<string, unknown>; } catch { /* no body */ }
-    throw new ApiError(res.status, body.code as string | undefined, (body.error as string) || `${res.status} ${res.statusText}`);
+    throw new ApiError(res.status, body.code as string | undefined, (body.error as string) || `${res.status} ${res.statusText}`, body);
   }
   return res.json();
 }
@@ -273,6 +275,12 @@ export async function rejectWork(
   });
 }
 
+/** 发布中心审核通过：reviewing → approved（进入待发布栏）。
+ *  专用人工确认端点——PUT 直写 status 已被服务端门禁禁止（403）。 */
+export async function approveWork(id: string): Promise<{ ok: boolean; status: WorkStatus }> {
+  return request(`/api/works/${encodeURIComponent(id)}/approve`, { method: "POST" });
+}
+
 export async function createWorkApi(input: {
   title: string;
   type: WorkType;
@@ -442,8 +450,15 @@ export async function toggleEvalMode(workId: string): Promise<{ evaluationMode: 
   return post<{ evaluationMode: boolean }>(`/api/works/${encodeURIComponent(workId)}/eval/toggle`, {});
 }
 
-export async function forcePassEval(workId: string, step: string, nextStep?: string): Promise<{ pipeline: Record<string, PipelineStep> }> {
-  return post<{ pipeline: Record<string, PipelineStep> }>(`/api/works/${encodeURIComponent(workId)}/eval/force-pass`, { step, nextStep });
+/** 评审未修复问题(force-pass 409 逐条确认清单,2026-09-11) */
+export interface EvalIssue {
+  severity: "critical" | "major" | "minor";
+  description: string;
+  file?: string;
+}
+
+export async function forcePassEval(workId: string, step: string, nextStep?: string, confirm?: boolean): Promise<{ pipeline: Record<string, PipelineStep> }> {
+  return post<{ pipeline: Record<string, PipelineStep> }>(`/api/works/${encodeURIComponent(workId)}/eval/force-pass`, { step, nextStep, confirm });
 }
 
 export async function retryWithGuidance(workId: string, step: string, guidance: string): Promise<void> {

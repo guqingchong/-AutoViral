@@ -44,7 +44,7 @@ export interface LlmConfig {
    *  assets/assembly 必须看图,恒走 eval 档+视觉路由,不受此影响 */
   evalLightModel?: string;
   /** 可选价格表（元/百万 tokens），用于 llm_usage 成本估算：{ "deepseek:deepseek-v4-pro": {input:4.5, output:13.5, cacheRead:0.15} } */
-  priceTable?: Record<string, { input: number; output: number; cacheRead?: number }>;
+  priceTable?: Record<string, { input: number; output: number; cacheRead?: number; offPeak?: { input: number; output: number; cacheRead?: number } }>;
   guard?: {
     maxStepsPerTurn?: number;    // 默认 200，防工具死循环
     maxTurnMinutes?: number;     // 默认 30
@@ -107,6 +107,8 @@ export interface Config {
     tunnel?: H3TunnelConfig;       // SSH 隧道（缺省时按 H3_TUNNEL_DEFAULTS 补全）
     /** 多实例候选:常开多台 AutoDL 实例时全部列入,隧道按序尝试、哪个能用用哪个。优先于单数 tunnel */
     tunnels?: H3TunnelConfig[];
+    /** SageAttention 无损加速(默认 true;实例装有 KJNodes 才生效,自动探测降级) */
+    sageAttention?: boolean;
   };
   pexels?: { apiKey: string };
   pixabay?: { apiKey: string };

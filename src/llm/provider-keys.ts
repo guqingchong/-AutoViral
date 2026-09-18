@@ -23,11 +23,17 @@ export const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
   deepseek: {
     protocol: "openai",
     baseUrl: "https://api.deepseek.com/v1",
-    visionModel: undefined,  // 默认不配(2026-08-16 实证公开 API 无视觉);2026-08-21 起可选实验视觉模型 deepseek-v4-flash-vision-exp,在设置页自行配置
+    // 2026-09-10：V4.1 Flash 原生多模态上线，deepseek 家族默认视觉模型从
+    // 实验模型 deepseek-v4-flash-vision-exp 切换为 deepseek-flash（实测准确
+    // 读图、image token 计量正常）。config.yaml 显式配置仍可覆盖本默认。
+    visionModel: "deepseek-flash",
     // 2026-08-18 实测:deepseek-v4-pro 长链工具回合强制要求回填 reasoning_content
     // (400: The `reasoning_content` in the thinking mode must be passed back)，短链不触发
     passReasoningBack: true,
-    modelSuggestions: ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-flash-vision-exp"],
+    // 静态兜底清单（2026-09-10 收敛：v4-pro/v4-flash/vision-exp 已由用户指令
+    // 从设置页移除，V4.1 Flash 以 deepseek-flash 服务）。运行时设置页优先读
+    // deepseek-models.ts 的官方目录动态缓存，仅拉取从未成功时回退本清单。
+    modelSuggestions: ["deepseek-flash"],
   },
   kimi: {
     protocol: "openai",

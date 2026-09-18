@@ -12,6 +12,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { SPAWN_HIDE } from "../utils/proc.js";
 import { existsSync } from "node:fs";
 import { getFFmpegPath } from "../video/ffmpeg.js";
 import { videoEncoderArgs } from "./encoder.js";
@@ -39,6 +40,11 @@ export interface ConformSpec {
   fps?: number;
   /** 响度目标（LUFS） */
   loudness?: { narration?: number; bgm?: number };
+  /** BGM 侧链闪避(2026-09-11 标准化):有旁白+BGM 时默认开。
+   *  旁白时 BGM 自动压低、旁白间隙快速回升(release 400ms)——
+   *  根治 agent 手搓 sidechain 参数失当导致的"旁白间隙 0.3~0.6s 近静音"
+   *  (w_20260910_1758_479 评审 minor)。显式传 false 退回静态 amix。 */
+  ducking?: boolean | { threshold?: number; ratio?: number; attack?: number; release?: number };
   /** 调色参数 */
   color?: { contrast?: number; saturation?: number; brightness?: number };
   /** 输出路径（绝对） */
@@ -55,7 +61,7 @@ const CONFORM_FFMPEG_TIMEOUT_MS = 30 * 60_000;
 
 function runFfmpeg(ffmpeg: string, args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
-    const proc = spawn(ffmpeg, args, { stdio: ["ignore", "ignore", "pipe"] });
+    const proc = spawn(ffmpeg, args, { stdio: ["ignore", "ignore", "pipe"], ...SPAWN_HIDE });
     let stderr = "";
     proc.stderr?.on("data", (c: Buffer) => {
       stderr += c.toString();
@@ -135,7 +141,8 @@ export async function conformWork(spec: ConformSpec): Promise<ConformResult> {
     vlabel = "[vsub]";
   }
 
-  // 4. 混音：配音/BGM 分别 loudnorm 后 amix
+  // 4. 混音：配音/BGM 分别 loudnorm;双轨时默认 sidechain 闪避(2026-09-11 标准化)——
+  //    BGM 随旁白自动压低、间隙 400ms 内回升,杜绝旁白间隙近静音;ducking:false 退回静态 amix
   const hasNarration = narrationIdx >= 0;
   const hasBgm = bgmIdx >= 0;
   if (hasNarration) {
@@ -145,7 +152,21 @@ export async function conformWork(spec: ConformSpec): Promise<ConformResult> {
     filterParts.push(`[${bgmIdx}:a]loudnorm=I=${spec.loudness?.bgm ?? -34}:TP=-3:LRA=11,aloop=loop=-1:size=0[abgm]`);
   }
   if (hasNarration && hasBgm) {
-    filterParts.push(`[anar][abgm]amix=inputs=2:duration=first:dropout_transition=2[aout]`);
+    const duck = spec.ducking === false ? null : {
+      threshold: typeof spec.ducking === "object" ? (spec.ducking.threshold ?? 0.02) : 0.02,
+      ratio: typeof spec.ducking === "object" ? (spec.ducking.ratio ?? 8) : 8,
+      attack: typeof spec.ducking === "object" ? (spec.ducking.attack ?? 20) : 20,
+      release: typeof spec.ducking === "object" ? (spec.ducking.release ?? 400) : 400,
+    };
+    if (duck) {
+      // sidechaincompress 同时消耗主路(BGM)与侧链(旁白)两路输入,
+      // 旁白需先 asplit:一路作侧链,一路进 amix 与压后的 BGM 混合
+      filterParts.push(`[anar]asplit=2[anar_mix][anar_sc]`);
+      filterParts.push(`[abgm][anar_sc]sidechaincompress=threshold=${duck.threshold}:ratio=${duck.ratio}:attack=${duck.attack}:release=${duck.release}:makeup=1[aducked]`);
+      filterParts.push(`[anar_mix][aducked]amix=inputs=2:duration=first:dropout_transition=2[aout]`);
+    } else {
+      filterParts.push(`[anar][abgm]amix=inputs=2:duration=first:dropout_transition=2[aout]`);
+    }
   } else if (hasNarration || hasBgm) {
     filterParts.push(`${hasNarration ? "[anar]" : "[abgm]"}anull[aout]`);
   }

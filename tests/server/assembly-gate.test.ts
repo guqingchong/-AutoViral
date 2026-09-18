@@ -66,7 +66,7 @@ describe("assertAssemblyDeliverables", () => {
     const out = join(dir, "output");
     await mkdir(out, { recursive: true });
     await writeFile(join(out, "final.mp4"), "fake");
-    await writeFile(join(out, "quality-report.json"), JSON.stringify({ videoPath: "/x/old.mp4" }));
+    await writeFile(join(out, "quality-report.json"), JSON.stringify({ generator: "autoviral-runQualityGate@1", videoPath: "/x/old.mp4" }));
     await writeFile(join(out, "subs.ass"), ASS_BAD);
     const keys = assertAssemblyDeliverables(dir).map((i) => i.key);
     expect(keys).toContain("publish_text");
@@ -83,7 +83,7 @@ describe("assertAssemblyDeliverables", () => {
     // report 必须不早于 final:先建 final(旧时间)再建 report
     const old = new Date(Date.now() - 60_000);
     await utimes(join(out, "final.mp4"), old, old);
-    await writeFile(join(out, "quality-report.json"), JSON.stringify({ videoPath: join(out, "final.mp4") }));
+    await writeFile(join(out, "quality-report.json"), JSON.stringify({ generator: "autoviral-runQualityGate@1", videoPath: join(out, "final.mp4") }));
     expect(assertAssemblyDeliverables(dir)).toEqual([]);
   });
 
@@ -93,7 +93,7 @@ describe("assertAssemblyDeliverables", () => {
     await writeFile(join(out, "job_01_final.mp4"), "fake-segment");
     await writeFile(join(out, "publish-text.md"), "# t");
     await writeFile(join(out, "subs.ass"), ASS_OK);
-    await writeFile(join(out, "quality-report.json"), JSON.stringify({ videoPath: join(out, "job_01_final.mp4") }));
+    await writeFile(join(out, "quality-report.json"), JSON.stringify({ generator: "autoviral-runQualityGate@1", videoPath: join(out, "job_01_final.mp4") }));
     const keys = assertAssemblyDeliverables(dir).map((i) => i.key);
     expect(keys).toContain("final_video"); // 分段不能冒充成片
   });
@@ -106,7 +106,7 @@ describe("assertAssemblyDeliverables", () => {
     await writeFile(join(out, "subs.ass"), ASS_OK);
     const old = new Date(Date.now() - 60_000);
     await utimes(join(out, "final_douyin.mp4"), old, old);
-    await writeFile(join(out, "quality-report.json"), JSON.stringify({ videoPath: join(out, "final_douyin.mp4") }));
+    await writeFile(join(out, "quality-report.json"), JSON.stringify({ generator: "autoviral-runQualityGate@1", videoPath: join(out, "final_douyin.mp4") }));
     expect(assertAssemblyDeliverables(dir)).toEqual([]);
   });
 });
@@ -179,7 +179,7 @@ describe("advance assembly 机器门禁", () => {
     await writeFile(join(out, "subs.ass"), ASS_OK);
     const old = new Date(Date.now() - 60_000);
     await utimes(join(out, "final.mp4"), old, old);
-    await writeFile(join(out, "quality-report.json"), JSON.stringify({ videoPath: join(out, "final.mp4") }));
+    await writeFile(join(out, "quality-report.json"), JSON.stringify({ generator: "autoviral-runQualityGate@1", videoPath: join(out, "final.mp4") }));
     // M3:绑定模板的作品须渲染模板段并进入合成清单——seed 模板渲染记录 + assembly-plan.json 引用
     const { createRenderJob } = await import("../../src/db/render-jobs-repo.js");
     createRenderJob({

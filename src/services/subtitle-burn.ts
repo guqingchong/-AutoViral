@@ -28,7 +28,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { videoEncoderArgs } from "./encoder.js";
 
-const execFileAsync = promisify(execFile);
+import { execFileSilent as execFileAsync } from "../utils/proc.js";
 
 /** ffmpeg 可执行路径:环境变量 FFMPEG_PATH 优先(与 src/video/ffmpeg.ts 探测逻辑同理),否则走 PATH。 */
 function getFFmpegPath(): string {

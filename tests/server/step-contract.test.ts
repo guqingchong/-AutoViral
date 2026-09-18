@@ -99,7 +99,13 @@ describe("流水线 v2 阶段指令(批次1)", () => {
     const s = buildContentResearchInstruction(W2, "full", true);
     expect(s).toContain("research/article.md");
     expect(s).toContain("research/article.json");
-    expect(s).toContain("speechBudget");
+    // 2026-09-10 定位修正:口播预算迁出研究阶段(article=纯粹深度研究文章,
+    // 脚本化转化收拢 plan-assets 的 script.json)——研究指令不得再含 speechBudget
+    expect(s).not.toContain("speechBudget");
+    // 2026-09-11 定位再修正:素材可得性评估是素材搜索环节的越界残留,
+    // 研究指令不得再出现素材可得性/materialRisks(素材探查归 plan-assets)
+    expect(s).not.toContain("materialRisks");
+    expect(s).not.toContain("素材可得性必须有");
     expect(s).toContain("feasibility");
     expect(s).toContain("完整深度研究(full)");
     expect(s).toContain('"completedStep":"content-research"');

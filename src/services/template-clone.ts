@@ -27,7 +27,7 @@ import { getContext } from "./platform-adapters/playwright-helper.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
-const execFileAsync = promisify(execFile);
+import { execFileSilent as execFileAsync } from "../utils/proc.js";
 
 export type CloneStage = "download" | "frames" | "analyze" | "build";
 

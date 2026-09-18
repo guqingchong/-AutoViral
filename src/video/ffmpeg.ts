@@ -3,7 +3,7 @@ import { promisify } from "node:util";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
-const execFileAsync = promisify(execFile);
+import { execFileSilent as execFileAsync } from "../utils/proc.js";
 
 let ffmpegPathCache: string | null = null;
 
@@ -32,6 +32,31 @@ export interface FFprobeInfo {
   /** Q1 补齐：采样率(Hz)与声道数——96kHz 事故的机器拦截依据 */
   sampleRate?: number;
   channels?: number;
+}
+
+/**
+ * 静音轨归一化(2026-09-18 实测根因修复):程序化渲染(code-scene)与部分
+ * stock 素材天然无音频流,"视频无音频轨"是素材评审 Critical 常客
+ * (w_20260918_1519_b44 因此连挂两轮)。收尾/入库统一调本函数:
+ * 无音轨则 mux 48kHz 立体声静音 AAC(长度对齐视频,-shortest),有音轨原样跳过。
+ * 返回是否实际补轨。webm 容器用 libopus(AAC 不合法)。
+ */
+export async function ensureAudioTrack(path: string): Promise<boolean> {
+  const info = await probeMedia(path);
+  if (info.hasAudio) return false;
+  const ffmpeg = await getFFmpegPath();
+  const isWebm = /\.webm$/i.test(path);
+  const tmp = path.replace(/(\.[^.]+)$/, ".audnorm$1");
+  await execFileAsync(ffmpeg, [
+    "-i", path,
+    "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
+    "-map", "0:v", "-map", "1:a",
+    "-c:v", "copy", ...(isWebm ? ["-c:a", "libopus"] : ["-c:a", "aac", "-b:a", "128k"]),
+    "-shortest", "-y", tmp,
+  ]);
+  const { rename } = await import("node:fs/promises");
+  await rename(tmp, path);
+  return true;
 }
 
 export async function probeMedia(path: string): Promise<FFprobeInfo> {

@@ -6,7 +6,10 @@ import yaml from "js-yaml";
 
 // P1-T7:GET /api/config llm 段掩码呈现 + PUT 合并语义 + /api/llm/ping + enabled 路由闸
 
-const REAL_KEY = "***REMOVED-LEAKED-KEY***";
+// 2026-09-18 安全事件:此前此处硬编码了真实 DeepSeek key 并被推送到公开 GitHub 仓库
+// (0fb96c3, 2026-08-17),导致 key 泄漏被第三方滥用(v4-Pro 日耗 3 亿 tokens)。
+// 测试逻辑只验证掩码保留语义,不需要真实 key——一律使用假 key。
+const REAL_KEY = "sk-test-fake-deepseek-key-0000000000000000";
 
 function cfgWithLlm(llm?: unknown) {
   return {

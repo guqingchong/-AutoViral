@@ -8,6 +8,7 @@ import { homedir } from "node:os";
 import yaml from "js-yaml";
 import { loadConfig, getConfig, saveConfig, dataDir, getConfigDir, HEYGEM_TUNNEL_DEFAULTS, H3_TUNNEL_DEFAULTS, type AnalyticsSource, type HeygemTunnelConfig, type H3TunnelConfig, type LlmConfig, type LlmProviderConfig } from "../config.js";
 import { PROVIDER_PRESETS } from "../llm/provider-keys.js";
+import { getDeepseekModelSuggestions } from "../llm/deepseek-models.js";
 import { loadModelProfiles } from "../llm/model-profiles.js";
 import { modelSupportsImage } from "../llm/capability.js";
 import { runJsonPrompt } from "../services/llm-json.js";
@@ -139,7 +140,7 @@ apiRoutes.get("/api/health", (c) => c.json({ ok: true, version: "0.2.0" }));
 
 // ── Python script runner for real-time trend data ────────────────────────────
 
-const execFileAsync = promisify(execFile);
+import { execFileSilent as execFileAsync } from "../utils/proc.js";
 
 // 检测 GBK→UTF-8 mojibake:Windows shell + curl 传中文字面量时,中文 GBK 字节被 daemon
 // 按 UTF-8 解析。Node 默认 fatal=false,非法序列被替换成 U+FFFD;宽松解码时也可能落到
@@ -318,7 +319,10 @@ function presentLlm(llm: LlmConfig | undefined): Record<string, unknown> {
       apiKey: maskApiKey(o?.apiKey),
       visionModel: o?.visionModel ?? preset.visionModel ?? "",
       enabled: o?.enabled !== false,
-      modelSuggestions: preset.modelSuggestions ?? [],
+      // deepseek 家族路由自动更新（2026-09-10）：设置页优先读官方目录动态缓存
+      // （deepseek-models.ts，排除 v4-pro/v4-flash/vision-exp），拉取从未成功时
+      // 回退 provider-keys 静态兜底；其余 provider 沿用静态建议清单。
+      modelSuggestions: key === "deepseek" ? getDeepseekModelSuggestions() : (preset.modelSuggestions ?? []),
     };
   }
   for (const [key, o] of Object.entries(llm?.providers ?? {})) {
@@ -699,6 +703,14 @@ apiRoutes.get("/api/works", async (c) => {
       } catch {}
       return w;
     }));
+    // 2026-09-10 实测修复:长回合期间 updated_at/步骤时间戳不变,看板"最近活动"假死。
+    // 会话 loop 活动(ws-bridge 逐事件心跳)才是真实活性,取二者较大值下发。
+    for (const w of enriched) {
+      const sessMs = wsBridge?.getSessionActivityAt(w.id);
+      if (sessMs && sessMs > (w.lastActivityAt ? Date.parse(w.lastActivityAt) : 0)) {
+        w.lastActivityAt = new Date(sessMs).toISOString();
+      }
+    }
     return c.json({ works: enriched });
   } catch {
     return c.json({ works: [] });
@@ -761,13 +773,19 @@ function announceReviewReady(workId: string): void {
 }
 
 /** 2026-08-31 实测需求②:assets 阶段完成且本作品用过 H3 → 提醒可以关机(AutoDL 按时计费)。
- *  挂点:assets 标 done 的两条路径(直接推进 + 评审通过后推进)。 */
+ *  挂点:assets 标 done 的两条路径(直接推进 + 评审通过后推进)。
+ *  2026-09-11 扩展:除"用过 H3"外,实例当前在线也提醒——用户手动开机后 agent
+ *  降级静帧(从未调用 H3)的场景此前不提醒,实例空转持续计费。 */
 function announceH3ShutdownIfUsed(workId: string): void {
-  import("../services/h3-instance-service.js").then(({ h3WasUsedForWork }) => {
-    if (!h3WasUsedForWork(workId)) return;
-    const text = `作品 ${workId} 的 AI 视频镜头已全部生成完毕,AutoDL 实例现在可以关机了`;
+  import("../services/h3-instance-service.js").then(async ({ h3WasUsedForWork, checkH3Health }) => {
+    const used = h3WasUsedForWork(workId);
+    const online = used ? false : await checkH3Health().catch(() => false);
+    if (!used && !online) return;
+    const text = used
+      ? `作品 ${workId} 的 AI 视频镜头已全部生成完毕,AutoDL 实例现在可以关机了`
+      : `作品 ${workId} 素材阶段已完成,本作品未用到 AutoDL 生成但实例当前在线;若仅为本作品开机,请关闭 AutoDL 实例以免持续计费`;
     wsBridge?.broadcastGlobal("notify", { level: "info", kind: "h3_shutdown_ok", text, workId });
-    voiceNotify(`AI 视频镜头已全部生成完毕,可以关闭 AutoDL 实例`, `h3-shutdown:${workId}`);
+    voiceNotify(used ? `AI 视频镜头已全部生成完毕,可以关闭 AutoDL 实例` : `素材阶段已完成,AutoDL 实例在线但未使用,如不再需要请关机`, `h3-shutdown:${workId}`);
   }).catch(() => {});
 }
 
@@ -892,6 +910,30 @@ apiRoutes.post("/api/works/:id/reject", async (c) => {
     return c.json({ ok: true, status: newStatus, pipeline: work.pipeline, delivery: "queued" });
   } catch (err) {
     return c.json({ error: err instanceof Error ? err.message : "Reject error" }, 500);
+  }
+});
+
+// POST /api/works/:id/approve — 发布中心"审核通过"：reviewing → approved（进入待发布栏）。
+// 与 reject 同属人工确认通道：approved 是 deriveStatusFromPipeline 的粘性用户确认态，
+// 流水线派生永远不会产出它，必须有专用人工端点。
+// 2026-09-10 缺陷修复：前端经 PUT 直写 status 被批次2.5 门禁（禁止 PUT 直写
+// pipeline/status）403 拦截，"审核通过"整体失效——此处补上缺失的专用通道。
+// 与 reject 不同：approve 不驱动重做、不入队，仅做状态确认（发布由后续发布端点驱动）。
+apiRoutes.post("/api/works/:id/approve", async (c) => {
+  const id = c.req.param("id");
+  try {
+    const work = await getWork(id);
+    if (!work) return c.json({ error: "Work not found" }, 404);
+    // 幂等：重复点击/网络重试不报错
+    if (work.status === "approved") return c.json({ ok: true, status: "approved" });
+    if (work.status !== "reviewing") {
+      return c.json({ error: `仅待审核（reviewing）作品可审核通过，当前状态：${work.status}` }, 400);
+    }
+    await storeUpdateWork(id, { status: "approved" } as any);
+    log("info", "api", "work_approved", id, {});
+    return c.json({ ok: true, status: "approved" });
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : "Approve error" }, 500);
   }
 });
 
@@ -1307,6 +1349,8 @@ apiRoutes.post("/api/assets/snapshot-card", async (c) => {
     url?: string; imagePath?: string;
     highlights?: Array<{ left: number; top: number; width: number; height: number; color?: string; label?: string }>;
     title?: string; source?: string; width?: number; height?: number; style?: "dark" | "light";
+    /** 底部字幕安全区(占卡高 %);用于视频成片的卡必须传 13(2026-09-11 镜26 复盘) */
+    safeBottomPct?: number;
   }>().catch(() => ({}) as any);
   if (!body.url && !body.imagePath) return c.json({ error: "url 或 imagePath 必须提供一个" }, 400);
   try {
@@ -1315,6 +1359,49 @@ apiRoutes.post("/api/assets/snapshot-card", async (c) => {
     return c.json(result);
   } catch (err) {
     return c.json({ error: err instanceof Error ? err.message : "快照卡渲染失败" }, 400);
+  }
+});
+
+// POST /api/assets/still-clip - 静图转视频段(2026-09-11,快照卡镜头抖动复盘)
+// 默认纯静态+淡入淡出;motion:"push" 走 3× 超采样 zoompan(防抖红线方案②服务化)
+apiRoutes.post("/api/assets/still-clip", async (c) => {
+  const body = await c.req.json<{ workId?: string; image?: string; duration?: number; out?: string; size?: { w: number; h: number }; motion?: "none" | "push"; bg?: string; fps?: number }>().catch(() => ({}) as any);
+  if (!body.image || !body.duration || !body.out) return c.json({ error: "image/duration/out 必填" }, 400);
+  try {
+    const { renderStillClip } = await import("../services/still-clip.js");
+    return c.json(await renderStillClip(body as Parameters<typeof renderStillClip>[0]));
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : "静图转视频失败" }, 400);
+  }
+});
+
+// POST /api/assets/subtitles - 字幕生成服务化(2026-09-11,字幕截断复盘)
+// 语义断行(数字/英文词原子不拆,标点不悬行首)+ karaoke \kf 均布;空 text=无旁白镜头不出字幕条
+apiRoutes.post("/api/assets/subtitles", async (c) => {
+  const body = await c.req.json<{ workId?: string; lines?: Array<{ text: string; start: number; end: number }>; out?: string }>().catch(() => ({}) as any);
+  if (!body.workId) return c.json({ error: "workId 必填" }, 400);
+  if (!Array.isArray(body.lines) || !body.lines.length) return c.json({ error: "lines 必填:[{text,start,end}],无旁白镜头传空 text" }, 400);
+  try {
+    const { generateSubtitles } = await import("../services/subtitle-gen.js");
+    return c.json(await generateSubtitles(body.workId, body.lines, body.out));
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : "字幕生成失败" }, 400);
+  }
+});
+
+// POST /api/assets/vision-check - 视觉核验服务化(2026-09-11,assets 复盘改进点 3)
+// 消灭 agent 手搓 vision-check.mjs + sleep 轮询:图片/视频抽帧 → 视觉模型 JSON,一次同步调用
+apiRoutes.post("/api/assets/vision-check", async (c) => {
+  const body = await c.req.json<{
+    workId?: string; images?: string[]; video?: { path: string; times?: number[] }; prompt?: string; timeoutMs?: number;
+  }>().catch(() => ({}) as any);
+  if (!body.prompt) return c.json({ error: "prompt 必填——说明核验什么、要求输出什么 JSON" }, 400);
+  if (!body.images?.length && !body.video?.path) return c.json({ error: "images 或 video 必须提供一个" }, 400);
+  try {
+    const { runVisionCheck } = await import("../services/vision-check.js");
+    return c.json(await runVisionCheck(body as Parameters<typeof runVisionCheck>[0], await loadConfig()));
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : "视觉核验失败" }, 400);
   }
 });
 
@@ -2607,8 +2694,13 @@ apiRoutes.post("/api/works/:id/step/:step", async (c) => {
           `  3. 参考命令：\`ffmpeg -i narration.mp3 -i bgm.mp3 -filter_complex "[0:a]loudnorm=I=-15:TP=-1.5:LRA=11[v];[1:a]loudnorm=I=-34:TP=-3:LRA=11[bgm];[v][bgm]amix=inputs=2:duration=first:dropout_transition=2[a]" -map 0:v -map "[a]" ...\``,
           `  4. BGM 能量强（重鼓点/重低频）时再降 3dB（I=-37）；旁白清晰度永远优先于氛围`,
           `- BGM 时长必须 ≥ 视频时长（/api/generate/music 传 duration 自动循环补齐）；接缝处交叉淡化`,
-          `- 合成后必须验证：对成片跑 volumedetect，并抽一段旁白间隙确认 BGM 不喧宾夺主；有条件时用 sidechaincompress 让 BGM 随旁白自动闪避`,
-          `- **静态卡防抖红线（强制）**：数据卡/图表/快照卡等静态图片转视频时，禁止裸用 zoompan 快速推镜（亚像素步进必然抖动）。只许三种呈现：①纯静态展示 + 淡入淡出转场；②必须推镜时先把图片 scale 到 ≥3 倍分辨率再 zoompan（如 \`scale=3240:-2,zoompan=z='min(zoom+0.0008,1.05)'\`，总变倍 ≤5%）；③走模板渲染。合成后抽相邻两帧比对，肉眼可见抖动即重做`,
+          `- 合成后必须验证：对成片跑 volumedetect，并抽一段旁白间隙确认 BGM 不喧宾夺主`,
+          `- **旁白闪避(ducking)标准化(2026-09-11 起,强制)**:旁白+BGM 混音必须带侧链闪避,且只用标准参数——` +
+            `\`[bgm][旁白]sidechaincompress=threshold=0.02:ratio=8:attack=20:release=400:makeup=1\`(旁白需先 asplit 出侧链支路);` +
+            `release 必须 ≤500ms(旁白间隙 BGM 快速回升,间隙近静音= ducking 失当,评审必打回),ratio ≤8(压太深间隙听感断裂);` +
+            `走 POST /api/works/:id/conform 合成时 ducking 默认已开(可 ducking:false 关闭),优先用服务而非手搓滤镜`,
+          `- **静态卡防抖红线(强制,2026-09-11 服务化)**：数据卡/图表/快照卡等静态图片转视频,**必须调 \`POST /api/assets/still-clip\`**({"workId","image":"assets/images/x.png","duration":秒,"out":"assets/clips/shot-NN.mp4"}):默认纯静态+淡入淡出(零抖动);需要推镜传 motion:"push"(服务端 3× 超采样 zoompan,总变倍 ≤4%)。**禁止自写 ffmpeg zoompan/scale 链**——裸 zoompan(1× 采样)亚像素步进必然抖动,评审抽帧比对打回`,
+          `- **字幕生成(强制,2026-09-11 服务化)**:ass 字幕必须调 \`POST /api/assets/subtitles\`({"workId","lines":[{"text","start","end"}],"out":"output/final.ass"})生成——语义断行(数字/英文词原子不拆,标点不悬行首,≤15 字/行)+ karaoke \\kf 均布;**禁止手搓字幕断行**(硬切字数会把 "2025" 腰斩成 "20|25");无旁白镜头 lines 里传空 text(或省略该条),**禁止写"（无旁白）"等占位文字**(会被 TTS 照读并烧进字幕)`,
           `- **布局安全区断言（必做）**：数字人窗口/字卡 overlay 的坐标矩形 与 字幕带矩形 不得相交。先确定字幕带的 y 区间（含字号行高），再选 overlay 坐标使其完全避开；二者由同一份布局常量计算，禁止分别拍脑袋写坐标`,
           `- 合成完成后抽帧复核：在 10%/50%/90% 三个时间点抽帧检查字幕与数字人/字卡无遮挡`,
           `- **出片质感红线（强制，2026-08-14）**：`,
@@ -3037,7 +3129,9 @@ async function pickFallbackEvalModel(
     ["glm", "glm-4.6"],
     ["deepseek", "deepseek-v4-pro"],
     // vision 评审补充候选(assets/assembly/material-search 需要看图)
-    ["deepseek", "deepseek-v4-flash-vision-exp"],
+    // 2026-09-10：实验模型 deepseek-v4-flash-vision-exp → V4.1 Flash
+    // （deepseek-flash 原生多模态，实测读图正常；vision-exp 已随目录收敛下线）
+    ["deepseek", "deepseek-flash"],
     ["glm", "glm-5.3-flash"],
     ["glm", "glm-5v-turbo"],
   ];
@@ -3223,6 +3317,11 @@ export async function runEvaluation(workId: string, completedStep: string, nextS
         if (effectiveNextStep) {
           freshWork.pipeline[effectiveNextStep].status = "active";
           freshWork.pipeline[effectiveNextStep].startedAt = new Date().toISOString();
+          // 2026-09-11:assets 激活即语音提醒 H3 开机(时机漏洞修复——原挂会话创建点,
+          // 连续会话 research→assets 不重建会话永不触发);函数内幂等去重
+          if (effectiveNextStep === "assets") {
+            import("../ws-bridge.js").then((m) => m.maybeVoiceH3PowerOn(freshWork as never)).catch(() => {});
+          }
         }
         // 评审通过即该步 done：派生状态（最后一步过审时进入 reviewing），
         // 与 pipeline/advance 非评审路径的状态同步逻辑保持一致
@@ -3434,6 +3533,12 @@ function buildFeedbackPrompt(evalResult: EvalResult, attempt: number, repeatNote
 
 评审未通过，请根据以下反馈修复问题后重新提交：
 
+### 修复纪律(每轮驳回必读——历史四轮连挂的教训,w_20260918_1519_b44)
+1. **先归纳再动手**:把每条问题归纳为「类别」,用 grep/全盘扫描把同类问题一次性找齐并全部修复——禁止只修列举的实例(教训:修了一个作者的同源素材占用,漏了另一个作者的同类三处占用,白烧一轮评审)
+2. **实测回填**:时长/音轨/分辨率/数值一律用 ffprobe/脚本实测后写回契约文件(timeline.json/script.json/manifest/registry),禁止手写估计值;契约数值与磁盘实测不一致本身是打回理由
+3. **契约同步**:修复改变任何事实(换文件/改时长/补音轨)后,manifest、shot-map、timeline、registry、render-specs 中所有相关陈述必须同步更新——文档间自相矛盾是独立的打回理由
+4. **弃用留痕**:弃用文件一律移入 assets/_archive 并登记台账,禁止残留在 clips/ 工作目录(会被 assembly 误拾取,也是打回理由)
+
 ### 问题列表
 ${issueList}
 
@@ -3528,9 +3633,10 @@ ${prevResultsText ? `## 历史评审记录\n${prevResultsText}\n\n请特别关�
 
 规则：
 - 任何 critical 问题 → 必须 fail
+- 任何 major 问题 → 必须 fail（2026-09-10 补：此前只写 critical，导致"列了 major 却给 pass"的结论自相矛盾，靠机器复核改判兜底；verdict 必须与 issues 一致——有未修复的 major/critical 时 verdict 只能是 "fail"）
 - 任何维度 < 6/10 → 必须 fail
 - **否定聚合（Q3 方案定稿）**：任一【硬性】维度不达标 → 必须 fail，**不计算加权平均**（不允许其他高分把单维最低分稀释放行）
-- 所有维度 ≥ 7/10 且无 critical 问题 → pass`;
+- 所有维度 ≥ 7/10 且无 critical、无 major 问题 → pass`;
 }
 
 // ── 用途预设(04 方案,2026-08-18)──────────────────────────────────────────
@@ -3581,6 +3687,8 @@ apiRoutes.post("/api/works/:id/conform", async (c) => {
     height?: number;
     fps?: number;
     loudness?: { narration?: number; bgm?: number };
+    /** BGM 侧链闪避(缺省开;false 退回静态 amix;对象可微调 threshold/ratio/attack/release) */
+    ducking?: boolean | { threshold?: number; ratio?: number; attack?: number; release?: number };
     color?: { contrast?: number; saturation?: number; brightness?: number };
     output?: string;
   };
@@ -3604,6 +3712,7 @@ apiRoutes.post("/api/works/:id/conform", async (c) => {
         height: body.height,
         fps: body.fps,
         loudness: body.loudness,
+        ducking: body.ducking,
         color: body.color,
         output,
       },
@@ -3854,7 +3963,7 @@ apiRoutes.post("/api/works/:id/pipeline/advance", async (c) => {
       }
     }
     if (completedStep === "plan-assets" && work.type !== "image-text") {
-      const { assertPlanDeliverables, assertPlanGateExtensions, assertPlanStructure, assertTemplateBindingConsistency, assertContractArtifacts } = await import("../services/quality-gate.js");
+      const { assertPlanDeliverables, assertPlanGateExtensions, assertPlanStructure, assertTemplateBindingConsistency, assertContractArtifacts, assertScriptContract, assertValueConsistency } = await import("../services/quality-gate.js");
       const wDir = join(dataDir, "works", id);
       const explicitDur = Number(work.explicitParams?.duration) > 0 ? Number(work.explicitParams?.duration) : undefined;
       const gateIssues = assertPlanDeliverables(wDir, explicitDur);
@@ -3862,6 +3971,11 @@ apiRoutes.post("/api/works/:id/pipeline/advance", async (c) => {
       gateIssues.push(...assertPlanStructure(wDir));
       gateIssues.push(...assertTemplateBindingConsistency(wDir, work.templateId));
       gateIssues.push(...assertContractArtifacts(wDir, "plan-assets", { workType: work.type }));
+      // 2026-09-10:口播脚本契约(锚点/待核禁进口播/朗读时长预算)——文章定位修正后,
+      // 口播约束统一落在 script.json 而非 article.md
+      gateIssues.push(...assertScriptContract(wDir, explicitDur));
+      // 2026-09-11:数值一致性(规则A 旁白数字 ⊆ article.json facts 白名单)随脚本契约同位预检
+      gateIssues.push(...assertValueConsistency(wDir));
       if (gateIssues.length) {
         log("info", "api", "plan_assets_gate_blocked", id, { count: gateIssues.length });
         return c.json({
@@ -3931,13 +4045,25 @@ apiRoutes.post("/api/works/:id/pipeline/advance", async (c) => {
       }
     }
     if (completedStep === "assets" && work.type !== "image-text") {
-      const { assertAssetsDeliverables, assertShotMapCompleteness, ensureShotMap } = await import("../services/quality-gate.js");
+      const { assertAssetsDeliverables, assertShotMapCompleteness, ensureShotMap, assertValueConsistency } = await import("../services/quality-gate.js");
       const gateIssues = assertAssetsDeliverables(join(dataDir, "works", id));
+      // 2026-09-11:数值一致性(规则B render-specs 数值卡屏上数字 ↔ 旁白口径)——
+      // "4万亿 vs 4.4万亿" critical 机器拦截,不再靠 LLM 评审肉眼兜底
+      gateIssues.push(...assertValueConsistency(join(dataDir, "works", id)));
+      // 2026-09-11:红框坐标/遮罩覆盖机器预检(评审烧 16 分钟 LLM 判的确定性几何)
+      const { assertSnapshotGeometry } = await import("../services/snapshot-geometry.js");
+      gateIssues.push(...await assertSnapshotGeometry(join(dataDir, "works", id)));
       // X15(2026-09-07,Q2):shot-map 缺失时机器程序化生成兜底(从 plan.md 引用逐镜抽帧),
       // 不再纯靠 agent 自觉;生成后仍由完整性检查核验
       try { await ensureShotMap(join(dataDir, "works", id)); } catch { /* 生成失败由完整性检查拦截 */ }
       // Q2(2026-09):shot-map 逐镜抽帧台账完整性检查（缺 asset_file/抽帧即 fail）
       gateIssues.push(...assertShotMapCompleteness(join(dataDir, "works", id)));
+      // 2026-09-18(四轮连挂根因):时长/音轨/引用一致性机器预检——
+      // 旁白超长、素材短于时间轴、无音轨、_archive 误引用、clips 残留,
+      // 全是 ffprobe/文件系统可判的确定性事实,不再烧 LLM 评审轮次
+      const { assertAssetsTimelineFit, assertAssetsConsistency } = await import("../services/quality-gate.js");
+      gateIssues.push(...await assertAssetsTimelineFit(join(dataDir, "works", id)));
+      gateIssues.push(...await assertAssetsConsistency(join(dataDir, "works", id)));
       if (gateIssues.length) {
         log("info", "api", "assets_gate_blocked", id, { count: gateIssues.length });
         return c.json({
@@ -4037,6 +4163,10 @@ apiRoutes.post("/api/works/:id/pipeline/advance", async (c) => {
     if (effectiveNextStep) {
       work.pipeline[effectiveNextStep].status = "active";
       work.pipeline[effectiveNextStep].startedAt = new Date().toISOString();
+      // assets 激活 → H3 开机语音提醒(幂等去重,详见 maybeVoiceH3PowerOn)
+      if (effectiveNextStep === "assets") {
+        import("../ws-bridge.js").then((m) => m.maybeVoiceH3PowerOn(work as never)).catch(() => {});
+      }
 
       // Persist step_divider to chat.jsonl so it appears when reloading
       const stepName = work.pipeline[effectiveNextStep].name ?? effectiveNextStep;
@@ -4150,12 +4280,30 @@ apiRoutes.post("/api/works/:id/eval/toggle", async (c) => {
 // POST /api/works/:id/eval/force-pass
 apiRoutes.post("/api/works/:id/eval/force-pass", async (c) => {
   const id = c.req.param("id");
-  const body = await c.req.json<{ step: string; nextStep?: string }>().catch(() => ({} as any));
+  const body = await c.req.json<{ step: string; nextStep?: string; confirm?: boolean }>().catch(() => ({} as any));
   const work = await getWork(id);
   if (!work) return c.json({ error: "Work not found" }, 404);
   const { step, nextStep } = body;
   if (!step || !["eval_blocked", "evaluating", "awaiting_human"].includes(work.pipeline[step]?.status as string)) {
     return c.json({ error: "Step not in eval_blocked/evaluating/awaiting_human state" }, 400);
+  }
+  // 2026-09-11(assets 复盘改进点 1):force-pass 是带病放行通道(镜38 两个 major
+  // 被放进 assembly 的教训)——最新评审仍有未修复 issues 时,首次调用返回 409 +
+  // 问题清单;前端逐条确认后带 confirm:true 重发才放行,并落痕 ack。
+  const latest = (await loadAllEvalResults(id, step)).at(-1);
+  const issues = (latest?.issues ?? []).filter((i) => i?.description);
+  if (!body.confirm && issues.length) {
+    const order: Record<string, number> = { critical: 0, major: 1, minor: 2 };
+    const sorted = [...issues].sort((a, b) => (order[a.severity] ?? 3) - (order[b.severity] ?? 3));
+    const serious = issues.filter((i) => i.severity !== "minor").length;
+    return c.json({
+      error: `该步骤最新评审(第 ${latest?.attempt ?? "?"} 轮)仍有 ${issues.length} 项未修复问题${serious ? `(含 ${serious} 项 major/critical)` : ""}——强制通过是带病放行,须逐条确认后重发`,
+      code: "force_pass_confirm_required",
+      issues: sorted,
+    }, 409);
+  }
+  if (body.confirm && issues.length) {
+    log("warn", "api", "eval_force_pass_ack", id, { step, acknowledgedIssues: issues.length, serious: issues.filter((i) => i.severity !== "minor").length });
   }
   work.pipeline[step].status = "done";
   work.pipeline[step].completedAt = new Date().toISOString();
@@ -4164,6 +4312,10 @@ apiRoutes.post("/api/works/:id/eval/force-pass", async (c) => {
   if (forceNextStep) {
     work.pipeline[forceNextStep].status = "active";
     work.pipeline[forceNextStep].startedAt = new Date().toISOString();
+    // assets 激活 → H3 开机语音提醒(幂等去重)
+    if (forceNextStep === "assets") {
+      import("../ws-bridge.js").then((m) => m.maybeVoiceH3PowerOn(work as never)).catch(() => {});
+    }
   }
   await storeUpdateWork(id, { pipeline: work.pipeline, status: deriveStatusFromPipeline(work.pipeline, work.status, { reviveFromFailed: true }), lastError: "" });
   broadcastPipelineUpdate(id, work.pipeline);
@@ -5304,63 +5456,11 @@ apiRoutes.get("/api/h3/instance/status", async (c) => {
 });
 
 // GET /api/autodl/reminders - 作品页 AutoDL 开机提醒聚合（2026-08-14）
-// 在素材准备阶段开始前提醒开机：
-//   数字人渲染(HeyGem 实例): 作品绑定了 digitalHumanId 且尚无 done 任务
-//   H3 视频生成: 分镜已产出 → 扫描 storyboard.md 的素材路由精确判断(confirmed);
-//               分镜未产出 → assetSource∈{ai,auto,smart} 预估(possible)
+// 2026-09-18:聚合逻辑提取到 services/autodl-reminders.js,与语音守望共用同一份事实
+// (此前本端点只读不播报,开机语音从未接线到横幅场景——实测"语音提醒从未成功"根因)
 apiRoutes.get("/api/autodl/reminders", async (c) => {
-  interface NeedItem { id: string; title: string; certainty?: "confirmed" | "possible" }
-  const h3NeededBy: NeedItem[] = [];
-  const h3Upcoming: NeedItem[] = [];
-  const heygemNeededBy: NeedItem[] = [];
-  const heygemUpcoming: NeedItem[] = [];
-  try {
-    const works = worksRepo.listWorks();
-    // 时机门(2026-08-16):只有临近素材阶段的进行中作品才催开机。
-    // 此前把排队中/分镜未产出的作品也列为 possible,用户看到横幅就提前开机,
-    // 但串行 runner 下后面的作品几小时后才到素材阶段——GPU 空烧。
-    const runningIds = new Set(
-      workQueueRepo.listQueue().filter((i) => i.status === "running").map((i) => i.workId),
-    );
-    for (const w of works) {
-      if (w.type !== "short-video") continue;
-      if (w.status === "published" || w.status === "draft") continue;
-      // 素材阶段已完成的作品无需提醒
-      const steps = worksRepo.getWorkSteps(w.id);
-      const assetsStep = steps.find((s) => s.step_key === "assets");
-      if (assetsStep && assetsStep.status === "done") continue;
-      const planStep = steps.find((s) => s.step_key === "plan");
-      // 临近素材 = 素材阶段进行中，或分镜已完成且作品正在 runner 上执行
-      const nearAssets = assetsStep?.status === "active"
-        || (planStep?.status === "done" && runningIds.has(w.id));
-
-      if (w.digital_human_id) {
-        const done = dhJobsRepo.listJobs(w.id).some((j) => j.status === "done");
-        if (!done) (nearAssets ? heygemNeededBy : heygemUpcoming).push({ id: w.id, title: w.title });
-      }
-
-      const sbPath = join(dataDir, "works", w.id, "plan", "storyboard.md");
-      if (existsSync(sbPath)) {
-        try {
-          const sb = readFileSync(sbPath, "utf-8");
-          if (/ai_video|i2v|local-h3|H3|AI\s*生(成)?视频/i.test(sb)) {
-            // 分镜已确认需要 H3：临近素材阶段才催开机，否则列入 upcoming 预告
-            (nearAssets ? h3NeededBy : h3Upcoming).push({ id: w.id, title: w.title, certainty: "confirmed" });
-          }
-        } catch { /* 读取失败按无需求处理 */ }
-      } else if (nearAssets && w.asset_source && ["ai", "auto", "smart"].includes(w.asset_source)) {
-        // 分镜未产出但临近素材：按素材来源预估(possible)
-        h3NeededBy.push({ id: w.id, title: w.title, certainty: "possible" });
-      }
-    }
-  } catch (err) {
-    console.error("[autodl-reminders] scan failed:", err);
-  }
-  const [h3, heygem] = await Promise.all([getH3InstanceView(), getInstanceView()]);
-  return c.json({
-    h3: { state: h3.state, consoleUrl: h3.consoleUrl, neededBy: h3NeededBy, upcoming: h3Upcoming },
-    heygem: { state: heygem.state, consoleUrl: heygem.consoleUrl, neededBy: heygemNeededBy, upcoming: heygemUpcoming },
-  });
+  const { computeAutodlReminders } = await import("../services/autodl-reminders.js");
+  return c.json(await computeAutodlReminders());
 });
 
 // POST /api/ssh/push-key — 设置页"一键免密":密码认证推送本机公钥到实例

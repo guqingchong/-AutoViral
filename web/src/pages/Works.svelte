@@ -1,9 +1,11 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { t, getLanguage, subscribe } from "../lib/i18n";
-  import { fetchWorks, deleteWorkApi, fetchQueue, queueAction, deleteQueueWork, forcePassEval, retryWithGuidance, type WorkSummary, type QueueItemInfo } from "../lib/api";
+  import { fetchWorks, deleteWorkApi, fetchQueue, queueAction, deleteQueueWork, forcePassEval, retryWithGuidance, ApiError, type EvalIssue, type WorkSummary, type QueueItemInfo } from "../lib/api";
   import InterestTags from "../components/InterestTags.svelte";
   import AssetLibrary from "../components/AssetLibrary.svelte";
+  import ForcePassConfirmModal from "../components/ForcePassConfirmModal.svelte";
+  import { modelLabel } from "../lib/model-labels.js";
 
   let {
     onOpenStudio,
@@ -290,6 +292,8 @@
 
   // ── 批次12c-B:失败作品复活（重试/强制通过） ──
   let reviveBusy: Record<string, boolean> = $state({});
+  // 2026-09-11:force-pass 带病放行逐条确认(后端 409 返回未修复清单)
+  let forcePassPending: { workId: string; step: string; stepName: string; issues: EvalIssue[] } | null = $state(null);
 
   /** 找 pipeline 中评审受阻/待人工的步骤（复活端点只接受这两类状态） */
   function findBlockedStep(w: WorkSummary): { key: string; name: string } | null {
@@ -331,9 +335,29 @@
       else await retryWithGuidance(w.id, stepKey, guidance);
       await loadWorks(true);
     } catch (err) {
-      alert(`操作失败：${err instanceof Error ? err.message : String(err)}`);
+      // 409:评审仍有未修复问题 → 弹逐条确认清单(确认后 confirmForcePass 重发)
+      if (mode === "force" && err instanceof ApiError && err.status === 409 && Array.isArray(err.payload?.issues)) {
+        forcePassPending = { workId: w.id, step: stepKey, stepName: blocked?.name ?? stepKey, issues: err.payload.issues as EvalIssue[] };
+      } else {
+        alert(`操作失败：${err instanceof Error ? err.message : String(err)}`);
+      }
     } finally {
       reviveBusy = { ...reviveBusy, [w.id]: false };
+    }
+  }
+
+  async function confirmForcePass() {
+    if (!forcePassPending) return;
+    const { workId, step } = forcePassPending;
+    reviveBusy = { ...reviveBusy, [workId]: true };
+    try {
+      await forcePassEval(workId, step, undefined, true);
+      forcePassPending = null;
+      await loadWorks(true);
+    } catch (err) {
+      alert(`强制通过失败：${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      reviveBusy = { ...reviveBusy, [workId]: false };
     }
   }
 
@@ -381,7 +405,7 @@
     for (const [key, p] of Object.entries<any>(data.llm?.providers ?? {})) {
       if (p.enabled === false) continue;
       for (const m of p.modelSuggestions ?? []) {
-        opts.push({ value: `${key}:${m}`, label: `${names[key] ?? key} / ${m}` });
+        opts.push({ value: `${key}:${m}`, label: `${names[key] ?? key} / ${modelLabel(m)}` });
       }
     }
     return opts;
@@ -932,6 +956,16 @@
       </button>
     </div>
   </div>
+{/if}
+
+{#if forcePassPending}
+  <ForcePassConfirmModal
+    issues={forcePassPending.issues}
+    stepName={forcePassPending.stepName}
+    busy={reviveBusy[forcePassPending.workId] ?? false}
+    onConfirm={confirmForcePass}
+    onCancel={() => (forcePassPending = null)}
+  />
 {/if}
 
 {#if showResearchModal}

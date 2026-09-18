@@ -160,9 +160,7 @@ export function buildCodeTemplateHtmlPrompt(input: GenerateCodeTemplateInput): s
  *  视觉通道不可用时放行并 warn(不让 fidelity 成为生产单点故障) */
 async function checkTemplateFidelity(previewPath: string, input: GenerateCodeTemplateInput): Promise<string | null> {
   try {
-    const { execFile } = await import("node:child_process");
-    const { promisify } = await import("node:util");
-    const execFileAsync = promisify(execFile);
+    const { execFileSilent: execFileAsync } = await import("../utils/proc.js");
     const frames: string[] = [];
     for (const [i, t] of [0.5, 2.5].entries()) {
       const fp = join(dataDir, "tmp", `fidelity_${randomUUID().slice(0, 8)}_${i}.png`);

@@ -97,4 +97,21 @@ describe("renderer command builder", () => {
     expect(fc).toContain("subtitles='/tmp/subtitles.srt'"); // B10:路径经 escapeFilterPath 转义+单引号包裹
     expect(fc).toContain("force_style=");
   });
+
+  it("无音频输入时用 anullsrc 静音轨,不再 -an 剥音轨(2026-09-18 根因修复)", () => {
+    const tl: Timeline = {
+      canvas: { width: 1080, height: 1920, fps: 30, backgroundColor: "#000000" },
+      layers: [
+        { id: "host", type: "video", source: "/tmp/host.mp4", start: 0, duration: 60, position: "center", size: { width: 1080, height: 1920 } },
+      ],
+      audio: [],
+    };
+    const inputs = collectInputs(tl);
+    const args = buildFilterComplexArgs(tl, inputs, 60, "/tmp/out.mp4");
+    const fc = args[args.indexOf("-filter_complex") + 1];
+    expect(fc).toContain("anullsrc=channel_layout=stereo:sample_rate=48000");
+    expect(args).not.toContain("-an");
+    // 静音轨必须被映射进产物
+    expect(args.filter((a) => a === "[aout]").length).toBeGreaterThan(0);
+  });
 });

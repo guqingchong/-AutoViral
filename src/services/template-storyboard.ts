@@ -28,7 +28,7 @@ import {
 import { detectScenes } from "./template-scenes.js";
 import type { DbTemplate } from "../db/templates-repo.js";
 
-const execFileAsync = promisify(execFile);
+import { execFileSilent as execFileAsync } from "../utils/proc.js";
 
 const CELL_WIDTH = 360;
 

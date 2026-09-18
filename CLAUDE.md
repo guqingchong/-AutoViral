@@ -15,6 +15,10 @@
 <rules>
 启动subagents模式时，所有subagents必须使用Opus 4.6 模型驱动。
 不要随便push代码，但可以commit保证记录
+凭据纪律（2026-09-18 泄漏事故后设立，事故经过：真实 DeepSeek key 被硬编码进测试文件并推送到公开 GitHub 仓库，泄漏 32 天被第三方滥用烧光余额）：
+- 真实 API key / 密码 / 私钥绝不写入任何入库文件；代码、测试、文档一律使用合成假值（如 `sk-test-fake-...`）
+- 凭据只写 `~/.autoviral/config.yaml`（不入库）；读取用配置 API，禁止把凭据复制进测试 fixture
+- 提交前钩子 `node scripts/secret-scan.mjs` 已挂载（core.hooksPath=.githooks），命中疑似凭据即拦截；确认误报在行尾加 `secret-scan:ignore`
 </rules>
 
 ## Design Context

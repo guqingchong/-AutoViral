@@ -21,6 +21,7 @@
   import { fetchConfig, updateConfig, fetchWorks, createWorkApi, type WorkSummary, type ContentCategory } from "./lib/api";
   import { t, getLanguage, setLanguage, subscribe } from "./lib/i18n";
   import { activeTab, type Tab } from "./lib/navigation.js";
+  import { modelLabel } from "./lib/model-labels.js";
 
   let theme: "light" | "dark" = $state("dark");
   let lang = $state(getLanguage());
@@ -55,7 +56,7 @@
     for (const [key, p] of Object.entries<any>(data.llm?.providers ?? {})) {
       if (p.enabled === false) continue;
       for (const m of p.modelSuggestions ?? []) {
-        opts.push({ value: `${key}:${m}`, label: `${names[key] ?? key} / ${m}` });
+        opts.push({ value: `${key}:${m}`, label: `${names[key] ?? key} / ${modelLabel(m)}` });
       }
     }
     return opts;

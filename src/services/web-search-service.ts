@@ -375,8 +375,13 @@ export async function platformSearch(platform: string, query: string, limit = 5)
       else reject(new Error(`yt-dlp 退出码 ${code}:${err.slice(0, 300)}`));
     });
   });
-  const data = JSON.parse(stdout) as { entries?: Array<{ id?: string; url?: string; title?: string }> };
-  const results = (data.entries ?? []).slice(0, n).map((e) => ({
+  const data = JSON.parse(stdout) as { entries?: Array<{ id?: string; url?: string; title?: string } | null> };
+  // 2026-09-10 实测:B站风控(HTTP 412)时 yt-dlp 退出码仍为 0,但 entries=[null]——
+  // 此前不过滤会映射出空标题条目,表现为"通道可用但零结果",误判为内容生态真空
+  const results = (data.entries ?? [])
+    .filter((e): e is { id?: string; url?: string; title?: string } => !!e && !!(e.url || e.title))
+    .slice(0, n)
+    .map((e) => ({
     title: e.title ?? "",
     url: e.url ?? "",
     snippet: e.title ? "" : `(条目 ID ${e.id ?? "?"},用 WebFetch 抓页面可见标题/详情)`,

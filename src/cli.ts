@@ -83,6 +83,7 @@ export function runCLI(): void {
           detached: true,
           stdio: ["ignore", logFd, logFd],
           env: { ...process.env, __AUTOVIRAL_DAEMON: "1" },
+          windowsHide: true, // 2026-09-11 弹窗治理:守护进程不弹控制台窗口
         });
         child.unref();
         fs.closeSync(logFd);
@@ -269,5 +270,10 @@ export function runCLI(): void {
       console.log("Restart AutoViral for changes to take full effect.");
     });
 
-  program.parseAsync();
+  // 2026-09-12 修复:强制 from:'node'。打包后服务器由 electron.exe 以
+  // ELECTRON_RUN_AS_NODE 模式拉起,process.versions.electron 存在,
+  // commander 会误判为打包 Electron 应用(argv 无脚本路径)而把
+  // dist/index.js 当成"未知命令"拒绝启动。本 CLI 入口永远是
+  // "可执行文件 + 脚本路径"两段式,强制 node 语义即可。
+  program.parseAsync(process.argv, { from: "node" });
 }

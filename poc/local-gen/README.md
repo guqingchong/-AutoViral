@@ -42,6 +42,15 @@
 - 文本编码器：qwen3vl_32b_minimax_h3_nvfp4_awq（14G，用完卸载）
 - 注意：pruned 版不兼容 Turbo LoRA 4 步加速（如需加速要换完整 int8 版 31G，磁盘不够）
 
+## 加速改造（2026-09-11，provider 已自动接入）
+
+- **SageAttention（无损 ~1.3-2×，推荐）**：实例安装 [ComfyUI-KJNodes](https://github.com/kijai/ComfyUI-KJNodes) 后，`local-h3` provider 启动时自动探测 `PatchSageAttentionKJ` 并注入补丁节点（`config.yaml` 写 `h3: { sageAttention: false }` 可关）；未安装则按原图运行并打 warn 日志。实例侧也可用 `--use-sage-attention` 启动 ComfyUI（服务级，不改工作流）。
+- **cu130 硬件反量化（3-5×）**：来自实例环境（ComfyUI 官方包 v0.30+ 自带 torch 2.9.1+cu130），旧实例升级 ComfyUI/torch 即得，代码侧无需改动。
+- **禁用 TE-Speed**：turbo 8 步 + INT8 场景下实测失真（文字乱码/结构崩坏），无论参数对错都不要开。
+- 实测基准（4060Ti 16GB，第三方仓库 neng320/minimax-h3-local-deployment）：pruned 480p 5s 条 ~109s（全加速链）；"生成快于播放"在消费级/4090 档做不到，那是 LTX-Video 在 H100 上的成绩。
+- 首条慢是 Sage/Triton JIT 编译（约 8-13 分钟），第 2 条起才是稳态速度；抽多版请换 seed（同 seed 同参数会命中 ComfyUI 结果缓存秒回）。
+- ⚠️ SageAttention 的 Triton 编译需要**手动启动** ComfyUI（托管/沙箱启动会拦 tmp.pid_* 锁文件删除，报 SAFE_DELETE_FAIL_CLOSED）。
+
 ## 成本速算基准
 
 - AutoDL 4090：¥2.18/时（来自 config.yaml gpuHourlyRateYuan）

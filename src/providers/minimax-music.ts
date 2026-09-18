@@ -6,7 +6,7 @@ import { dataDir } from '../config.js'
 import { probeMedia } from '../video/ffmpeg.js'
 import type { GenerateProvider, ImageOpts, VideoOpts, AudioOpts, MusicOpts, GenerateResult } from './base.js'
 
-const execFileAsync = promisify(execFile)
+import { execFileSilent as execFileAsync } from "../utils/proc.js";
 
 const MINIMAX_MUSIC_URL = 'https://api.minimax.chat/v1/music_generation'
 // 2026-08-14: music-1.5 → music-2.6(与 skills/asset-generation/scripts/music_generate.py 对齐),

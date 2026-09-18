@@ -30,8 +30,10 @@ describe("assertArticleContract(流水线 v2)", () => {
   }
 
   it("合规文章 → 无 issue", async () => {
-    await writeBoth(goodArticle, "这是一篇没有事实断言的正文。");
-    expect(assertArticleContract(dir, "standard")).toEqual([]);
+    // 新口径(2026-09-10 定位修正):wordCount 与文章实测自洽(含小节标题、剔锚点标记)、
+    // 锚点须在正文出现。实测:「一、背景」3 + 正文 13 = 16
+    await writeBoth({ ...goodArticle, wordCount: 16 }, "## 一、背景(锚点 sec-1)\n\n这是一篇没有事实断言的正文。");
+    expect(assertArticleContract(dir, "quick")).toEqual([]);
   });
 
   it("缺关键字段 → fail", async () => {
@@ -60,9 +62,9 @@ describe("assertArticleContract(流水线 v2)", () => {
     expect(assertArticleContract(dir, "full").map((i) => i.key)).toContain("article_facts_unverified");
   });
 
-  it("字数超语速预算 ×1.2 → fail", async () => {
+  it("wordCount 与文章实测严重不符 → fail(声明失真)", async () => {
     await writeBoth({ ...goodArticle, wordCount: 2000 }, "正文。");
-    expect(assertArticleContract(dir, "standard").map((i) => i.key)).toContain("article_budget_mismatch");
+    expect(assertArticleContract(dir, "standard").map((i) => i.key)).toContain("article_wordcount_mismatch");
   });
 
   it("article.md 含未核验文号 → fail(assertFactClaims 联动)", async () => {

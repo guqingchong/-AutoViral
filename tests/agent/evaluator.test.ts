@@ -72,17 +72,22 @@ describe("resolveVision", () => {
     expect(v?.model).toBe("ds-vl");
     expect(v?.provider.name).toBe("deepseek");
   });
-  it("deepseek 无视觉 → kimi(预设 visionModel=kimi-for-coding)优先于 glm", () => {
+  it("deepseek 预设默认视觉 deepseek-flash(2026-09-10 V4.1 Flash 原生多模态起)", () => {
     const v = resolveVision(cfgWith({ deepseek: ds, kimi, glm }), "deepseek");
+    expect(v?.provider.name).toBe("deepseek");
+    expect(v?.model).toBe("deepseek-flash");
+  });
+  it("deepseek 未配 key → kimi(预设 visionModel=kimi-for-coding)优先于 glm", () => {
+    const v = resolveVision(cfgWith({ kimi, glm }), "deepseek");
     expect(v?.provider.name).toBe("kimi");
     expect(v?.model).toBe("kimi-for-coding");
   });
   it("只有 glm → glm-4v 兜底", () => {
-    const v = resolveVision(cfgWith({ deepseek: ds, glm }), "deepseek");
+    const v = resolveVision(cfgWith({ glm }), "deepseek");
     expect(v?.model).toBe("glm-4v");
   });
   it("三家都没配 key → null(触发配置校验期报错)", () => {
-    expect(resolveVision(cfgWith({ deepseek: ds }), "deepseek")).toBeNull();
+    expect(resolveVision(cfgWith({}), "deepseek")).toBeNull();
   });
 });
 
@@ -106,15 +111,17 @@ describe("runApiEvaluator", () => {
   it("assets 评审无视觉模型 → 配置校验期报错(不盲评)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "av-eval-"));
     const { session, bridge } = fakeBridgeSession("w1");
+    // 显式置空 deepseek visionModel(覆盖 2026-09-10 起的 deepseek-flash 预设默认),
+    // 且 kimi/glm 均未配 key → 视觉解析为 null,必须在配置校验期报错
     await expect(runApiEvaluator({
       workId: "w1", step: "assets", evalPrompt: "评审素材", workDir: dir,
-      config: cfgWith({ deepseek: { protocol: "openai", baseUrl: "https://ds.test/v1", apiKey: "k" } }),
+      config: cfgWith({ deepseek: { protocol: "openai", baseUrl: "https://ds.test/v1", apiKey: "k", visionModel: "" } }),
       session, bridge,
     })).rejects.toThrow(/视觉模型/);
     await rm(dir, { recursive: true, force: true });
   });
 
-  it("含图片回合路由 kimi,图片以 image_url 进请求,结论 JSON 解析返回", async () => {
+  it("含图片回合路由视觉模型(deepseek 预设 deepseek-flash),图片以 image_url 进请求,结论 JSON 解析返回", async () => {
     const dir = await mkdtemp(join(tmpdir(), "av-eval-"));
     await writeFile(join(dir, "frame.png"), TINY_PNG);
     const urls: string[] = [];
@@ -148,11 +155,11 @@ describe("runApiEvaluator", () => {
 
     expect(result.verdict).toBe("pass");
     expect(urls[0]).toBe("https://ds.test/v1/chat/completions");
-    // 图片回合 → kimi 视觉端点,且请求体带 image_url base64
-    expect(urls[1]).toBe("https://kimi.test/v1/chat/completions");
+    // 图片回合 → 视觉端点(2026-09-10 起 deepseek 预设 deepseek-flash 自家优先),且请求体带 image_url base64
+    expect(urls[1]).toBe("https://ds.test/v1/chat/completions");
     expect(bodies[1]).toContain("image_url");
     expect(bodies[1]).toContain("data:image/png;base64");
-    expect(JSON.parse(bodies[1]).model).toBe("kimi-for-coding");
+    expect(JSON.parse(bodies[1]).model).toBe("deepseek-flash");
     await rm(dir, { recursive: true, force: true });
   });
 

@@ -15,10 +15,11 @@ import { promisify } from "node:util";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, basename } from "node:path";
 import { probeMedia } from "../video/ffmpeg.js";
+import { spokenLength, extractSpokenBody, articleWordCount } from "./spoken-length.js";
 import { listRenderJobs } from "../db/render-jobs-repo.js";
 import type { Config } from "../config.js";
 
-const execFileAsync = promisify(execFile);
+import { execFileSilent as execFileAsync } from "../utils/proc.js";
 
 /** 分镜时长口径单一事实源(2026-08-28 批次5.2):短视频平台硬上限 180s + 容差 5s。
  *  此前时长三头定义(脚本按分钟 floor/门禁 185s/质量门禁 600s 才 warn)——统一引用本常量。 */
@@ -40,7 +41,13 @@ export interface QualityReport {
   score: number; // 0-100:pass=满分,warn 减半,fail 零分(按项平均)
   checks: QualityCheck[];
   createdAt: string;
+  /** 机器产物标记(2026-09-11):agent 手写报告声明值无人核验(CPS≤6.25 声明 vs 7.08 实测
+   *  事故)——assembly 门禁据此拒绝非 runQualityGate 产出的报告 */
+  generator?: string;
 }
+
+/** runQualityGate 产出报告的标记值(版本升级时递增,门禁只认当前版本) */
+export const QUALITY_REPORT_GENERATOR = "autoviral-runQualityGate@1";
 
 async function ffmpegDetect(args: string[]): Promise<string> {
   try {
@@ -162,13 +169,14 @@ export async function runQualityGate(videoPath: string, opts?: { subtitlePath?: 
   if (freezes.length === 0) add("freeze", "冻结帧", "pass", "无超过 3s 的画面冻结");
   else add("freeze", "冻结帧", "warn", `检出 ${freezes.length} 段画面冻结(素材短于层时长定格?)`);
 
-  // 6. 字幕
+  // 6. 字幕(2026-09-11 起为机器实测:条数/最大 CPS/单行最长字数 + 违规清单,
+  //    不再是"文件非空"式存在性检查——报告声明值即实测值,杜绝手写失实)
   if (opts?.subtitlePath) {
     if (existsSync(opts.subtitlePath)) {
-      const content = readFileSync(opts.subtitlePath, "utf-8");
-      const entries = (content.match(/\d{2}:\d{2}:\d{2}/g) ?? []).length;
-      if (entries >= 2) add("subtitle", "字幕", "pass", `字幕文件 ${entries / 2 | 0} 条`);
-      else add("subtitle", "字幕", "warn", "字幕文件为空或无有效条目");
+      const m = measureAssSubtitles(readFileSync(opts.subtitlePath, "utf-8"));
+      if (m.entries === 0) add("subtitle", "字幕", "warn", "字幕文件为空或无有效条目");
+      else if (m.violations.length) add("subtitle", "字幕", "fail", `${m.entries} 条,实测最大 CPS=${m.maxCps.toFixed(2)}、单行最长 ${m.maxLineChars} 字;违规:${m.violations[0]}`);
+      else add("subtitle", "字幕", "pass", `${m.entries} 条,实测最大 CPS=${m.maxCps.toFixed(2)}(≤${MAX_SUBTITLE_CPS}),单行最长 ${m.maxLineChars} 字(≤${MAX_SUBTITLE_LINE_CHARS})`);
     } else {
       add("subtitle", "字幕", "fail", "声明了字幕但文件不存在");
     }
@@ -182,6 +190,7 @@ export async function runQualityGate(videoPath: string, opts?: { subtitlePath?: 
     score,
     checks,
     createdAt: new Date().toISOString(),
+    generator: QUALITY_REPORT_GENERATOR,
   };
 }
 
@@ -209,7 +218,7 @@ function countNarrationChars(s: string): number {
   return m ? m.length : 0;
 }
 
-/** 视觉标注识别:画面大字/花字/字幕等括号注释是屏幕文字而非口播,不适用 20 字铁律 */
+/** 视觉标注识别:画面大字/花字/字幕等括号注释是屏幕文字而非口播,不适用句长铁律 */
 function isVisualNote(sentence: string): boolean {
   return /^["'“”]*[(（]/.test(sentence) && /画面|大字|花字|字幕|标题卡|角标/.test(sentence);
 }
@@ -230,7 +239,7 @@ function parseDurationCell(cell: string): number | null {
 /**
  * plan 推进前置校验:返回问题清单(空数组=通过)。
  * ① 分镜表时长合计 ≤ 上限(默认 MAX_PLAN_DURATION_S 180s,容差 5s;用户显式时长豁免)
- * ② 显式旁白行(旁白:/口播: 前缀或分镜表旁白列)单句 ≤20 字
+ * ② 显式旁白行(旁白:/口播: 前缀或分镜表旁白列)单句 ≤35 字;连续 ≥3 句 <10 字判"电报体"
  * ③ 不得引用 material-candidates.md 剔除区的素材文件
  * ④ 标题/封面行极限词(最/第一/唯一/首个)须有"之一"限定
  */
@@ -244,6 +253,21 @@ export function assertPlanDeliverables(workDir: string, maxDurationS = MAX_PLAN_
     return [{ key: "plan_doc", detail: "分镜文档缺失(plan.md、plan/plan.md、assets/plan-storyboard.md 均不存在)" }];
   }
   const lines = readFileSync(planPath, "utf-8").split("\n");
+
+  // ── 电报体检测(2026-09-12 口播"AI腔"治理 P0):单句上限 20→35 字后, ──
+  // ── 防止 agent 继续写"极度精简短句连发"——连续 ≥3 句 <10 字即判电报体, ──
+  // ── 要求补全主语与句间承接。短句连发跨镜头/跨行连续累计。 ──
+  let shortStreak = 0;
+  const telegraphCheck = (sentence: string, n: number): void => {
+    if (n < 10) {
+      shortStreak++;
+      if (shortStreak >= 3 && issues.filter((i) => i.key === "narration_telegraph").length < 3) {
+        issues.push({ key: "narration_telegraph", detail: `连续 ${shortStreak} 句均不足 10 字,疑"电报体"口播(跳跃断层/省略主语):「…${sentence.slice(0, 30)}」——请补全主语与句间承接,合并为完整成句的段落` });
+      }
+    } else {
+      shortStreak = 0;
+    }
+  };
 
   // ── ①② 分镜表:表头含"镜号"且含"时长"的 markdown 表 ──
   let totalDuration = 0;
@@ -272,8 +296,9 @@ export function assertPlanDeliverables(workDir: string, maxDurationS = MAX_PLAN_
       for (const sentence of cells[narrationCol].split(/[。!?;；]/).map((s) => s.trim()).filter(Boolean)) {
         if (isVisualNote(sentence)) continue;
         const n = countNarrationChars(sentence);
-        if (n > 20 && issues.filter((i) => i.key === "narration_len").length < 5) {
-          issues.push({ key: "narration_len", detail: `旁白超 20 字(${n}字):「${sentence.slice(0, 30)}」` });
+        telegraphCheck(sentence, n);
+        if (n > 35 && issues.filter((i) => i.key === "narration_len").length < 5) {
+          issues.push({ key: "narration_len", detail: `旁白超 35 字(${n}字):「${sentence.slice(0, 30)}」` });
         }
       }
     }
@@ -293,8 +318,9 @@ export function assertPlanDeliverables(workDir: string, maxDurationS = MAX_PLAN_
     for (const sentence of m[1].split(/[。!?;；]/).map((s) => s.trim()).filter(Boolean)) {
       if (isVisualNote(sentence)) continue;
       const n = countNarrationChars(sentence);
-      if (n > 20 && issues.filter((i) => i.key === "narration_len").length < 8) {
-        issues.push({ key: "narration_len", detail: `旁白超 20 字(${n}字):「${sentence.slice(0, 30)}」` });
+      telegraphCheck(sentence, n);
+      if (n > 35 && issues.filter((i) => i.key === "narration_len").length < 8) {
+        issues.push({ key: "narration_len", detail: `旁白超 35 字(${n}字):「${sentence.slice(0, 30)}」` });
       }
     }
   }
@@ -335,9 +361,17 @@ export function assertPlanDeliverables(workDir: string, maxDurationS = MAX_PLAN_
 }
 
 
-/** ass Dialogue 单可视行 ≤15 字、CPS ≤8 校验;返回违规描述列表 */
-export function checkAssSubtitles(assContent: string): string[] {
+/** 字幕 CPS 口径单一事实源(2026-09-11:质量报告声明 6.25 vs 实测 7.08 vs 门禁 8
+ *  三头分裂的复盘——声明值必须等于机器实测值,阈值只此一处) */
+export const MAX_SUBTITLE_CPS = 8;
+export const MAX_SUBTITLE_LINE_CHARS = 15;
+
+/** ass 字幕机器测量:条目数/最大 CPS/单行最长字数/违规清单 */
+export function measureAssSubtitles(assContent: string): { entries: number; maxCps: number; maxLineChars: number; violations: string[] } {
   const violations: string[] = [];
+  let maxCps = 0;
+  let maxLineChars = 0;
+  let prevTail = ""; // 上一可视行尾字符(跨行断数字/单词检测,2026-09-11:"20|25"腰斩事故)
   const lines = assContent.split("\n").filter((l) => l.startsWith("Dialogue:"));
   lines.forEach((line, idx) => {
     // ass: Dialogue: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
@@ -345,19 +379,39 @@ export function checkAssSubtitles(assContent: string): string[] {
     if (parts.length < 10) return;
     const [start, end] = [parts[1].trim(), parts[2].trim()];
     const text = parts.slice(9).join(",").replace(/\{[^}]*\}/g, "").trim();
+    // 占位文字禁进字幕(镜50 "（无旁白）"被烧进成片事故)
+    if (/[（(]\s*(无旁白|无台词|无配音|无解说|空镜|留白)\s*[)）]/.test(text)) {
+      violations.push(`第${idx + 1}条是占位文字「${text.slice(0, 12)}」——无旁白镜头不应产生字幕条`);
+    }
     const toSec = (t: string): number => {
       const m = t.match(/(\d+):(\d+):(\d+)[.:](\d+)/);
       return m ? Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]) + Number(m[4]) / 100 : 0;
     };
     const dur = toSec(end) - toSec(start);
-    for (const visualLine of text.split(/\N/i)) {
-      const len = [...visualLine.trim()].length;
-      if (len > 15) violations.push(`第${idx + 1}条单行 ${len} 字(>15):「${visualLine.trim().slice(0, 20)}…」`);
+    // ass 换行是字面 "\N"(反斜杠+N):正则须写作 /\\N/,/N/ 会误吞英文单词里的 N 并残留反斜杠虚增字数
+    for (const visualLine of text.split(/\\N/i)) {
+      const vl = visualLine.trim();
+      const len = [...vl].length;
+      if (len > maxLineChars) maxLineChars = len;
+      if (len > MAX_SUBTITLE_LINE_CHARS) violations.push(`第${idx + 1}条单行 ${len} 字(>${MAX_SUBTITLE_LINE_CHARS}):「${vl.slice(0, 20)}…」`);
+      // 断行腰斩数字/英文词:上行尾与本行首都是数字/字母("2025"→"20|25")
+      // 尾部不含 %:"60%" 结尾接新数字是两个独立数字,不是腰斩(2026-09-11 复查修正)
+      if (prevTail && vl && /[0-9A-Za-z.]/.test(prevTail) && /^[0-9A-Za-z]/.test(vl)) {
+        violations.push(`第${idx + 1}条断行腰斩数字/单词(「…${prevTail}」接「${vl[0]}…」)——数字与英文词必须完整落在同一可视行,用 POST /api/assets/subtitles 语义断行生成`);
+      }
+      if (vl) prevTail = vl[vl.length - 1];
     }
-    const chars = [...text.replace(/\N/gi, "")].length;
-    if (dur > 0.2 && chars / dur > 8) violations.push(`第${idx + 1}条 CPS=${(chars / dur).toFixed(1)}(>8):「${text.slice(0, 16)}…」`);
+    const chars = [...text.replace(/\\N/gi, "")].length;
+    const cps = dur > 0.2 ? chars / dur : 0;
+    if (cps > maxCps) maxCps = cps;
+    if (cps > MAX_SUBTITLE_CPS) violations.push(`第${idx + 1}条 CPS=${cps.toFixed(1)}(>${MAX_SUBTITLE_CPS}):「${text.slice(0, 16)}…」`);
   });
-  return violations;
+  return { entries: lines.length, maxCps, maxLineChars, violations };
+}
+
+/** ass Dialogue 单可视行 ≤15 字、CPS ≤8 校验;返回违规描述列表 */
+export function checkAssSubtitles(assContent: string): string[] {
+  return measureAssSubtitles(assContent).violations;
 }
 
 /**
@@ -393,8 +447,12 @@ export function assertAssemblyDeliverables(workDir: string, opts?: { templateId?
     issues.push({ key: "quality_report", detail: "output/quality-report.json 缺失(成片未过质量门禁)" });
   } else if (finalVideo) {
     try {
-      const report = JSON.parse(readFileSync(join(outDir, reportFile), "utf-8")) as { videoPath?: string; createdAt?: string; passed?: boolean; issues?: Array<{ level?: string; message?: string }> };
-      if (report.passed === false) {
+      const report = JSON.parse(readFileSync(join(outDir, reportFile), "utf-8")) as { videoPath?: string; createdAt?: string; passed?: boolean; generator?: string; issues?: Array<{ level?: string; message?: string }> };
+      // 2026-09-11(镜26/CPS 复盘):报告必须是 runQualityGate 机器产物——agent 手写报告
+      // 的声明值(CPS≤6.25 vs 实测 7.08)无人核验。机器报告一律经 POST /api/works/:id/qc 产出。
+      if (report.generator !== QUALITY_REPORT_GENERATOR) {
+        issues.push({ key: "quality_report", detail: "quality-report.json 非机器产物(缺 generator 标记)——声明值无法核验,禁止手写/手改报告;请调用 GET /api/works/:id/quality 由服务端重跑质量门禁(自动落盘 output/quality-report.json)" });
+      } else if (report.passed === false) {
         const fails = (report.issues ?? []).filter((i) => i.level === "fail" || i.level === "critical").map((i) => i.message ?? "").filter(Boolean).slice(0, 3);
         issues.push({ key: "quality_report", detail: `质量门禁结论为 fail——成片带病,请修复后重跑 QC${fails.length ? `(fail 项: ${fails.join("; ")})` : ""}` });
       } else if (!report.videoPath || basename(report.videoPath) !== finalVideo) {
@@ -587,6 +645,10 @@ export function assertFactClaims(scriptText: string): DeliverableIssue[] {
   const claims = scriptText.matchAll(/([〔【][0-9]{4}[〕】](?:第?\s*\d+\s*号)|[0-9]{4}\s*年|[０-９.]+%|[\d.]+%)/g);
   for (const m of claims) {
     const claim = m[0];
+    // 日期形式豁免(2026-09-18):"2026年9月7日"是完整日期而非裸年份断言——
+    // 年份后立即跟"N月"即视为日期,不拦(BREAKPOINT 事件:说明性日期曾误拦一整轮)
+    const after = scriptText.slice(m.index! + claim.length, m.index! + claim.length + 6);
+    if (/^\d{1,2}\s*月/.test(after)) continue;
     // X14 验收修复(2026-09-07):旧豁免 `new RegExp("已核验|据…").test(claim)` 是死代码——
     // claim 正则只捕获文号/年份/百分比本身,永远不可能含"已核验"。改为核验
     // 断言前后上下文窗口(前 80 字 + 后 120 字,覆盖"已核验"前缀与"来源/URL"后缀两种标注习惯);
@@ -603,13 +665,19 @@ export function assertFactClaims(scriptText: string): DeliverableIssue[] {
 
 /** Q1+F3 组合接线（2026-09 补修）：plan 阶段机器预检的扩展——
  *  素材引用存在性（assertPlanReferences）+ 事实断言核验态（assertFactClaims）。
- *  advance(plan) 预检链在 assertPlanDeliverables 之外追加调用本函数。 */
+ *  advance(plan) 预检链在 assertPlanDeliverables 之外追加调用本函数。
+ *  2026-09-18 收窄(BREAKPOINT 误拦事件):script.json 存在时,口播断言已由
+ *  assertScriptContract 在口播文本上核验,plan.md 全文不再扫描(说明性文字里的
+ *  裸年份不是口播断言);仅旧五步流水线(无 script.json)保留 plan.md 兜底扫描。 */
 export function assertPlanGateExtensions(workDir: string): DeliverableIssue[] {
   const issues: DeliverableIssue[] = [];
   issues.push(...assertPlanReferences(workDir));
-  const planPath = [join(workDir, "plan.md"), join(workDir, "plan", "plan.md")].find(existsSync);
-  if (planPath) {
-    issues.push(...assertFactClaims(readFileSync(planPath, "utf-8")));
+  const hasScript = [join(workDir, "assets", "script.json"), join(workDir, "script.json")].some(existsSync);
+  if (!hasScript) {
+    const planPath = [join(workDir, "plan.md"), join(workDir, "plan", "plan.md")].find(existsSync);
+    if (planPath) {
+      issues.push(...assertFactClaims(readFileSync(planPath, "utf-8")));
+    }
   }
   return issues;
 }
@@ -704,7 +772,7 @@ export function assertShotMapCompleteness(workDir: string): DeliverableIssue[] {
   }
 
   try {
-    const shotMap = JSON.parse(readFileSync(shotMapPath, "utf-8")) as { shots?: Array<{ asset_file?: string; frames?: string[] }> };
+    const shotMap = JSON.parse(readFileSync(shotMapPath, "utf-8")) as { shots?: Array<{ i?: number; asset_file?: string; frames?: string[]; segment?: string }> };
     const shots = Array.isArray(shotMap?.shots) ? shotMap.shots : [];
     if (shots.length === 0) {
       issues.push({ key: "shot_map_empty", detail: "shot-map.json 的 shots 为空——应逐镜登记素材与抽帧" });
@@ -715,11 +783,181 @@ export function assertShotMapCompleteness(workDir: string): DeliverableIssue[] {
       if (!s.asset_file) issues.push({ key: "shot_map_missing_asset", detail: `shot-map 第 ${i + 1} 镜缺 asset_file（素材文件未登记）` });
       if (!Array.isArray(s.frames) || s.frames.length === 0) issues.push({ key: "shot_map_missing_frame", detail: `shot-map 第 ${i + 1} 镜缺 frames（未抽首/中/尾帧）` });
     }
+    // 2026-09-11(镜35/44 复盘):同一素材被 ≥2 镜复用此前零拦截——同片两镜同源
+    // 内容重复感是评审 minor 常客,且"取哪段"靠口头约定滋生规格矛盾(镜38 同类)。
+    // 机器可判:复用必须为每镜声明不重叠的 segment("3.0-8.3" 秒);缺声明/区间重叠即 fail。
+    const byAsset = new Map<string, Array<{ i: number; segment?: string }>>();
+    shots.forEach((s, idx) => {
+      if (!s.asset_file) return;
+      const list = byAsset.get(s.asset_file) ?? [];
+      list.push({ i: s.i ?? idx + 1, segment: s.segment });
+      byAsset.set(s.asset_file, list);
+    });
+    const parseSeg = (seg?: string): [number, number] | null => {
+      const m = seg?.match(/(\d+(?:\.\d+)?)\s*[-–~]\s*(\d+(?:\.\d+)?)/);
+      return m ? [parseFloat(m[1]), parseFloat(m[2])] : null;
+    };
+    for (const [asset, users] of byAsset) {
+      if (users.length < 2) continue;
+      const shotList = users.map((u) => `镜${u.i}`).join("/");
+      const segs = users.map((u) => ({ ...u, range: parseSeg(u.segment) }));
+      if (segs.some((s) => !s.range)) {
+        issues.push({ key: "shot_map_reuse_no_segment", detail: `素材 ${asset} 被 ${shotList} 复用但未逐镜声明 segment 取段(如 "3.0-8.3")——同源复用必须显性化取段区间,否则两镜画面同源重复;若素材本身不足请换素材或声明缺口` });
+        continue;
+      }
+      // 区间重叠检测(排序后相邻比较)
+      const sorted = [...segs].sort((a, b) => a.range![0] - b.range![0]);
+      for (let k = 1; k < sorted.length; k++) {
+        if (sorted[k].range![0] < sorted[k - 1].range![1]) {
+          issues.push({ key: "shot_map_reuse_overlap", detail: `素材 ${asset} 复用区间重叠:${shotList} 的 segment 存在交集——两镜将呈现同源同段画面,请取不同区段或换素材` });
+          break;
+        }
+      }
+    }
   } catch {
     issues.push({ key: "shot_map_invalid", detail: "shot-map.json 解析失败（损坏）——请重新生成" });
   }
   return issues;
 }
+
+// ── 素材时长/一致性机器门禁(2026-09-18,w_20260918_1519_b44 四轮连挂根因) ──────
+// 背景:① 11 条逐镜旁白实测超过分镜计划时长(TTS 实测值与策划估值从不由同一
+// 机器源产生);② 8 条在用素材实测时长 < timeline 契约时长;③ 弃用文件残留
+// clips/ 三轮被点名;④ 无音轨视频反复出现。这些全是 ffprobe/文件系统可判的
+// 确定性事实,不应烧 LLM 评审轮次——机器预检拦截在评审之前,issue 附实测值
+// 供 agent 直接回填契约文件。
+
+/** 读 timeline.json(assets/ 优先,兼容根目录) */
+function readTimelineShots(workDir: string): Array<{ shot?: number; duration?: number }> {
+  const p = [join(workDir, "assets", "timeline.json"), join(workDir, "timeline.json")].find(existsSync);
+  if (!p) return [];
+  try {
+    const t = JSON.parse(readFileSync(p, "utf-8")) as { shots?: Array<{ shot?: number; duration?: number }> };
+    return Array.isArray(t.shots) ? t.shots : [];
+  } catch {
+    return [];
+  }
+}
+
+/** 读 shot-map.json(assets/ 优先,兼容根目录) */
+function readShotMapShots(workDir: string): Array<{ i?: number; asset_file?: string }> {
+  const p = [join(workDir, "assets", "shot-map.json"), join(workDir, "shot-map.json")].find(existsSync);
+  if (!p) return [];
+  try {
+    const m = JSON.parse(readFileSync(p, "utf-8")) as { shots?: Array<{ i?: number; asset_file?: string }> };
+    return Array.isArray(m.shots) ? m.shots : [];
+  } catch {
+    return [];
+  }
+}
+
+const IMAGE_EXT = /\.(png|jpe?g|webp|gif)$/i;
+const MEDIA_EXT = /\.(mp4|mov|webm|png|jpe?g|webp)$/i;
+
+/**
+ * 素材时长/音轨机器预检(assets → assembly 门禁):
+ * - 在用视频实测时长 ≥ 时间轴镜时长(容差 0.1s)
+ * - 逐镜旁白(audio/shot-NN.mp3)实测 ≤ 镜时长 - 0.2s 安全尾(容差 0.05s)
+ * - 在用视频必须有音频流(静音轨归一化的防线兜底)
+ * 静态图片卡不适用时长/音轨检查。timeline/shot-map 缺失时不查(由完整性门禁拦截)。
+ */
+export async function assertAssetsTimelineFit(workDir: string): Promise<DeliverableIssue[]> {
+  const issues: DeliverableIssue[] = [];
+  const timelineShots = readTimelineShots(workDir);
+  const mapShots = readShotMapShots(workDir);
+  if (timelineShots.length === 0 || mapShots.length === 0) return issues;
+  const mapByShot = new Map(mapShots.filter((s) => s.i != null).map((s) => [s.i!, s]));
+
+  for (const ts of timelineShots) {
+    if (ts.shot == null || !(ts.duration! > 0)) continue;
+    const shotDur = ts.duration!;
+    const entry = mapByShot.get(ts.shot);
+    const assetFile = entry?.asset_file;
+    if (!assetFile || IMAGE_EXT.test(assetFile)) continue;
+    const abs = join(workDir, assetFile);
+    if (!existsSync(abs)) continue; // 引用存在性由 assertAssetsConsistency 报
+    const info = await probeMedia(abs);
+    if (info.duration != null && info.duration + 0.1 < shotDur) {
+      issues.push({
+        key: "clip_shorter_than_timeline",
+        detail: `镜${ts.shot} 在用素材 ${basename(assetFile)} 实测 ${info.duration.toFixed(2)}s < 时间轴契约 ${shotDur}s——请用实测值回填 timeline.json(或换足长素材/tpad 补时),禁止填估值`,
+      });
+    }
+    if (info.hasAudio === false) {
+      issues.push({
+        key: "clip_no_audio",
+        detail: `镜${ts.shot} 在用素材 ${basename(assetFile)} 无音频流(ffprobe 实测)——静默段也必须带音轨,请补静音轨(FFmpeg anullsrc)或换素材`,
+      });
+    }
+    // 逐镜旁白实测 ≤ 镜时长 - 0.2s 安全尾
+    const narrPath = join(workDir, "assets", "audio", `shot-${String(ts.shot).padStart(2, "0")}.mp3`);
+    if (existsSync(narrPath)) {
+      const narr = await probeMedia(narrPath);
+      if (narr.duration != null && narr.duration > shotDur - 0.2 + 0.05) {
+        issues.push({
+          key: "narration_longer_than_shot",
+          detail: `镜${ts.shot} 旁白实测 ${narr.duration.toFixed(2)}s 超过镜时长 ${shotDur}s 减 0.2s 安全尾——合成将截断旁白;请缩短该镜文案重配 TTS,或用实测值重排 timeline(旁白时长+0.2s)`,
+        });
+      }
+    }
+  }
+  return issues;
+}
+
+/**
+ * 素材引用/残留一致性预检(assets → assembly 门禁):
+ * - shot-map 引用的文件必须存在且不得指向 _archive(弃用区)
+ * - clips/ 递归扫描:未在 shot-map 登记且未归档的媒体残留即 issue
+ *   (下划线开头的草稿文件/目录豁免,与创作者 scratchpad 约定一致)
+ */
+export async function assertAssetsConsistency(workDir: string): Promise<DeliverableIssue[]> {
+  const issues: DeliverableIssue[] = [];
+  const mapShots = readShotMapShots(workDir);
+  const referenced = new Set<string>();
+  for (const s of mapShots) {
+    if (!s.asset_file) continue;
+    const rel = s.asset_file.replace(/\\/g, "/");
+    if (/\/_archive\//i.test(rel) || rel.startsWith("assets/_archive/")) {
+      issues.push({
+        key: "shot_map_archived_ref",
+        detail: `shot-map 镜${s.i ?? "?"} 引用了 _archive 弃用区文件「${basename(rel)}」——弃用素材不得在用,请换用当前素材并更新台账`,
+      });
+      continue;
+    }
+    referenced.add(basename(rel).toLowerCase());
+    if (!existsSync(join(workDir, rel))) {
+      issues.push({
+        key: "shot_map_file_missing",
+        detail: `shot-map 镜${s.i ?? "?"} 引用的素材「${rel}」在磁盘不存在——交接契约与事实不符,请修正引用或补齐文件`,
+      });
+    }
+  }
+
+  // clips/ 残留扫描(递归;跳过 _archive 与下划线开头的草稿)
+  const clipsRoot = join(workDir, "assets", "clips");
+  const residual: string[] = [];
+  const walk = (dir: string): void => {
+    let entries: import("node:fs").Dirent[];
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (e.name.startsWith("_")) continue;
+      const full = join(dir, e.name);
+      if (e.isDirectory()) walk(full);
+      else if (MEDIA_EXT.test(e.name) && !referenced.has(e.name.toLowerCase())) {
+        residual.push(e.name);
+      }
+    }
+  };
+  walk(clipsRoot);
+  if (residual.length) {
+    issues.push({
+      key: "clips_residual_unreferenced",
+      detail: `clips/ 下 ${residual.length} 个媒体文件未被 shot-map 引用也未归档(${residual.slice(0, 5).join("、")}${residual.length > 5 ? " 等" : ""})——存在被 assembly 误拾取风险,请移入 _archive 并登记或删除`,
+    });
+  }
+  return issues;
+}
+
 
 /**
  * Q2/X15 验收修复(2026-09-07):shot-map 程序化生成兜底——此前台账靠 ws-bridge prompt
@@ -844,7 +1082,11 @@ export function assertContractArtifacts(workDir: string, step: "research" | "mat
 /**
  * 流水线 v2(批次2):内容研究阶段的文章契约机器校验——
  * ①article.json 可解析且关键字段齐全;②facts 核验态覆盖率达 depth 档阈值;
- * ③article.md 全文过 assertFactClaims(待核禁进口播);④字数与语速预算自洽。
+ * ③article.md 全文过 assertFactClaims(断言必带来源标注);
+ * ④wordCount 声明与文章实测自洽;⑤篇幅下限按深度档(full/standard);
+ * ⑦sections 锚点与正文一一对应;⑧facts.type 白名单/legend 一致性。
+ * (2026-09-10 定位修正:口播预算/朗读时长校验迁至 assertScriptContract——
+ * article 是纯粹研究文章,口播化是 plan-assets 的脚本转化工作)
  */
 export function assertArticleContract(workDir: string, depth: "full" | "standard" | "quick" = "standard"): DeliverableIssue[] {
   const issues: DeliverableIssue[] = [];
@@ -852,13 +1094,17 @@ export function assertArticleContract(workDir: string, depth: "full" | "standard
   const articleMdPath = [join(workDir, "research", "article.md"), join(workDir, "article.md")].find(existsSync);
   if (!articleJsonPath || !articleMdPath) return issues; // 文件缺失由 assertContractArtifacts 拦截,此处不重复
 
-  interface ArticleFacts { text?: string; verify_status?: string; source_url?: string }
+  interface ArticleFacts { text?: string; type?: string; verify_status?: string; source_url?: string }
   interface ArticleJson {
     title?: string; wordCount?: number;
-    speechBudget?: { maxChars?: number };
+    speechBudget?: { maxChars?: number; charsPerSec?: number; estimatedSpeechS?: number };
     facts?: ArticleFacts[];
-    feasibility?: { verdict?: string; materialRisks?: unknown[]; notes?: string };
-    sections?: unknown[];
+    /** 2026-09-11 定位再修正:可行性只评合规/事实,字段为 risks;
+     *  存量作品的 materialRisks 兼容保留(不报错),新作品不应再有素材风险评估 */
+    feasibility?: { verdict?: string; risks?: unknown[]; materialRisks?: unknown[]; notes?: string };
+    sections?: Array<{ anchor?: string }>;
+    /** agent 自定义的 facts type 图例(对象键或数组);缺省用 DEFAULT_FACT_TYPES 白名单 */
+    factTypeLegend?: Record<string, unknown> | string[];
   }
   let article: ArticleJson;
   try {
@@ -867,11 +1113,11 @@ export function assertArticleContract(workDir: string, depth: "full" | "standard
     return [{ key: "article_json_invalid", detail: "research/article.json 解析失败(损坏或非 JSON)——请修复后重新提交" }];
   }
 
-  // ① 关键字段齐全
+  // ① 关键字段齐全(2026-09-10:移除 speechBudget——口播预算已迁至脚本契约;
+  // 存量 article.json 含该字段兼容忽略,不报错)
   const missing: string[] = [];
   if (!article.title?.trim()) missing.push("title");
   if (!(article.wordCount! > 0)) missing.push("wordCount");
-  if (!article.speechBudget?.maxChars) missing.push("speechBudget.maxChars");
   if (!Array.isArray(article.facts)) missing.push("facts[]");
   if (!article.feasibility?.verdict) missing.push("feasibility.verdict");
   if (!Array.isArray(article.sections) || article.sections.length === 0) missing.push("sections[]");
@@ -894,15 +1140,187 @@ export function assertArticleContract(workDir: string, depth: "full" | "standard
     }
   }
 
-  // ③ 文章全文过事实断言检查(待核禁进口播;画面披露+"以官方发布为准"豁免)
+  // ③ 文章全文过事实断言检查(断言必须有来源标注;未核验断言不得作为确定事实陈述)
+  const articleMdText = readFileSync(articleMdPath, "utf-8");
   if (articleMdPath) {
-    issues.push(...assertFactClaims(readFileSync(articleMdPath, "utf-8")));
+    issues.push(...assertFactClaims(articleMdText));
   }
 
-  // ④ 字数与语速预算自洽
-  if (article.wordCount! > 0 && article.speechBudget?.maxChars) {
-    if (article.wordCount! > article.speechBudget.maxChars * 1.2) {
-      issues.push({ key: "article_budget_mismatch", detail: `文章字数 ${article.wordCount} 超出口播预算 ${article.speechBudget.maxChars} 字(×1.2 容差)——精简文章或调大目标时长` });
+  // ④⑤ 字数自洽与篇幅下限(2026-09-10 定位修正):article.md 是纯粹的深度研究文章,
+  // 口播预算/朗读时长校验已随"文章→脚本转化"移到 plan-assets 的 assertScriptContract。
+  // 此处按文章常规字数口径(汉字逐字+拉丁/数字串按词)核验:
+  const articleChars = articleWordCount(articleMdText);
+  // ④ wordCount 声明 vs 实测(>15% 视为契约失真)
+  if (article.wordCount! > 0 && articleChars > 0) {
+    const drift = Math.abs(article.wordCount! - articleChars) / Math.max(article.wordCount!, articleChars);
+    if (drift > 0.15) {
+      issues.push({ key: "article_wordcount_mismatch", detail: `wordCount 声明 ${article.wordCount} 与文章实测 ${articleChars} 偏差 ${(drift * 100).toFixed(0)}%(>15%)——按文章口径(汉字逐字、拉丁/数字串按词)重测并同步` });
+    }
+  }
+  // ⑤ 篇幅下限按深度档(指令 full≥2500/standard≥1200,门禁按 80% 容差;quick 不限)
+  // ——深度档文章过短即"检索动作做足但成稿浅薄"(2026-09-10 业主实测意见)
+  const minLen = depth === "full" ? 2000 : depth === "standard" ? 960 : 0;
+  if (minLen > 0 && articleChars > 0 && articleChars < minLen) {
+    issues.push({ key: "article_length_below_depth", detail: `${depth} 档研究文章实测 ${articleChars} 字,低于下限 ${minLen}(指令要求 ${depth === "full" ? "≥2500" : "≥1200"})——按深度档要求补足论证纵深(数据展开/机制拆解/案例或对照),非注水` });
+  }
+
+  // ⑦ sections 锚点与正文一一对应(契约缺失锚点=下游分镜无法溯源)
+  for (const sec of article.sections ?? []) {
+    if (sec?.anchor && !articleMdText.includes(sec.anchor)) {
+      issues.push({ key: "article_anchor_missing", detail: `sections 声明的锚点「${sec.anchor}」在 article.md 正文中不存在——正文小节需标注(锚点 ${sec.anchor}),保持契约与正文一一对应` });
+    }
+  }
+
+  // ⑧ facts.type 白名单——有 factTypeLegend 用 legend(对象键/数组),否则默认白名单。
+  // type 元数据失真会让下游按类型溯源失效(两轮评审反复出现的弱项,机器兜底)
+  const DEFAULT_FACT_TYPES = ["文号", "年份", "时间", "百分比", "机构", "排名", "数据", "政策条文"];
+  const legend = article.factTypeLegend;
+  const allowed = legend ? (Array.isArray(legend) ? legend : Object.keys(legend)) : DEFAULT_FACT_TYPES;
+  const badTypes = [...new Set(facts.filter((f) => f.type && !allowed.includes(f.type)).map((f) => f.type!))];
+  if (badTypes.length) {
+    issues.push({ key: "article_fact_type_unknown", detail: `facts[] 含未登记的 type:${badTypes.join("、")}——仅可用 ${allowed.join("/")}(或在 factTypeLegend 中显式登记新类型)` });
+  }
+  return issues;
+}
+
+/**
+ * 流水线 v2(2026-09-10):plan-assets 阶段的口播脚本契约机器校验。
+ * 定位:article.md 是纯粹研究文章,口播化是"文章→script.json"转化步的产物——
+ * 口播预算/朗读口径/待核禁进口播全部落在脚本而非文章:
+ * ①scenes 非空且逐镜带 source_section 锚点;②旁白全文过 assertFactClaims;
+ * ③朗读口径实测口播时长 ≤ 目标时长×1.2(传入 targetDurationS 才查时长)。
+ */
+export function assertScriptContract(workDir: string, targetDurationS?: number): DeliverableIssue[] {
+  const issues: DeliverableIssue[] = [];
+  const scriptPath = join(workDir, "assets", "script.json");
+  if (!existsSync(scriptPath)) return issues; // 缺失由 assertContractArtifacts 拦截
+  interface ScriptScene { i?: number; source_section?: string; narration?: string; sentences?: string[] }
+  let script: { scenes?: ScriptScene[] };
+  try {
+    script = JSON.parse(readFileSync(scriptPath, "utf-8")) as { scenes?: ScriptScene[] };
+  } catch {
+    return [{ key: "script_json_invalid", detail: "assets/script.json 解析失败(损坏或非 JSON)——请修复后重新提交" }];
+  }
+  const scenes = Array.isArray(script.scenes) ? script.scenes : [];
+  if (scenes.length === 0) {
+    return [{ key: "script_scenes_empty", detail: "assets/script.json 的 scenes 为空——按文章改写口播稿后再提交" }];
+  }
+  // ① 逐镜锚点(口播可溯源到研究文章的契约)
+  const noAnchor = scenes.filter((s) => !s.source_section?.trim());
+  if (noAnchor.length) {
+    issues.push({ key: "script_anchor_missing", detail: `script.json 有 ${noAnchor.length} 个镜头旁白缺 source_section——每句旁白必须锚定 article.json 的 sections[].anchor,保证可溯源` });
+  }
+  // ② 旁白全文过事实断言核验(待核禁进口播——口播语义落在脚本)
+  const narrationText = scenes.map((s) => s.narration ?? (s.sentences ?? []).join("")).filter(Boolean).join("\n");
+  if (narrationText.trim()) {
+    issues.push(...assertFactClaims(narrationText));
+  }
+  // ④ 占位文字禁进口播(2026-09-11 镜50 事故:narration="（无旁白）"被 TTS 照读、进字幕)。
+  // 无旁白镜头的结构化表达是 narration 留空 "",占位文字没有专门通道,必然被当口播文本。
+  const PLACEHOLDER_RE = /^[（(]?\s*(无旁白|无台词|无配音|无解说|空镜|留白|silence|no[- ]?narration|none)\s*[)）]?[。．.]?$/i;
+  const placeholders = scenes.filter((s) => PLACEHOLDER_RE.test((s.narration ?? "").trim()));
+  if (placeholders.length) {
+    issues.push({
+      key: "script_narration_placeholder",
+      detail: `镜${placeholders.map((s) => s.i ?? "?").join("/")} 的 narration 是占位文字(如"（无旁白）")——占位文字会被 TTS 照读并烧进字幕;无旁白镜头请把 narration 留空 "",时长由 duration_s 表达`,
+    });
+  }
+  // ③ 朗读口径时长预算(数字逐位展开/%=3/字母逐个,÷4.5 字符每秒)
+  if (targetDurationS && targetDurationS > 0 && narrationText.trim()) {
+    const spokenChars = spokenLength(narrationText);
+    const actualS = spokenChars / 4.5;
+    if (actualS > targetDurationS * 1.2) {
+      issues.push({ key: "script_duration_overflow", detail: `口播朗读实测 ${spokenChars} 朗读字符 ≈ ${actualS.toFixed(0)}s,超目标时长 ${targetDurationS}s(×1.2 容差)——优先合并/删除信息点、合并镜头来压缩时长;精简不得牺牲主语完整性和句间承接;禁止回改研究文章迁就时长` });
+    }
+  }
+  return issues;
+}
+
+/** 2026-09-11(assets 105 分钟复盘改进点 2):数值一致性机器校验,固化自
+ *  w_20260910_1758_479 agent 手搓的 assets/tools/check-values.py——"旁白 4万亿 vs
+ *  画面 4.4万亿"这类 critical 此前只能 LLM 评审肉眼兜底。
+ *  两条规则(产物缺失自动跳过,缺失本身由契约门禁拦截):
+ *  规则A 旁白数字白名单:script.json 旁白中"数字+单位"(万亿/亿/万/%/元…)
+ *    必须 ⊆ research/article.json facts 权威数值表(年份豁免)——事实型数字不得超出研究结论;
+ *  规则B 画面数值卡 ↔ 旁白:assets/render-specs.json 登记的每张数值卡,
+ *    屏上带单位数字必须 ⊆ (该镜旁白数字 ∪ facts 白名单)。 */
+export function assertValueConsistency(workDir: string): DeliverableIssue[] {
+  const issues: DeliverableIssue[] = [];
+  const norm = (s: string) => (s ?? "")
+    .replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFF10 + 0x30))
+    .replace(/[\s　,]/g, "")
+    .replace(/万亿元/g, "万亿").replace(/亿元/g, "亿").replace(/万元/g, "万");
+  // 单位长尾在前(万亿>亿>万),避免 "4.4万亿" 被 "亿" 截胡
+  const UNIT_RE = /(\d+(?:\.\d+)?)\s*(万亿|亿元|亿|万元|万|％|%|元|美元|平方公里|平方米|吨|倍|亩)/g;
+  const YEAR_RE = /^(19|20)\d{2}$/;
+  const unitNums = (text: string): number[] => {
+    const out: number[] = [];
+    for (const m of norm(text).matchAll(UNIT_RE)) {
+      if (!YEAR_RE.test(m[1])) out.push(Number(m[1]));
+    }
+    return out;
+  };
+
+  // 权威数值表:article.json facts[].text 的全部数字(含不带单位的口径数字)
+  const articlePath = join(workDir, "research", "article.json");
+  const allowed = new Set<number>();
+  if (existsSync(articlePath)) {
+    try {
+      const article = JSON.parse(readFileSync(articlePath, "utf-8")) as { facts?: Array<{ text?: string }> };
+      for (const f of article.facts ?? []) {
+        for (const m of norm(f.text ?? "").matchAll(/\d+(?:\.\d+)?/g)) {
+          if (!YEAR_RE.test(m[0])) allowed.add(Number(m[0]));
+        }
+      }
+    } catch { /* article.json 损坏由 assertArticleContract 拦截 */ }
+  }
+
+  interface ScriptScene { i?: number; narration?: string; sentences?: string[] }
+  const scriptPath = join(workDir, "assets", "script.json");
+  let scenes: ScriptScene[] = [];
+  if (existsSync(scriptPath)) {
+    try {
+      const script = JSON.parse(readFileSync(scriptPath, "utf-8")) as { scenes?: ScriptScene[] };
+      scenes = Array.isArray(script.scenes) ? script.scenes : [];
+    } catch { /* script.json 损坏由 assertScriptContract 拦截 */ }
+  }
+
+  // 规则A:旁白带单位数字 ⊆ facts 白名单
+  if (allowed.size > 0) {
+    for (const s of scenes) {
+      const narration = s.narration ?? (s.sentences ?? []).join("");
+      const bad = [...new Set(unitNums(narration))].filter((n) => !allowed.has(n));
+      if (bad.length) {
+        issues.push({
+          key: "narration_value_not_in_facts",
+          detail: `镜${s.i ?? "?"} 旁白数字 ${bad.join("/")} 不在 article.json 权威数值表内:「${narration.slice(0, 60)}」——口播数字必须源自研究结论,禁止凭记忆造数;确为新事实请先补进 article.json facts`,
+        });
+      }
+    }
+  }
+
+  // 规则B:数值卡屏上数字 ⊆ (该镜旁白 ∪ facts)
+  const specsPath = join(workDir, "assets", "render-specs.json");
+  if (existsSync(specsPath)) {
+    interface RenderCard { shot?: number; file?: string; on_screen_value?: string; caption?: string }
+    let cards: RenderCard[] = [];
+    try {
+      const specs = JSON.parse(readFileSync(specsPath, "utf-8")) as { cards?: RenderCard[] };
+      cards = Array.isArray(specs.cards) ? specs.cards : [];
+    } catch {
+      issues.push({ key: "render_specs_invalid", detail: "assets/render-specs.json 解析失败(损坏或非 JSON)——数值卡台账无法机器核对,请修复后重新提交" });
+    }
+    for (const card of cards) {
+      const scene = scenes.find((s) => s.i === card.shot);
+      const narrNums = new Set(unitNums(scene ? (scene.narration ?? (scene.sentences ?? []).join("")) : ""));
+      const screenNums = [...new Set(unitNums((card.on_screen_value ?? "") + (card.caption ?? "")))];
+      const bad = screenNums.filter((n) => !narrNums.has(n) && !allowed.has(n));
+      if (bad.length) {
+        issues.push({
+          key: "screen_value_mismatch",
+          detail: `镜${card.shot ?? "?"} 数值卡 ${card.file ?? "?"} 屏上数字 ${bad.join("/")} 与旁白/权威数值表口径不一致——屏上数值必须与旁白逐字同源(旁白"4万亿"画面禁写"4.4万亿");修正卡片参数或旁白口径`,
+        });
+      }
     }
   }
   return issues;
@@ -948,9 +1366,7 @@ export async function assertTemplateVisualDiff(videoPath: string, templatePrevie
   // 模板预览缺失 → 不阻断(视觉 diff 是可选机器检查,模板契约已由 template_skin 兜底)
   if (!templatePreviewPath || !existsSync(templatePreviewPath)) return issues;
   try {
-    const { execFile } = await import("node:child_process");
-    const { promisify } = await import("node:util");
-    const execFileAsync = promisify(execFile);
+    const { execFileSilent: execFileAsync } = await import("../utils/proc.js");
     const { probeMedia } = await import("../video/ffmpeg.js");
     const info = await probeMedia(videoPath);
     const dur = info.duration ?? 30;

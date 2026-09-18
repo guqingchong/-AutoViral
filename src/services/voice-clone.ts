@@ -10,7 +10,7 @@ import { uploadVoiceCloneFile, cloneVoiceOnMiniMax } from "../providers/minimax-
 import { synthesizeToFile } from "../providers/minimax-tts.js";
 import { getDb } from "../db/connection.js";
 
-const execFileAsync = promisify(execFile);
+import { execFileSilent as execFileAsync } from "../utils/proc.js";
 
 export const VOICE_SAMPLE_MAX_BYTES = 20 * 1024 * 1024;
 export const DEFAULT_DEMO_TEXT = "你好，这是一段试听音频，用于预览这个音色的配音效果。";

@@ -342,6 +342,16 @@ export async function downloadStockAsset(input: StockDownloadInput) {
       duration: input.duration,
     },
   });
+  // 静音轨归一化(2026-09-18 实测根因):Pexels/Pixabay 大量视频本身无音频流,
+  // 下游取用后"视频无音频轨"是素材评审 Critical 常客——入库时统一补齐,
+  // 所有取用方(复制到作品 clips/)天然合规
+  if (mediaType === "video") {
+    try {
+      const { ensureAudioTrack } = await import("../video/ffmpeg.js");
+      const { getSharedAssetPath } = await import("../shared-assets.js");
+      await ensureAudioTrack(getSharedAssetPath(asset.category, asset.name));
+    } catch { /* 补轨失败不阻断入库,由素材门禁/评审兜底 */ }
+  }
   return asset;
 }
 

@@ -10,7 +10,7 @@ import { join } from "node:path";
 process.env.AUTOVIRAL_DATA_DIR = mkdtempSync(join(tmpdir(), "llm-usage-test-"));
 
 import { migrate } from "../../src/db/migrate.js";
-import { recordUsage, getDailyCostYuan, estimateCostYuan, enforceDailyBudget } from "../../src/services/llm-usage.js";
+import { recordUsage, getDailyCostYuan, estimateCostYuan, enforceDailyBudget, isPeakHours } from "../../src/services/llm-usage.js";
 import type { Config } from "../../src/config.js";
 
 const configWithPrice = {
@@ -23,12 +23,40 @@ const configWithPrice = {
 beforeAll(() => migrate());
 
 describe("llm-usage", () => {
-  it("按价目表估算成本(元/百万 tokens)", () => {
+  it("按价目表估算成本:命中部分只收缓存价,不再双重计费(2026-09-18 根因修复)", () => {
+    // 自配平价目(无 offPeak)→ 全时段同价;input 1M 中 0.5M 缓存命中
     const cost = estimateCostYuan(configWithPrice, {
       provider: "deepseek", model: "deepseek-v4-flash",
       inputTokens: 1_000_000, outputTokens: 100_000, cacheReadTokens: 500_000,
     });
-    expect(cost).toBeCloseTo(2 + 0.8 + 0.1, 6);
+    // 正确口径:未命中 0.5M×2 + 输出 0.1M×8 + 命中 0.5M×0.2 = 1.9
+    // (旧 bug 口径:input 全量 1M×2 + 输出 + 命中另加 = 2.9,命中部分被收两次)
+    expect(cost).toBeCloseTo(1.9, 6);
+  });
+
+  it("全部缓存命中时只收缓存价", () => {
+    const cost = estimateCostYuan(configWithPrice, {
+      provider: "deepseek", model: "deepseek-v4-flash",
+      inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 1_000_000,
+    });
+    expect(cost).toBeCloseTo(0.2, 6);
+  });
+
+  it("峰谷计价:DeepSeek 官方高峰=北京时间周一至五 9-12/14-18 点", () => {
+    // 2026-09-18 是周五。北京时间 10:00 = UTC 02:00(高峰);北京时间 20:00 = UTC 12:00(空闲);周六全天空闲
+    expect(isPeakHours(new Date(Date.UTC(2026, 8, 18, 2, 0)))).toBe(true);
+    expect(isPeakHours(new Date(Date.UTC(2026, 8, 18, 6, 0)))).toBe(true);  // 北京 14:00
+    expect(isPeakHours(new Date(Date.UTC(2026, 8, 18, 12, 0)))).toBe(false); // 北京 20:00
+    expect(isPeakHours(new Date(Date.UTC(2026, 8, 19, 2, 0)))).toBe(false);  // 周六
+  });
+
+  it("峰谷计价:内置刊例空闲时段半价", () => {
+    const noCfg = { llm: {} } as unknown as Config;
+    const rec = { provider: "deepseek", model: "deepseek-flash", inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 0 };
+    const peak = estimateCostYuan(noCfg, rec, new Date(Date.UTC(2026, 8, 18, 2, 0)));
+    const off = estimateCostYuan(noCfg, rec, new Date(Date.UTC(2026, 8, 18, 12, 0)));
+    expect(peak).toBeCloseTo(2, 6);   // 高峰未命中 2 元/M
+    expect(off).toBeCloseTo(1, 6);    // 空闲半价 1 元/M
   });
 
   it("无价目记 0 但仍落账", () => {

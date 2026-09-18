@@ -7,6 +7,7 @@
    * 包含：三家 provider 卡片（API Key/Base URL/视觉模型/启用/连通性测试）
    *     + 默认 provider + 六阶段模型路由（P3-T3）。
    */
+  import { modelLabel } from "../lib/model-labels.js";
 
   export interface LlmProviderForm { apiKey: string; baseUrl: string; visionModel: string; enabled: boolean; }
 
@@ -24,7 +25,7 @@
   }: Props = $props();
 
   const PROVIDER_META = [
-    { key: "deepseek", name: "DeepSeek", hint: "策划/合成/评审主力(视觉为 exp 实验模型)" },
+    { key: "deepseek", name: "DeepSeek", hint: "策划/合成/评审主力（V4.1 Flash 原生多模态，目录自动更新）" },
     { key: "kimi", name: "Kimi Coding Plan", hint: "调研(联网搜索)+视觉看图" },
     { key: "glm", name: "GLM 开放平台", hint: "视觉看图(glm-4v),按量计费" },
   ];
@@ -33,7 +34,8 @@
   const VISION_SUGGESTIONS: Record<string, string[]> = {
     kimi: ["kimi-for-coding"],
     glm: ["glm-4v", "glm-4.6", "glm-5.3-flash"],
-    deepseek: ["deepseek-v4-flash-vision-exp"],
+    // 2026-09-10：实验模型 vision-exp 下线，V4.1 Flash（deepseek-flash）原生视觉
+    deepseek: ["deepseek-flash"],
   };
 
   const STAGE_META = [
@@ -73,7 +75,7 @@
     for (const meta of PROVIDER_META) {
       if (!providers[meta.key]?.enabled) continue;
       for (const m of modelSuggestions[meta.key] ?? []) {
-        opts.push({ value: `${meta.key}:${m}`, label: `${meta.name} / ${m}` });
+        opts.push({ value: `${meta.key}:${m}`, label: `${meta.name} / ${modelLabel(m)}` });
       }
     }
     const cur = models[stageKey];
@@ -87,7 +89,7 @@
 <div class="llm-settings">
   <p class="llm-hint">
     视觉模型只需在一家配置：评审看图/模板克隆时，系统按 Kimi → GLM → DeepSeek 顺序自动选用已配置的视觉模型。
-    DeepSeek 视觉为实验模型(deepseek-v4-flash-vision-exp),生产使用建议配置回退。三家 Key 都在此页填写，保存到本机 ~/.autoviral/config.yaml。
+    DeepSeek 的 V4.1 Flash（deepseek-flash）自 2026-09-10 起原生支持看图，视觉模型保持默认即可，无需再配实验模型。三家 Key 都在此页填写，保存到本机 ~/.autoviral/config.yaml。
   </p>
   {#each PROVIDER_META as meta}
     {@const p = providers[meta.key]}

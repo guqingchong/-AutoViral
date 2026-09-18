@@ -1,6 +1,10 @@
 appId: cc.autoviral.desktop
 productName: AutoViral
 copyright: Copyright © 2026 AutoViral
+# 2026-09-11:关闭 npmRebuild——better-sqlite3 改用官方 Electron 预编译
+# (打包前由 scripts/build-installer.ps1 把 electron-v125 预编译摆进 build/Release),
+# 避免 @electron/rebuild 走 node-gyp 源码编译(本机无可用 python 给 node-gyp 用)
+npmRebuild: false
 directories:
   output: release
   buildResources: build-resources

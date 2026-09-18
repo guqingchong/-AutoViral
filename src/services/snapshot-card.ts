@@ -45,6 +45,10 @@ export interface SnapshotCardInput {
   height?: number;
   /** 底色风格:dark(深蓝) | light(米白),默认 dark */
   style?: "dark" | "light";
+  /** 底部字幕安全区(占卡高百分比,2026-09-11 镜26 复盘:卡片正文压字幕带事故)。
+   *  用于视频成片的快照卡必须传 13——shot-wrap 底部留出该比例空白,
+   *  正文/红框永不进入字幕带(1080p MarginV 86 + 48px 字号 ≈ 卡高 13%)。 */
+  safeBottomPct?: number;
 }
 
 const MIME: Record<string, string> = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp" };
@@ -76,7 +80,7 @@ function esc(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
-function buildCardHtml(input: SnapshotCardInput, imgDataUri: string): string {
+export function buildCardHtml(input: SnapshotCardInput, imgDataUri: string): string {
   const W = input.width ?? 1080;
   const H = input.height ?? 1350;
   const dark = input.style !== "light";
@@ -85,6 +89,8 @@ function buildCardHtml(input: SnapshotCardInput, imgDataUri: string): string {
   const sub = dark ? "#9ca3af" : "#6b7280";
   const title = input.title ? esc(input.title) : "";
   const source = input.source ? esc(input.source) : "";
+  // 字幕安全区:shot-wrap 底部留白,内容区高度收缩,正文/红框不进入字幕带
+  const safeBottomPx = Math.round((H * (input.safeBottomPct ?? 0)) / 100);
   const highlights = (input.highlights ?? []).map((h) => {
     const color = h.color ?? "#e53e3e";
     const label = h.label ? `<span class="hl-label" style="background:${color}">${esc(h.label)}</span>` : "";
@@ -105,7 +111,7 @@ function buildCardHtml(input: SnapshotCardInput, imgDataUri: string): string {
 </style></head><body>
 <div class="card">
   ${title ? `<div class="c-title">${title}</div>` : ""}
-  <div class="shot-wrap"><img src="${imgDataUri}" />${highlights}</div>
+  <div class="shot-wrap" ${safeBottomPx ? `style="margin-bottom:${safeBottomPx}px"` : ""}><img src="${imgDataUri}" />${highlights}</div>
   ${source ? `<div class="c-footer"><span class="c-dot"></span><span>来源:${source}</span></div>` : ""}
 </div>
 </body></html>`;

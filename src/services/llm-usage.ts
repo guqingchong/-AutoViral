@@ -26,12 +26,15 @@ export interface UsageRecord {
   thinkingTokens?: number;
 }
 
-/** 内置默认刊例价(元/百万 tokens,2026-08-28 公开刊例估算值,设置页 priceTable 可覆盖)。
+/** 内置默认刊例价(元/百万 tokens,2026-09-18 按官方定价页核对:高峰=北京时间
+ *  周一至周五 9:00-12:00 / 14:00-18:00,空闲半价;flash 缓存命中 0.04/0.02)。
  *  注意:key 是 provider:model 精确匹配,新增模型必须同步加行 */
-const DEFAULT_PRICE_TABLE: Record<string, { input: number; output: number; cacheRead?: number }> = {
-  "deepseek:deepseek-v4-flash": { input: 2, output: 8, cacheRead: 0.2 },
-  "deepseek:deepseek-v4-pro": { input: 4, output: 12, cacheRead: 0.4 },
-  "deepseek:deepseek-v4-flash-vision-exp": { input: 2, output: 8, cacheRead: 0.2 },
+const DEFAULT_PRICE_TABLE: Record<string, { input: number; output: number; cacheRead?: number; offPeak?: { input: number; output: number; cacheRead?: number } }> = {
+  // 旧别名 deepseek-v4-flash 官方已下线,请求由 V4.1-Flash 提供并按 Flash 计费(官方定价页脚注)
+  "deepseek:deepseek-v4-flash": { input: 2, output: 8, cacheRead: 0.04, offPeak: { input: 1, output: 4, cacheRead: 0.02 } },
+  "deepseek:deepseek-flash": { input: 2, output: 8, cacheRead: 0.04, offPeak: { input: 1, output: 4, cacheRead: 0.02 } },
+  "deepseek:deepseek-v4-pro": { input: 9, output: 27, cacheRead: 0.3, offPeak: { input: 4.5, output: 13.5, cacheRead: 0.15 } },
+  "deepseek:deepseek-v4-flash-vision-exp": { input: 2, output: 8, cacheRead: 0.04, offPeak: { input: 1, output: 4, cacheRead: 0.02 } },
   "kimi:kimi-for-coding": { input: 6, output: 24 },
   "glm:glm-4v": { input: 4, output: 12 },
   "glm:glm-4.6": { input: 2, output: 8 },
@@ -41,11 +44,25 @@ const DEFAULT_PRICE_TABLE: Record<string, { input: number; output: number; cache
 /** 未知模型 warn 去重(每个模型只警告一次,防刷屏) */
 const warnedUnknownModels = new Set<string>();
 
+/** DeepSeek 峰谷计价(官方 2026-09):高峰=北京时间周一至周五 9:00-12:00、14:00-18:00,
+ *  其余为空闲时段(半价)。用 UTC 平移判定,不依赖本机时区。 */
+export function isPeakHours(at: Date = new Date()): boolean {
+  const bj = new Date(at.getTime() + 8 * 3600_000);
+  const day = bj.getUTCDay();
+  if (day === 0 || day === 6) return false;
+  const h = bj.getUTCHours();
+  return (h >= 9 && h < 12) || (h >= 14 && h < 18);
+}
+
 /** 按价目表估算单次成本（元）。priceTable key 形如 "deepseek:deepseek-v4-pro";
- *  用户配置优先,缺省回落内置刊例;两边都没有 → warn 并记 0(不再静默) */
-export function estimateCostYuan(config: Config, r: UsageRecord): number {
+ *  用户配置优先,缺省回落内置刊例;两边都没有 → warn 并记 0(不再静默)。
+ *  2026-09-18 根因修复:inputTokens 是 API 返回的 prompt_tokens 总量(含缓存命中
+ *  部分),旧公式把命中部分按全价收一遍又把 cacheRead 另加一遍——双重计费,
+ *  本地成本估算系统性虚高(实测 ¥166 虚高 vs 官方口径约 ¥10)。正确口径:
+ *  未命中部分 × input 价 + 命中部分 × 缓存价 + 输出 × output 价。 */
+export function estimateCostYuan(config: Config, r: UsageRecord, at?: Date): number {
   const key = `${r.provider}:${r.model}`;
-  const price = config.llm?.priceTable?.[key] ?? DEFAULT_PRICE_TABLE[key];
+  let price = config.llm?.priceTable?.[key] ?? DEFAULT_PRICE_TABLE[key];
   if (!price) {
     if (!warnedUnknownModels.has(key)) {
       warnedUnknownModels.add(key);
@@ -53,10 +70,16 @@ export function estimateCostYuan(config: Config, r: UsageRecord): number {
     }
     return 0;
   }
+  // 峰谷计价:空闲时段且有谷价配置时用谷价,否则峰价(用户自配平价目则全时段同价)
+  if (!isPeakHours(at ?? new Date()) && price.offPeak) {
+    price = { ...price.offPeak, cacheRead: price.offPeak.cacheRead ?? price.cacheRead };
+  }
+  const cacheHit = Math.min(Math.max(r.cacheReadTokens ?? 0, 0), r.inputTokens);
+  const cacheMiss = r.inputTokens - cacheHit;
   return (
-    (r.inputTokens * price.input) / 1e6 +
+    (cacheMiss * price.input) / 1e6 +
     (r.outputTokens * price.output) / 1e6 +
-    ((r.cacheReadTokens ?? 0) * (price.cacheRead ?? 0)) / 1e6
+    (cacheHit * (price.cacheRead ?? 0)) / 1e6
   );
 }
 

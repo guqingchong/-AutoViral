@@ -18,10 +18,15 @@ export const MODEL_VISION: Record<string, boolean> = {
   "glm-5v-turbo": true,
   "glm-5.3-flash": true,
   "deepseek-v4-flash-vision-exp": true,
+  // 2026-09-10 实测：V4.1 Flash（deepseek-flash）及其别名 deepseek-v4-flash
+  // 均原生接受 image_url 图片输入（内网 key 实读测试图文字，prompt 含 image
+  // tokens 计量），显式 true。旧 vision-exp 条目保留供历史会话查询。
+  "deepseek-flash": true,
+  "deepseek-v4-flash": true,
   // L1 验收修复(2026-09-07):降级链候选补显式声明——text-only 模型显式 false,
   // 防止 vision 评审降级到无看图能力的模型后评审必败。
   "glm-4.6": false,        // 文本模型(GLM-4.6V 才是视觉变体)
-  "deepseek-v4-pro": false, // 【待核对】按 DeepSeek 文档保守 text-only,探针实测后回填
+  "deepseek-v4-pro": false, // 2026-09-10 实测确认:发图被静默丢弃(回复"无法查看图片"),text-only 定案
   "kimi-for-coding": false, // 【待核对】provider-keys.ts 把 visionModel 设为 kimi-for-coding，但实测未定——保守 false 待冒烟探针回填
 };
 

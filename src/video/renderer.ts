@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { SPAWN_HIDE } from "../utils/proc.js";
 import { writeFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -95,7 +96,7 @@ export async function renderTimeline(timeline: Timeline, options: RenderOptions)
     }
 
     await new Promise<void>((resolve, reject) => {
-      const proc = spawn(ffmpeg, args, { stdio: ["ignore", "pipe", "pipe"] });
+      const proc = spawn(ffmpeg, args, { stdio: ["ignore", "pipe", "pipe"], ...SPAWN_HIDE });
       let stderr = "";
       let killed = false;
 
@@ -330,6 +331,10 @@ export function buildFilterComplexArgs(tl: Timeline, inputs: InputSlot[], durati
     }
     const labels = audioInputs.map(i => `[a${i.index}]`).join("");
     audioFilterParts.push(`${labels}amix=inputs=${audioInputs.length}:duration=first:dropout_transition=0[aout]`);
+  } else {
+    // 2026-09-18 实测根因:无音频输入时此前 -an 直接剥音轨——成片/中间段无音频流
+    // 是素材评审 Critical 常客。改为 anullsrc 静音轨,产物恒有音频流
+    audioFilterParts.push(`anullsrc=channel_layout=stereo:sample_rate=48000,atrim=duration=${duration}[aout]`);
   }
 
   // Compose filter_complex
@@ -338,11 +343,7 @@ export function buildFilterComplexArgs(tl: Timeline, inputs: InputSlot[], durati
 
   // Map outputs
   args.push("-map", "[base]");
-  if (audioInputs.length > 0) {
-    args.push("-map", "[aout]");
-  } else {
-    args.push("-an");
-  }
+  args.push("-map", "[aout]");
 
   // Encoding settings（R1：encArgs 由 videoEncoderArgs() 动态产出，缺省回退 x264 veryfast crf18）
   args.push(

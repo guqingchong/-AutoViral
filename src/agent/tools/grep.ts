@@ -11,7 +11,7 @@ let rgPath: string | null | undefined;
 async function findRg(): Promise<string | null> {
   if (rgPath !== undefined) return rgPath;
   const found: string | null = await new Promise((resolvePromise) => {
-    const p = spawn("where", ["rg"], { shell: true });
+    const p = spawn("where", ["rg"], { shell: true, windowsHide: true });
     let out = "";
     p.stdout.on("data", (d) => (out += d));
     p.on("close", (code) => {
@@ -78,7 +78,7 @@ export const grepExecutor: ToolExecutor = {
     const rg = await findRg();
     if (rg) {
       return new Promise((resolvePromise, rejectPromise) => {
-        const p = spawn(rg, ["--line-number", "--max-count", "100", "-e", pattern, root], { shell: false });
+        const p = spawn(rg, ["--line-number", "--max-count", "100", "-e", pattern, root], { shell: false, windowsHide: true });
         let out = "";
         let err = "";
         p.stdout.on("data", (d) => (out += d));

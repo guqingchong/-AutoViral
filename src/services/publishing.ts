@@ -131,6 +131,17 @@ export async function publishToPlatform(workId: string, platform: string, input:
   if (existing && (existing.status === "published" || existing.status === "reviewing")) {
     throw new Error(`该作品在 ${platform} 已有 ${existing.status === "published" ? "已发布" : "审核中"}记录(#${existing.id}),禁止重复发布;如确需重发请先人工作废该记录`);
   }
+  // 并发防护(2026-09-18 实测根因):发布是 5-10 分钟长任务,前端离开页面后内存态
+  // 丢失,用户重复点击会在同一 (work, platform, account) 上并发跑出第二个 Playwright
+  // 流程;发布器实例按账号缓存,先结束者的 finally close() 会杀掉另一个的浏览器
+  // (发布真中断)。未卡死的 publishing 记录必须幂等拒绝;
+  // updated_at 超过 10 分钟未动(与外层超时护栏同阈值)视为卡死,保留手动重试通道。
+  if (existing && existing.status === "publishing") {
+    const updatedAt = new Date(existing.updated_at).getTime();
+    if (Number.isFinite(updatedAt) && Date.now() - updatedAt < 10 * 60_000) {
+      throw new Error(`该作品在 ${platform} 正在发布中(记录#${existing.id}),请勿重复提交;发布在服务端后台执行,离开页面不会中断,请稍后刷新查看结果`);
+    }
+  }
   let recordId: number;
   if (existing) {
     recordId = existing.id;

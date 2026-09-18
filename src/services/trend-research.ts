@@ -14,7 +14,7 @@ import { buildTonePrompt } from "./tone-profile.js";
 import { getTopicWeights } from "./feedback-loop.js";
 import { fetchZhihuHotList, zhihuSearch } from "./zhihu-data-api.js";
 
-const execFileAsync = promisify(execFile);
+import { execFileSilent as execFileAsync } from "../utils/proc.js";
 // 以模块位置推导项目根（dist/services 或 src/services 向上两级），
 // 不能用 process.cwd()——服务以守护进程运行时 cwd 是用户主目录，脚本会找不到
 const PROJECT_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
